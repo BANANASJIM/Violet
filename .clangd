@@ -1,0 +1,30 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -stdlib=libc++
+    - -fexperimental-library
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Wno-missing-field-initializers
+    - -Wno-unused-parameter
+    - -fcoroutines
+    - -fconcepts-diagnostics-depth=3
+  Remove: 
+    - -W*
+    
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - readability-*
+      - cppcoreguidelines-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-magic-numbers
+      - cppcoreguidelines-avoid-magic-numbers
+      
+Index:
+  Background: Build
+  StandardLibrary: Yes

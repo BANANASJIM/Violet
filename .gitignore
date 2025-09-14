@@ -1,0 +1,34 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+
+# Dependencies
+vcpkg_installed/
+
+# Shader binaries
+*.spv
+
+# Logs
+*.log
+
+# Debug files
+*.pdb
+*.dSYM/

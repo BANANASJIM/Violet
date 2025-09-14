@@ -1,0 +1,14 @@
+{
+  "name": "violet-engine",
+  "version": "0.1.0",
+  "dependencies": [
+    "vulkan",
+    "vulkan-headers", 
+    "vulkan-memory-allocator",
+    "glfw3",
+    "glm",
+    "spdlog",
+    "fmt",
+    "eastl"
+  ]
+}

@@ -1,0 +1,41 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+AlignTrailingComments: true
+AlignConsecutiveAssignments: false
+AlignOperands: true
+
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+
+IndentCaseLabels: true
+IndentPPDirectives: BeforeHash
+NamespaceIndentation: None
+
+SortIncludes: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:           '^<vulkan/'
+    Priority:        2
+  - Regex:           '^<GLFW/'
+    Priority:        3
+  - Regex:           '^<(glm|spdlog|fmt)/'
+    Priority:        4
+  - Regex:           '^<.*\.h>'
+    Priority:        5
+  - Regex:           '^<.*>'
+    Priority:        6
+  - Regex:           '^".*"'
+    Priority:        7
