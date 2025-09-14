@@ -1,4 +1,5 @@
 #include "RenderPass.hpp"
+#include "RenderPassBuilder.hpp"
 #include "VulkanContext.hpp"
 
 namespace violet {
@@ -59,6 +60,11 @@ void RenderPass::init(VulkanContext* ctx, vk::Format colorFormat) {
     renderPassInfo.pDependencies = &dependency;
 
     renderPass = context->getDevice().createRenderPass(renderPassInfo);
+}
+
+void RenderPass::init(VulkanContext* ctx, RenderPassBuilder& builder) {
+    context = ctx;
+    renderPass = builder.build(context);
 }
 
 void RenderPass::cleanup() {
