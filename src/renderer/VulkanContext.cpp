@@ -11,9 +11,11 @@ void VulkanContext::init(GLFWwindow* window) {
     createSurface(window);
     pickPhysicalDevice();
     createLogicalDevice();
+    createCommandPool();
 }
 
 void VulkanContext::cleanup() {
+    if (commandPool) device.destroyCommandPool(commandPool);
     device.destroy();
     instance.destroySurfaceKHR(surface);
     instance.destroy();
@@ -235,6 +237,37 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
     }
     
     return VK_FALSE;
+}
+
+void VulkanContext::createCommandPool() {
+    vk::CommandPoolCreateInfo poolInfo;
+    poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+    poolInfo.queueFamilyIndex = queueFamilies.graphicsFamily.value();
+
+    commandPool = device.createCommandPool(poolInfo);
+}
+
+vk::Format VulkanContext::findDepthFormat() {
+    return findSupportedFormat(
+        {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
+        vk::ImageTiling::eOptimal,
+        vk::FormatFeatureFlagBits::eDepthStencilAttachment
+    );
+}
+
+vk::Format VulkanContext::findSupportedFormat(const eastl::vector<vk::Format>& candidates,
+                                              vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
+    for (vk::Format format : candidates) {
+        vk::FormatProperties props = physicalDevice.getFormatProperties(format);
+
+        if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) {
+            return format;
+        } else if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features) {
+            return format;
+        }
+    }
+
+    throw std::runtime_error("Failed to find supported format!");
 }
 
 }

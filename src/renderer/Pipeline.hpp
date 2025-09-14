@@ -9,9 +9,11 @@ namespace violet {
 class VulkanContext;
 class RenderPass;
 
+class DescriptorSet;
+
 class Pipeline {
 public:
-    void init(VulkanContext* context, RenderPass* renderPass, const eastl::string& vertPath, const eastl::string& fragPath);
+    void init(VulkanContext* context, RenderPass* renderPass, DescriptorSet* descriptorSet, const eastl::string& vertPath, const eastl::string& fragPath);
     void cleanup();
 
     vk::Pipeline getPipeline() const { return graphicsPipeline; }

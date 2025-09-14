@@ -27,6 +27,9 @@ find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(EASTL REQUIRED)
+find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
+find_package(Ktx CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 
 # Enable ccache if available
 find_program(CCACHE_PROGRAM ccache)
@@ -49,6 +52,8 @@ add_executable(${PROJECT_NAME} ${VIOLET_SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
+    ${TINYGLTF_INCLUDE_DIRS}
+    ${Stb_INCLUDE_DIR}
 )
 
 # Link libraries
@@ -60,6 +65,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     fmt::fmt
     GPUOpen::VulkanMemoryAllocator
     EASTL
+    KTX::ktx
 )
 
 # Precompiled headers for faster compilation

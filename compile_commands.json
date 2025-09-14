@@ -1,37 +1,97 @@
 [
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -emit-pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -x c++-header -o CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -c /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.cxx",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -emit-pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -x c++-header -o CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -c /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.cxx",
   "file": "/Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.cxx",
   "output": "CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch"
 },
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/main.cpp.o -c /Users/jim/Dev/Violet/src/main.cpp",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/core/TestData.cpp.o -c /Users/jim/Dev/Violet/src/core/TestData.cpp",
+  "file": "/Users/jim/Dev/Violet/src/core/TestData.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/core/TestData.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/core/TestTexture.cpp.o -c /Users/jim/Dev/Violet/src/core/TestTexture.cpp",
+  "file": "/Users/jim/Dev/Violet/src/core/TestTexture.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/core/TestTexture.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/core/stb_impl.cpp.o -c /Users/jim/Dev/Violet/src/core/stb_impl.cpp",
+  "file": "/Users/jim/Dev/Violet/src/core/stb_impl.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/core/stb_impl.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/core/tinygltf_impl.cpp.o -c /Users/jim/Dev/Violet/src/core/tinygltf_impl.cpp",
+  "file": "/Users/jim/Dev/Violet/src/core/tinygltf_impl.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/core/tinygltf_impl.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/main.cpp.o -c /Users/jim/Dev/Violet/src/main.cpp",
   "file": "/Users/jim/Dev/Violet/src/main.cpp",
   "output": "CMakeFiles/VioletEngine.dir/src/main.cpp.o"
 },
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Pipeline.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Pipeline.cpp",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Buffer.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Buffer.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/Buffer.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/Buffer.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/DescriptorSet.cpp.o -c /Users/jim/Dev/Violet/src/renderer/DescriptorSet.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/DescriptorSet.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/DescriptorSet.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Model.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Model.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/Model.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/Model.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Pipeline.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Pipeline.cpp",
   "file": "/Users/jim/Dev/Violet/src/renderer/Pipeline.cpp",
   "output": "CMakeFiles/VioletEngine.dir/src/renderer/Pipeline.cpp.o"
 },
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/RenderPass.cpp.o -c /Users/jim/Dev/Violet/src/renderer/RenderPass.cpp",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/RenderPass.cpp.o -c /Users/jim/Dev/Violet/src/renderer/RenderPass.cpp",
   "file": "/Users/jim/Dev/Violet/src/renderer/RenderPass.cpp",
   "output": "CMakeFiles/VioletEngine.dir/src/renderer/RenderPass.cpp.o"
 },
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Swapchain.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Swapchain.cpp",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Swapchain.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Swapchain.cpp",
   "file": "/Users/jim/Dev/Violet/src/renderer/Swapchain.cpp",
   "output": "CMakeFiles/VioletEngine.dir/src/renderer/Swapchain.cpp.o"
 },
 {
   "directory": "/Users/jim/Dev/Violet/build",
-  "command": "/usr/bin/c++ -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/VulkanContext.cpp.o -c /Users/jim/Dev/Violet/src/renderer/VulkanContext.cpp",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Texture.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Texture.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/Texture.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/Texture.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/UniformBuffer.cpp.o -c /Users/jim/Dev/Violet/src/renderer/UniformBuffer.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/UniformBuffer.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/UniformBuffer.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/Vertex.cpp.o -c /Users/jim/Dev/Violet/src/renderer/Vertex.cpp",
+  "file": "/Users/jim/Dev/Violet/src/renderer/Vertex.cpp",
+  "output": "CMakeFiles/VioletEngine.dir/src/renderer/Vertex.cpp.o"
+},
+{
+  "directory": "/Users/jim/Dev/Violet/build",
+  "command": "/usr/bin/c++ -DDEBUG -DKHRONOS_STATIC -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_FEATURE_WRITE -DMVK_MACOS=1 -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -DVIOLET_DEBUG -DVIOLET_ENABLE_VALIDATION -DVK_ENABLE_BETA_EXTENSIONS -DVK_USE_PLATFORM_METAL_EXT -D_DEBUG -I/Users/jim/Dev/Violet/src -isystem /Users/jim/Dev/Violet/build/vcpkg_installed/arm64-osx/include -g -std=c++20 -arch arm64 -Winvalid-pch -Xclang -include-pch -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /Users/jim/Dev/Violet/build/CMakeFiles/VioletEngine.dir/cmake_pch.hxx -o CMakeFiles/VioletEngine.dir/src/renderer/VulkanContext.cpp.o -c /Users/jim/Dev/Violet/src/renderer/VulkanContext.cpp",
   "file": "/Users/jim/Dev/Violet/src/renderer/VulkanContext.cpp",
   "output": "CMakeFiles/VioletEngine.dir/src/renderer/VulkanContext.cpp.o"
 }

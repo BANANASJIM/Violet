@@ -1,6 +1,8 @@
 #include "Swapchain.hpp"
 #include "VulkanContext.hpp"
+#include "Buffer.hpp"
 #include <GLFW/glfw3.h>
+#include <EASTL/array.h>
 #include <algorithm>
 #include <limits>
 
@@ -10,6 +12,7 @@ void Swapchain::init(VulkanContext* ctx) {
     context = ctx;
     create();
     createImageViews();
+    createDepthResources();
 }
 
 void Swapchain::cleanup() {
@@ -19,6 +22,22 @@ void Swapchain::cleanup() {
         device.destroyFramebuffer(framebuffer);
     }
     framebuffers.clear();
+
+    if (depthImageView) {
+        spdlog::debug("Destroying depth image view");
+        device.destroyImageView(depthImageView);
+        depthImageView = nullptr;
+    }
+    if (depthImage) {
+        spdlog::debug("Destroying depth image");
+        device.destroyImage(depthImage);
+        depthImage = nullptr;
+    }
+    if (depthImageMemory) {
+        spdlog::debug("Freeing depth image memory");
+        device.freeMemory(depthImageMemory);
+        depthImageMemory = nullptr;
+    }
 
     for (auto imageView : imageViews) {
         device.destroyImageView(imageView);
@@ -31,6 +50,7 @@ void Swapchain::recreate() {
     cleanup();
     create();
     createImageViews();
+    createDepthResources();
 }
 
 void Swapchain::create() {
@@ -164,18 +184,66 @@ void Swapchain::createFramebuffers(vk::RenderPass renderPass) {
     framebuffers.resize(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); i++) {
-        vk::ImageView attachments[] = { imageViews[i] };
+        eastl::array<vk::ImageView, 2> attachments = {
+            imageViews[i],
+            depthImageView
+        };
 
         vk::FramebufferCreateInfo framebufferInfo;
         framebufferInfo.renderPass = renderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
         framebufferInfo.width = extent.width;
         framebufferInfo.height = extent.height;
         framebufferInfo.layers = 1;
 
         framebuffers[i] = context->getDevice().createFramebuffer(framebufferInfo);
     }
+}
+
+void Swapchain::createDepthResources() {
+    vk::Format depthFormat = context->findDepthFormat();
+
+    // Create depth image
+    vk::ImageCreateInfo imageInfo;
+    imageInfo.imageType = vk::ImageType::e2D;
+    imageInfo.extent.width = extent.width;
+    imageInfo.extent.height = extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = depthFormat;
+    imageInfo.tiling = vk::ImageTiling::eOptimal;
+    imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+    imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+    imageInfo.samples = vk::SampleCountFlagBits::e1;
+    imageInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    depthImage = context->getDevice().createImage(imageInfo);
+
+    vk::MemoryRequirements memRequirements = context->getDevice().getImageMemoryRequirements(depthImage);
+
+    vk::MemoryAllocateInfo allocInfo;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(context, memRequirements.memoryTypeBits,
+                                               vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    depthImageMemory = context->getDevice().allocateMemory(allocInfo);
+
+    context->getDevice().bindImageMemory(depthImage, depthImageMemory, 0);
+
+    // Create depth image view
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.image = depthImage;
+    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.format = depthFormat;
+    viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    depthImageView = context->getDevice().createImageView(viewInfo);
 }
 
 }

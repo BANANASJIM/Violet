@@ -24,6 +24,8 @@ public:
     void createFramebuffers(vk::RenderPass renderPass);
     const eastl::vector<vk::Framebuffer>& getFramebuffers() const { return framebuffers; }
 
+    void createDepthResources();
+
 private:
     void create();
     void createImageViews();
@@ -35,10 +37,15 @@ private:
 private:
     VulkanContext* context;
     
-    vk::SwapchainKHR swapchain;
+    vk::SwapchainKHR swapchain = nullptr;
     eastl::vector<vk::Image> images;
     eastl::vector<vk::ImageView> imageViews;
     eastl::vector<vk::Framebuffer> framebuffers;
+
+    vk::Image depthImage = nullptr;
+    vk::DeviceMemory depthImageMemory = nullptr;
+    vk::ImageView depthImageView = nullptr;
+
     vk::Format imageFormat;
     vk::Extent2D extent;
 };

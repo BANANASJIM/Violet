@@ -36,9 +36,11 @@ public:
     vk::Queue getGraphicsQueue() const { return graphicsQueue; }
     vk::Queue getPresentQueue() const { return presentQueue; }
     vk::SurfaceKHR getSurface() const { return surface; }
-    
+    vk::CommandPool getCommandPool() const { return commandPool; }
+
     QueueFamilyIndices getQueueFamilies() const { return queueFamilies; }
     SwapchainSupportDetails querySwapchainSupport() const;
+    vk::Format findDepthFormat();
 
 private:
     void createInstance();
@@ -46,10 +48,13 @@ private:
     void createSurface(GLFWwindow* window);
     void pickPhysicalDevice();
     void createLogicalDevice();
+    void createCommandPool();
     
     bool isDeviceSuitable(vk::PhysicalDevice device);
     QueueFamilyIndices findQueueFamilies(vk::PhysicalDevice device);
     bool checkDeviceExtensionSupport(vk::PhysicalDevice device);
+    vk::Format findSupportedFormat(const eastl::vector<vk::Format>& candidates,
+                                   vk::ImageTiling tiling, vk::FormatFeatureFlags features);
     
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -68,7 +73,9 @@ private:
     vk::Queue presentQueue;
     vk::Queue computeQueue;
     vk::Queue transferQueue;
-    
+
+    vk::CommandPool commandPool;
+
     QueueFamilyIndices queueFamilies;
     
     const eastl::vector<const char*> validationLayers = {

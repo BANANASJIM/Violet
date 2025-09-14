@@ -2,9 +2,17 @@
 #include "renderer/Swapchain.hpp"
 #include "renderer/RenderPass.hpp"
 #include "renderer/Pipeline.hpp"
+#include "renderer/DescriptorSet.hpp"
+#include "renderer/UniformBuffer.hpp"
+#include "renderer/Vertex.hpp"
+#include "core/TestData.hpp"
+#include "core/TestTexture.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <chrono>
 #include <GLFW/glfw3.h>
 #include <spdlog/spdlog.h>
 #include <EASTL/vector.h>
+#include <EASTL/array.h>
 #include <array>
 
 // EASTL allocator implementation
@@ -20,11 +28,17 @@ namespace violet {
 
 class Application {
 public:
+    ~Application() {
+        if (!cleanedUp && context.getDevice()) {
+            context.getDevice().waitIdle();
+            cleanup();
+        }
+    }
+
     void run() {
         initWindow();
         initVulkan();
         mainLoop();
-        cleanup();
     }
 
 private:
@@ -38,9 +52,20 @@ private:
         context.init(window);
         swapchain.init(&context);
         renderPass.init(&context, swapchain.getImageFormat());
-        pipeline.init(&context, &renderPass, "build/shaders/triangle.vert.spv", "build/shaders/triangle.frag.spv");
+
+        // Create test resources
+        createTestResources();
+
+        // Create descriptor sets
+        descriptorSet.create(&context, MAX_FRAMES_IN_FLIGHT);
+
+        // Create pipeline with new shaders
+        pipeline.init(&context, &renderPass, &descriptorSet, "build/shaders/model.vert.spv", "build/shaders/model.frag.spv");
         swapchain.createFramebuffers(renderPass.getRenderPass());
-        createCommandPool();
+
+        // Setup descriptor sets
+        setupDescriptorSets();
+
         createCommandBuffers();
         createSyncObjects();
     }
@@ -54,38 +79,40 @@ private:
     }
 
     void cleanup() {
+        if (cleanedUp) return;
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             context.getDevice().destroySemaphore(imageAvailableSemaphores[i]);
             context.getDevice().destroySemaphore(renderFinishedSemaphores[i]);
             context.getDevice().destroyFence(inFlightFences[i]);
+            uniformBuffers[i].cleanup();
         }
-        
-        context.getDevice().destroyCommandPool(commandPool);
+
+        cubeVertexBuffer.cleanup();
+        cubeIndexBuffer.cleanup();
+        testTexture.cleanup();
+        descriptorSet.cleanup();
+
         pipeline.cleanup();
         renderPass.cleanup();
         swapchain.cleanup();
         context.cleanup();
-        
+
         glfwDestroyWindow(window);
         glfwTerminate();
+
+        cleanedUp = true;
     }
 
-    void createCommandPool() {
-        vk::CommandPoolCreateInfo poolInfo;
-        poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-        poolInfo.queueFamilyIndex = context.getQueueFamilies().graphicsFamily.value();
-        
-        commandPool = context.getDevice().createCommandPool(poolInfo);
-    }
 
     void createCommandBuffers() {
         commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
         
         vk::CommandBufferAllocateInfo allocInfo;
-        allocInfo.commandPool = commandPool;
+        allocInfo.commandPool = context.getCommandPool();
         allocInfo.level = vk::CommandBufferLevel::ePrimary;
         allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
-        
+
         auto stdBuffers = context.getDevice().allocateCommandBuffers(allocInfo);
         for (size_t i = 0; i < stdBuffers.size(); i++) {
             commandBuffers[i] = stdBuffers[i];
@@ -147,10 +174,11 @@ private:
         renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
         renderPassInfo.renderArea.extent = swapchain.getExtent();
 
-        vk::ClearValue clearColor;
-        clearColor.color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearColor;
+        eastl::array<vk::ClearValue, 2> clearValues{};
+        clearValues[0].color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+        clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
 
         commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.getPipeline());
@@ -169,30 +197,106 @@ private:
         scissor.extent = swapchain.getExtent();
         commandBuffer.setScissor(0, 1, &scissor);
 
-        commandBuffer.draw(3, 1, 0, 0);
+        // Bind vertex buffer
+        vk::Buffer vertexBuffers[] = {cubeVertexBuffer.getBuffer()};
+        vk::DeviceSize offsets[] = {0};
+        commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+
+        // Bind index buffer
+        commandBuffer.bindIndexBuffer(cubeIndexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+
+        // Update uniform buffer
+        updateUniformBuffer(currentFrame);
+
+        // Bind descriptor set
+        vk::DescriptorSet currentDescriptorSet = descriptorSet.getDescriptorSet(currentFrame);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.getLayout(),
+                                         0, 1, &currentDescriptorSet, 0, nullptr);
+
+        // Push constants
+        PushConstants pushConstants{};
+        pushConstants.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        pushConstants.hasTexture = 1;
+        commandBuffer.pushConstants(pipeline.getLayout(), vk::ShaderStageFlagBits::eFragment,
+                                    0, sizeof(PushConstants), &pushConstants);
+
+        // Draw indexed
+        commandBuffer.drawIndexed(cubeIndexBuffer.getIndexCount(), 1, 0, 0, 0);
         commandBuffer.endRenderPass();
         commandBuffer.end();
     }
 
+    void createTestResources() {
+        // Create test cube
+        auto vertices = TestData::getCubeVertices();
+        auto indices = TestData::getCubeIndices();
+
+        cubeVertexBuffer.create(&context, vertices);
+        cubeIndexBuffer.create(&context, indices);
+
+        // Create test texture
+        TestTexture::createCheckerboardTexture(&context, testTexture);
+
+        // Create uniform buffers
+        uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            uniformBuffers[i].create(&context, sizeof(UniformBufferObject));
+        }
+    }
+
+    void setupDescriptorSets() {
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            descriptorSet.updateBuffer(i, &uniformBuffers[i]);
+            descriptorSet.updateTexture(i, &testTexture);
+        }
+    }
+
+    void updateUniformBuffer(uint32_t currentImage) {
+        static auto startTime = std::chrono::high_resolution_clock::now();
+
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+        UniformBufferObject ubo{};
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(3.0f, 3.0f, 3.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.proj = glm::perspective(glm::radians(45.0f), swapchain.getExtent().width / (float) swapchain.getExtent().height, 0.1f, 10.0f);
+
+        // GLM was designed for OpenGL, where Y is flipped
+        ubo.proj[1][1] *= -1;
+
+        uniformBuffers[currentImage].update(&ubo, sizeof(ubo));
+    }
+
 private:
-    GLFWwindow* window;
+    // Window must be first (destroyed last)
+    GLFWwindow* window = nullptr;
+
+    // VulkanContext must be second (destroyed second to last)
     VulkanContext context;
-    Swapchain swapchain;
-    RenderPass renderPass;
-    Pipeline pipeline;
-    
-    vk::CommandPool commandPool;
-    eastl::vector<vk::CommandBuffer> commandBuffers;
-    
+
+    // All Vulkan resources (destroyed before context)
     eastl::vector<vk::Semaphore> imageAvailableSemaphores;
     eastl::vector<vk::Semaphore> renderFinishedSemaphores;
     eastl::vector<vk::Fence> inFlightFences;
+    eastl::vector<vk::CommandBuffer> commandBuffers;
+
+    // Higher level resources (destroyed before raw Vulkan resources)
+    eastl::vector<UniformBuffer> uniformBuffers;
+    Texture testTexture;
+    VertexBuffer cubeIndexBuffer;
+    VertexBuffer cubeVertexBuffer;
+    DescriptorSet descriptorSet;
+    Pipeline pipeline;
+    RenderPass renderPass;
+    Swapchain swapchain;
     
     uint32_t currentFrame = 0;
-    
+    bool cleanedUp = false;
+
     static constexpr uint32_t WIDTH = 1280;
     static constexpr uint32_t HEIGHT = 720;
-    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+    static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;
 };
 
 }

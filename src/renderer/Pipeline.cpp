@@ -1,12 +1,15 @@
 #include "Pipeline.hpp"
 #include "VulkanContext.hpp"
 #include "RenderPass.hpp"
+#include "DescriptorSet.hpp"
+#include "Vertex.hpp"
+#include "UniformBuffer.hpp"
 #include <fstream>
 #include <spdlog/spdlog.h>
 
 namespace violet {
 
-void Pipeline::init(VulkanContext* ctx, RenderPass* rp, const eastl::string& vertPath, const eastl::string& fragPath) {
+void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* descriptorSet, const eastl::string& vertPath, const eastl::string& fragPath) {
     context = ctx;
 
     auto vertShaderCode = readFile(vertPath);
@@ -27,9 +30,14 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, const eastl::string& ver
 
     vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
     inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -44,8 +52,8 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, const eastl::string& ver
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = vk::PolygonMode::eFill;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = vk::CullModeFlagBits::eBack;
-    rasterizer.frontFace = vk::FrontFace::eClockwise;
+    rasterizer.cullMode = vk::CullModeFlagBits::eNone;
+    rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
     rasterizer.depthBiasEnable = VK_FALSE;
 
     vk::PipelineMultisampleStateCreateInfo multisampling;
@@ -70,9 +78,25 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, const eastl::string& ver
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
+    vk::PipelineDepthStencilStateCreateInfo depthStencil;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = vk::CompareOp::eLess;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
+    vk::PushConstantRange pushConstantRange;
+    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(PushConstants);
+
+    vk::DescriptorSetLayout setLayout = descriptorSet->getLayout();
+
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setLayoutCount = 0;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &setLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     pipelineLayout = context->getDevice().createPipelineLayout(pipelineLayoutInfo);
 
@@ -84,6 +108,7 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, const eastl::string& ver
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout;
