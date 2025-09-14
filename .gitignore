@@ -32,4 +32,3 @@ vcpkg_installed/
 # Debug files
 *.pdb
 *.dSYM/
-.cache/
