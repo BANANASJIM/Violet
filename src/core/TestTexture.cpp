@@ -57,4 +57,39 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
     texture.createSampler(context);
 }
 
+void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
+    constexpr uint32_t width = 4;
+    constexpr uint32_t height = 4;
+    eastl::vector<uint8_t> pixels(width * height * 4, 255);
+
+    vk::DeviceSize imageSize = pixels.size();
+
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingBufferMemory;
+    createBuffer(context, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
+                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                 stagingBuffer, stagingBufferMemory);
+
+    void* data = context->getDevice().mapMemory(stagingBufferMemory, 0, imageSize);
+    memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
+    context->getDevice().unmapMemory(stagingBufferMemory);
+
+    texture.context = context;
+    texture.createImage(context, width, height, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
+                        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
+                                  vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    texture.copyBufferToImage(context, stagingBuffer, width, height);
+    texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
+                                  vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    context->getDevice().destroyBuffer(stagingBuffer);
+    context->getDevice().freeMemory(stagingBufferMemory);
+
+    texture.createImageView(context, vk::Format::eR8G8B8A8Srgb);
+    texture.createSampler(context);
+}
+
 }

@@ -1,4 +1,4 @@
-#include "examples/TestApp.hpp"
+#include "examples/ECSTestApp.hpp"
 #include <spdlog/spdlog.h>
 #include <cstdlib>
 
@@ -13,7 +13,7 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 int main() {
     spdlog::set_level(spdlog::level::debug);
 
-    violet::TestApp app;
+    violet::ECSTestApp app;
     try {
         app.run();
     } catch (const std::exception& e) {

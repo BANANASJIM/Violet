@@ -30,6 +30,8 @@ find_package(EASTL REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
 find_package(Ktx CONFIG REQUIRED)
 find_package(Stb REQUIRED)
+find_package(EnTT CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 # Enable ccache if available
 find_program(CCACHE_PROGRAM ccache)
@@ -66,6 +68,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     GPUOpen::VulkanMemoryAllocator
     EASTL
     KTX::ktx
+    EnTT::EnTT
+    imgui::imgui
 )
 
 # Precompiled headers for faster compilation

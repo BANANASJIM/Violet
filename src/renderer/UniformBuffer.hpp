@@ -15,7 +15,10 @@ struct UniformBufferObject {
 
 struct PushConstants {
     alignas(16) glm::vec4 baseColor;
-    alignas(4) int hasTexture;
+    alignas(4) float metallic;
+    alignas(4) float roughness;
+    alignas(4) float normalScale;
+    alignas(4) float occlusionStrength;
 };
 
 class UniformBuffer {

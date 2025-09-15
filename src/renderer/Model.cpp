@@ -51,11 +51,15 @@ void Model::loadFromGLTF(VulkanContext* ctx, const eastl::string& filePath) {
     }
 
     if (!vertices.empty()) {
+        spdlog::info("Creating mesh with {} vertices and {} indices", vertices.size(), indices.size());
         Mesh mesh;
         mesh.vertexBuffer.create(ctx, vertices);
         mesh.indexBuffer.create(ctx, indices);
         mesh.indexCount = static_cast<uint32_t>(indices.size());
         meshes.push_back(mesh);
+        spdlog::info("Mesh created successfully, total meshes: {}", meshes.size());
+    } else {
+        spdlog::warn("No vertices loaded from glTF file");
     }
 }
 
@@ -100,15 +104,26 @@ void Model::loadMesh(VulkanContext* ctx, void* meshPtr, const void* modelPtr, ea
             const tinygltf::Accessor& accessor = model->accessors[primitive.attributes.find("POSITION")->second];
             const tinygltf::BufferView& bufferView = model->bufferViews[accessor.bufferView];
             const tinygltf::Buffer& buffer = model->buffers[bufferView.buffer];
+            // Loading vertex positions
 
             const float* positions = reinterpret_cast<const float*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
 
+            glm::vec3 minPos(FLT_MAX), maxPos(-FLT_MAX);
             for (size_t v = 0; v < accessor.count; v++) {
                 Vertex vertex{};
                 vertex.pos = glm::vec3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]);
-                vertex.color = glm::vec3(1.0f);
+                vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);  // Default normal
+                vertex.texCoord = glm::vec2(0.0f, 0.0f);      // Default UV
+                vertex.color = glm::vec3(1.0f);                // Default white
+                vertex.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f); // Default tangent
                 vertices.push_back(vertex);
+
+                // Track bounds
+                minPos = glm::min(minPos, vertex.pos);
+                maxPos = glm::max(maxPos, vertex.pos);
             }
+            spdlog::info("Model bounds: min({:.2f},{:.2f},{:.2f}) max({:.2f},{:.2f},{:.2f})",
+                        minPos.x, minPos.y, minPos.z, maxPos.x, maxPos.y, maxPos.z);
         }
 
         // Load normals if available
@@ -135,6 +150,26 @@ void Model::loadMesh(VulkanContext* ctx, void* meshPtr, const void* modelPtr, ea
             for (size_t v = 0; v < accessor.count; v++) {
                 vertices[vertexStart + v].texCoord = glm::vec2(texCoords[v * 2], texCoords[v * 2 + 1]);
             }
+        } else {
+            // Generate simple texture coordinates based on position if missing
+            for (size_t v = 0; v < vertices.size() - vertexStart; v++) {
+                const auto& pos = vertices[vertexStart + v].pos;
+                vertices[vertexStart + v].texCoord = glm::vec2(pos.x + 0.5f, pos.z + 0.5f);
+            }
+        }
+
+        // Load tangents if available
+        if (primitive.attributes.find("TANGENT") != primitive.attributes.end()) {
+            const tinygltf::Accessor& accessor = model->accessors[primitive.attributes.find("TANGENT")->second];
+            const tinygltf::BufferView& bufferView = model->bufferViews[accessor.bufferView];
+            const tinygltf::Buffer& buffer = model->buffers[bufferView.buffer];
+
+            const float* tangents = reinterpret_cast<const float*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
+
+            for (size_t v = 0; v < accessor.count; v++) {
+                vertices[vertexStart + v].tangent = glm::vec4(tangents[v * 4], tangents[v * 4 + 1],
+                                                              tangents[v * 4 + 2], tangents[v * 4 + 3]);
+            }
         }
 
         // Load indices
@@ -142,6 +177,7 @@ void Model::loadMesh(VulkanContext* ctx, void* meshPtr, const void* modelPtr, ea
             const tinygltf::Accessor& accessor = model->accessors[primitive.indices];
             const tinygltf::BufferView& bufferView = model->bufferViews[accessor.bufferView];
             const tinygltf::Buffer& buffer = model->buffers[bufferView.buffer];
+            // Loading indices
 
             switch (accessor.componentType) {
                 case TINYGLTF_PARAMETER_TYPE_UNSIGNED_INT: {

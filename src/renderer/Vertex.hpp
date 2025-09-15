@@ -28,10 +28,12 @@ struct Vertex {
     glm::vec3 normal;
     glm::vec2 texCoord;
     glm::vec3 color;
+    glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};
 
     bool operator==(const Vertex& other) const {
         return pos == other.pos && normal == other.normal &&
-               texCoord == other.texCoord && color == other.color;
+               texCoord == other.texCoord && color == other.color &&
+               tangent == other.tangent;
     }
 
     static vk::VertexInputBindingDescription getBindingDescription() {
@@ -42,8 +44,8 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static eastl::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions() {
-        eastl::array<vk::VertexInputAttributeDescription, 4> attributeDescriptions{};
+    static eastl::array<vk::VertexInputAttributeDescription, 5> getAttributeDescriptions() {
+        eastl::array<vk::VertexInputAttributeDescription, 5> attributeDescriptions{};
 
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
@@ -64,6 +66,11 @@ struct Vertex {
         attributeDescriptions[3].location = 3;
         attributeDescriptions[3].format = vk::Format::eR32G32B32Sfloat;
         attributeDescriptions[3].offset = offsetof(Vertex, color);
+
+        attributeDescriptions[4].binding = 0;
+        attributeDescriptions[4].location = 4;
+        attributeDescriptions[4].format = vk::Format::eR32G32B32A32Sfloat;
+        attributeDescriptions[4].offset = offsetof(Vertex, tangent);
 
         return attributeDescriptions;
     }

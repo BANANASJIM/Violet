@@ -41,6 +41,7 @@ public:
     QueueFamilyIndices getQueueFamilies() const { return queueFamilies; }
     SwapchainSupportDetails querySwapchainSupport() const;
     vk::Format findDepthFormat();
+    GLFWwindow* getWindow() const { return window; }
 
 private:
     void createInstance();
@@ -77,6 +78,7 @@ private:
     vk::CommandPool commandPool;
 
     QueueFamilyIndices queueFamilies;
+    GLFWwindow* window;
     
     const eastl::vector<const char*> validationLayers = {
         "VK_LAYER_KHRONOS_validation"

@@ -1,10 +1,20 @@
 #include "App.hpp"
-#include <GLFW/glfw3.h>
+#include "ui/UILayer.hpp"
+#include <imgui.h>
 #include <EASTL/array.h>
 #include <array>
 #include <stdexcept>
 
 namespace violet {
+
+App::App() : window(1280, 720, "Violet Engine") {
+    window.setResizeCallback([this](int width, int height) {
+        recreateSwapchain();
+    });
+
+    // Initialize input system with the window
+    Input::initialize(window.getHandle());
+}
 
 App::~App() {
     if (!cleanedUp && context.getDevice()) {
@@ -14,21 +24,25 @@ App::~App() {
 }
 
 void App::run() {
-    initWindow();
     initVulkan();
     mainLoop();
 }
 
-void App::initWindow() {
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Violet Engine", nullptr, nullptr);
-}
 
 void App::initVulkan() {
-    context.init(window);
+    lastFrameTime = std::chrono::high_resolution_clock::now();
+
+    context.init(window.getHandle());
     swapchain.init(&context);
     renderPass.init(&context, swapchain.getImageFormat());
+
+    // Initialize ImGui backend
+    imguiBackend.init(&context, window.getHandle(), renderPass.getRenderPass(), MAX_FRAMES_IN_FLIGHT);
+
+    // Initialize UI layer if set
+    if (uiLayer) {
+        uiLayer->onAttach(&context, window.getHandle());
+    }
 
     createResources();
 
@@ -38,8 +52,20 @@ void App::initVulkan() {
 }
 
 void App::mainLoop() {
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
+    while (!window.shouldClose()) {
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+        lastFrameTime = currentTime;
+
+        window.pollEvents();
+        Input::update();
+
+        update(deltaTime);
+
+        if (uiLayer) {
+            uiLayer->onUpdate(deltaTime);
+        }
+
         drawFrame();
     }
     context.getDevice().waitIdle();
@@ -117,6 +143,13 @@ void App::drawFrame() {
     updateUniforms(currentFrame);
     recordCommands(commandBuffers[currentFrame], imageIndex);
 
+    // Render ImGui
+    if (uiLayer) {
+        uiLayer->beginFrame();
+        uiLayer->onImGuiRender();
+        uiLayer->endFrame(commandBuffers[currentFrame]);
+    }
+
     commandBuffers[currentFrame].endRenderPass();
     commandBuffers[currentFrame].end();
 
@@ -144,6 +177,12 @@ void App::internalCleanup() {
 
     cleanup();
 
+    if (uiLayer) {
+        uiLayer->onDetach();
+    }
+
+    imguiBackend.cleanup();
+
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         context.getDevice().destroySemaphore(imageAvailableSemaphores[i]);
         context.getDevice().destroySemaphore(renderFinishedSemaphores[i]);
@@ -154,10 +193,23 @@ void App::internalCleanup() {
     swapchain.cleanup();
     context.cleanup();
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
 
     cleanedUp = true;
+}
+
+void App::recreateSwapchain() {
+    int width = 0, height = 0;
+    window.getFramebufferSize(&width, &height);
+    while (width == 0 || height == 0) {
+        window.getFramebufferSize(&width, &height);
+        window.waitEvents();
+    }
+
+    context.getDevice().waitIdle();
+
+    swapchain.recreate();
+    swapchain.createFramebuffers(renderPass.getRenderPass());
+    onWindowResize(width, height);
 }
 
 }

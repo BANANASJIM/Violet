@@ -4,7 +4,7 @@
 #include "DescriptorSet.hpp"
 #include "Vertex.hpp"
 #include "UniformBuffer.hpp"
-#include <fstream>
+#include "core/FileSystem.hpp"
 #include <spdlog/spdlog.h>
 
 namespace violet {
@@ -139,17 +139,15 @@ void Pipeline::cleanup() {
 }
 
 eastl::vector<char> Pipeline::readFile(const eastl::string& filename) {
-    std::ifstream file(filename.c_str(), std::ios::ate | std::ios::binary);
-    if (!file.is_open()) {
+    auto data = FileSystem::readBinary(filename);
+    if (data.empty()) {
         spdlog::error("Failed to open file: {}", filename.c_str());
         throw std::runtime_error("Failed to open shader file");
     }
 
-    size_t fileSize = static_cast<size_t>(file.tellg());
-    eastl::vector<char> buffer(fileSize);
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-    file.close();
+    // Convert uint8_t vector to char vector
+    eastl::vector<char> buffer(data.size());
+    memcpy(buffer.data(), data.data(), data.size());
 
     return buffer;
 }

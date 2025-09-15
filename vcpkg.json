@@ -12,6 +12,11 @@
     "eastl",
     "tinygltf",
     "ktx",
-    "stb"
+    "stb",
+    "entt",
+    {
+      "name": "imgui",
+      "features": ["vulkan-binding", "glfw-binding"]
+    }
   ]
 }

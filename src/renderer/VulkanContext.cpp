@@ -5,7 +5,8 @@
 
 namespace violet {
 
-void VulkanContext::init(GLFWwindow* window) {
+void VulkanContext::init(GLFWwindow* win) {
+    window = win;
     createInstance();
     setupDebugMessenger();
     createSurface(window);

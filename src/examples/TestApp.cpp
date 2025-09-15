@@ -35,6 +35,14 @@ void TestApp::createTestResources() {
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         uniformBuffers[i].create(getContext(), sizeof(UniformBufferObject));
     }
+
+    int width, height;
+    glfwGetFramebufferSize(getWindow(), &width, &height);
+    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+    camera = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 0.1f, 10.0f);
+    camera->setPosition(glm::vec3(3.0f, 3.0f, 3.0f));
+    camera->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
+    camera->setUp(glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
 void TestApp::setupDescriptorSets() {
@@ -54,14 +62,8 @@ void TestApp::updateUniforms(uint32_t frameIndex) {
     UniformBufferObject ubo{};
     ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
                            glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = glm::lookAt(glm::vec3(3.0f, 3.0f, 3.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                          glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f),
-                               getSwapchain()->getExtent().width /
-                               static_cast<float>(getSwapchain()->getExtent().height),
-                               0.1f, 10.0f);
-
-    ubo.proj[1][1] *= -1;
+    ubo.view = camera->getViewMatrix();
+    ubo.proj = camera->getProjectionMatrix();
 
     uniformBuffers[frameIndex].update(&ubo, sizeof(ubo));
 }
@@ -81,7 +83,10 @@ void TestApp::recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageInde
 
     PushConstants pushConstants{};
     pushConstants.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-    pushConstants.hasTexture = 1;
+    pushConstants.metallic = 0.0f;
+    pushConstants.roughness = 0.5f;
+    pushConstants.normalScale = 1.0f;
+    pushConstants.occlusionStrength = 1.0f;
     commandBuffer.pushConstants(pipeline.getLayout(), vk::ShaderStageFlagBits::eFragment,
                                 0, sizeof(PushConstants), &pushConstants);
 
@@ -98,6 +103,13 @@ void TestApp::cleanup() {
     testTexture.cleanup();
     descriptorSet.cleanup();
     pipeline.cleanup();
+}
+
+void TestApp::onWindowResize(int width, int height) {
+    if (camera && width > 0 && height > 0) {
+        float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+        camera->setAspectRatio(aspectRatio);
+    }
 }
 
 }
