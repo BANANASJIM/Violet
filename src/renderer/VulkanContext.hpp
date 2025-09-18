@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
+#include <vk_mem_alloc.h>
 #include <GLFW/glfw3.h>
 #include <EASTL/vector.h>
 #include <EASTL/optional.h>
@@ -29,14 +31,19 @@ class VulkanContext {
 public:
     void init(GLFWwindow* window);
     void cleanup();
-    
-    vk::Instance getInstance() const { return instance; }
-    vk::Device getDevice() const { return device; }
-    vk::PhysicalDevice getPhysicalDevice() const { return physicalDevice; }
-    vk::Queue getGraphicsQueue() const { return graphicsQueue; }
-    vk::Queue getPresentQueue() const { return presentQueue; }
-    vk::SurfaceKHR getSurface() const { return surface; }
-    vk::CommandPool getCommandPool() const { return commandPool; }
+
+    vk::Instance getInstance() const { return *instance; }
+    vk::Device getDevice() const { return *device; }
+    vk::PhysicalDevice getPhysicalDevice() const { return *physicalDevice; }
+    vk::Queue getGraphicsQueue() const { return *graphicsQueue; }
+    vk::Queue getPresentQueue() const { return *presentQueue; }
+    vk::SurfaceKHR getSurface() const { return *surface; }
+    vk::CommandPool getCommandPool() const { return *commandPool; }
+    VmaAllocator getAllocator() const { return allocator; }
+
+    // RAII object accessors for creating child objects
+    const vk::raii::Device& getDeviceRAII() const { return device; }
+    const vk::raii::PhysicalDevice& getPhysicalDeviceRAII() const { return physicalDevice; }
 
     QueueFamilyIndices getQueueFamilies() const { return queueFamilies; }
     SwapchainSupportDetails querySwapchainSupport() const;
@@ -50,6 +57,7 @@ private:
     void pickPhysicalDevice();
     void createLogicalDevice();
     void createCommandPool();
+    void createAllocator();
     
     bool isDeviceSuitable(vk::PhysicalDevice device);
     QueueFamilyIndices findQueueFamilies(vk::PhysicalDevice device);
@@ -64,18 +72,20 @@ private:
         void* pUserData);
 
 private:
-    vk::Instance instance;
-    vk::DebugUtilsMessengerEXT debugMessenger;
-    vk::PhysicalDevice physicalDevice;
-    vk::Device device;
-    vk::SurfaceKHR surface;
-    
-    vk::Queue graphicsQueue;
-    vk::Queue presentQueue;
-    vk::Queue computeQueue;
-    vk::Queue transferQueue;
+    vk::raii::Context context;
+    vk::raii::Instance instance{nullptr};
+    vk::raii::DebugUtilsMessengerEXT debugMessenger{nullptr};
+    vk::raii::PhysicalDevice physicalDevice{nullptr};
+    vk::raii::Device device{nullptr};
+    vk::raii::SurfaceKHR surface{nullptr};
 
-    vk::CommandPool commandPool;
+    vk::raii::Queue graphicsQueue{nullptr};
+    vk::raii::Queue presentQueue{nullptr};
+    vk::raii::Queue computeQueue{nullptr};
+    vk::raii::Queue transferQueue{nullptr};
+
+    vk::raii::CommandPool commandPool{nullptr};
+    VmaAllocator allocator = VK_NULL_HANDLE;
 
     QueueFamilyIndices queueFamilies;
     GLFWwindow* window;

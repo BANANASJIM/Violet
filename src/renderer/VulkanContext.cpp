@@ -13,13 +13,28 @@ void VulkanContext::init(GLFWwindow* win) {
     pickPhysicalDevice();
     createLogicalDevice();
     createCommandPool();
+    createAllocator();
 }
 
 void VulkanContext::cleanup() {
-    if (commandPool) device.destroyCommandPool(commandPool);
-    device.destroy();
-    instance.destroySurfaceKHR(surface);
-    instance.destroy();
+    // Clean up VMA allocator first
+    if (allocator != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(allocator);
+        allocator = VK_NULL_HANDLE;
+    }
+
+    // RAII objects will automatically clean themselves up
+    // Reset in reverse order of creation to ensure proper cleanup
+    commandPool = nullptr;
+    transferQueue = nullptr;
+    computeQueue = nullptr;
+    presentQueue = nullptr;
+    graphicsQueue = nullptr;
+    device = nullptr;
+    surface = nullptr;
+    debugMessenger = nullptr;
+    physicalDevice = nullptr;
+    instance = nullptr;
 }
 
 void VulkanContext::createInstance() {
@@ -53,7 +68,7 @@ void VulkanContext::createInstance() {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
-    instance = vk::createInstance(createInfo);
+    instance = vk::raii::Instance(context, createInfo);
     VT_INFO("Vulkan instance created");
 }
 
@@ -64,32 +79,32 @@ void VulkanContext::setupDebugMessenger() {
 
 void VulkanContext::createSurface(GLFWwindow* window) {
     VkSurfaceKHR rawSurface;
-    if (glfwCreateWindowSurface(instance, window, nullptr, &rawSurface) != VK_SUCCESS) {
+    if (glfwCreateWindowSurface(*instance, window, nullptr, &rawSurface) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create window surface");
     }
-    surface = rawSurface;
+    surface = vk::raii::SurfaceKHR(instance, rawSurface);
 }
 
 void VulkanContext::pickPhysicalDevice() {
     auto devices = instance.enumeratePhysicalDevices();
-    
-    for (const auto& device : devices) {
-        if (isDeviceSuitable(device)) {
-            physicalDevice = device;
+
+    for (auto& device : devices) {
+        if (isDeviceSuitable(*device)) {
+            physicalDevice = std::move(device);
             break;
         }
     }
-    
-    if (!physicalDevice) {
+
+    if (physicalDevice == VK_NULL_HANDLE) {
         throw std::runtime_error("Failed to find a suitable GPU");
     }
-    
+
     auto properties = physicalDevice.getProperties();
     VT_INFO("Selected GPU: {}", properties.deviceName.data());
 }
 
 void VulkanContext::createLogicalDevice() {
-    queueFamilies = findQueueFamilies(physicalDevice);
+    queueFamilies = findQueueFamilies(*physicalDevice);
     
     eastl::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
     eastl::set<uint32_t> uniqueQueueFamilies = {
@@ -134,16 +149,16 @@ void VulkanContext::createLogicalDevice() {
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
 
-    device = physicalDevice.createDevice(createInfo);
-    
-    graphicsQueue = device.getQueue(queueFamilies.graphicsFamily.value(), 0);
-    presentQueue = device.getQueue(queueFamilies.presentFamily.value(), 0);
-    
+    device = vk::raii::Device(physicalDevice, createInfo);
+
+    graphicsQueue = vk::raii::Queue(device, queueFamilies.graphicsFamily.value(), 0);
+    presentQueue = vk::raii::Queue(device, queueFamilies.presentFamily.value(), 0);
+
     if (queueFamilies.computeFamily.has_value()) {
-        computeQueue = device.getQueue(queueFamilies.computeFamily.value(), 0);
+        computeQueue = vk::raii::Queue(device, queueFamilies.computeFamily.value(), 0);
     }
     if (queueFamilies.transferFamily.has_value()) {
-        transferQueue = device.getQueue(queueFamilies.transferFamily.value(), 0);
+        transferQueue = vk::raii::Queue(device, queueFamilies.transferFamily.value(), 0);
     }
 }
 
@@ -153,11 +168,21 @@ bool VulkanContext::isDeviceSuitable(vk::PhysicalDevice device) {
 
     bool swapchainAdequate = false;
     if (extensionsSupported) {
-        // Need to set physicalDevice temporarily for querySwapchainSupport
-        auto tempDevice = physicalDevice;
-        physicalDevice = device;
-        auto details = querySwapchainSupport();
-        physicalDevice = tempDevice;
+        SwapchainSupportDetails details;
+        details.capabilities = device.getSurfaceCapabilitiesKHR(*surface);
+
+        auto formats = device.getSurfaceFormatsKHR(*surface);
+        details.formats.clear();
+        for (const auto& format : formats) {
+            details.formats.push_back(format);
+        }
+
+        auto presentModes = device.getSurfacePresentModesKHR(*surface);
+        details.presentModes.clear();
+        for (const auto& mode : presentModes) {
+            details.presentModes.push_back(mode);
+        }
+
         swapchainAdequate = !details.formats.empty() && !details.presentModes.empty();
     }
 
@@ -187,7 +212,7 @@ QueueFamilyIndices VulkanContext::findQueueFamilies(vk::PhysicalDevice device) {
             indices.transferFamily = i;
         }
         
-        if (device.getSurfaceSupportKHR(i, surface)) {
+        if (device.getSurfaceSupportKHR(i, *surface)) {
             indices.presentFamily = i;
         }
         
@@ -210,20 +235,20 @@ bool VulkanContext::checkDeviceExtensionSupport(vk::PhysicalDevice device) {
 
 SwapchainSupportDetails VulkanContext::querySwapchainSupport() const {
     SwapchainSupportDetails details;
-    details.capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
-    
-    auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
+    details.capabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+
+    auto formats = physicalDevice.getSurfaceFormatsKHR(*surface);
     details.formats.clear();
     for (const auto& format : formats) {
         details.formats.push_back(format);
     }
-    
-    auto presentModes = physicalDevice.getSurfacePresentModesKHR(surface);
+
+    auto presentModes = physicalDevice.getSurfacePresentModesKHR(*surface);
     details.presentModes.clear();
     for (const auto& mode : presentModes) {
         details.presentModes.push_back(mode);
     }
-    
+
     return details;
 }
 
@@ -245,7 +270,7 @@ void VulkanContext::createCommandPool() {
     poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
     poolInfo.queueFamilyIndex = queueFamilies.graphicsFamily.value();
 
-    commandPool = device.createCommandPool(poolInfo);
+    commandPool = vk::raii::CommandPool(device, poolInfo);
 }
 
 vk::Format VulkanContext::findDepthFormat() {
@@ -269,6 +294,20 @@ vk::Format VulkanContext::findSupportedFormat(const eastl::vector<vk::Format>& c
     }
 
     throw std::runtime_error("Failed to find supported format!");
+}
+
+void VulkanContext::createAllocator() {
+    VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.physicalDevice = *physicalDevice;
+    allocatorInfo.device = *device;
+    allocatorInfo.instance = *instance;
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+
+    if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VMA allocator");
+    }
+
+    VT_INFO("VMA allocator created");
 }
 
 }

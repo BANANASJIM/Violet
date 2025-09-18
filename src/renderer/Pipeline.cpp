@@ -21,12 +21,12 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
     vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
-    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.module = *vertShaderModule;
     vertShaderStageInfo.pName = "main";
 
     vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
     fragShaderStageInfo.stage = vk::ShaderStageFlagBits::eFragment;
-    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.module = *fragShaderModule;
     fragShaderStageInfo.pName = "main";
 
     vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
@@ -98,7 +98,7 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
     pipelineLayoutInfo.pushConstantRangeCount = 0;  // 移除push constants
     pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
-    pipelineLayout = context->getDevice().createPipelineLayout(pipelineLayoutInfo);
+    pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
     vk::GraphicsPipelineCreateInfo pipelineInfo;
     pipelineInfo.stageCount = 2;
@@ -111,31 +111,20 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.layout = *pipelineLayout;
     pipelineInfo.renderPass = rp->getRenderPass();
     pipelineInfo.subpass = 0;
 
-    auto result = context->getDevice().createGraphicsPipelines({}, {pipelineInfo});
-    graphicsPipeline = result.value[0];
+    graphicsPipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, pipelineInfo);
 }
 
 void Pipeline::cleanup() {
-    if (graphicsPipeline) {
-        context->getDevice().destroyPipeline(graphicsPipeline);
-        graphicsPipeline = nullptr;
-    }
-    if (pipelineLayout) {
-        context->getDevice().destroyPipelineLayout(pipelineLayout);
-        pipelineLayout = nullptr;
-    }
-    if (fragShaderModule) {
-        context->getDevice().destroyShaderModule(fragShaderModule);
-        fragShaderModule = nullptr;
-    }
-    if (vertShaderModule) {
-        context->getDevice().destroyShaderModule(vertShaderModule);
-        vertShaderModule = nullptr;
-    }
+    // RAII objects will automatically clean themselves up
+    // Reset in reverse order of creation
+    graphicsPipeline = nullptr;
+    pipelineLayout = nullptr;
+    fragShaderModule = nullptr;
+    vertShaderModule = nullptr;
 }
 
 eastl::vector<char> Pipeline::readFile(const eastl::string& filename) {
@@ -152,16 +141,16 @@ eastl::vector<char> Pipeline::readFile(const eastl::string& filename) {
     return buffer;
 }
 
-vk::ShaderModule Pipeline::createShaderModule(const eastl::vector<char>& code) {
+vk::raii::ShaderModule Pipeline::createShaderModule(const eastl::vector<char>& code) {
     vk::ShaderModuleCreateInfo createInfo;
     createInfo.codeSize = code.size();
     createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
-    return context->getDevice().createShaderModule(createInfo);
+    return vk::raii::ShaderModule(context->getDeviceRAII(), createInfo);
 }
 
 void Pipeline::bind(vk::CommandBuffer commandBuffer) {
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 }
 
 }

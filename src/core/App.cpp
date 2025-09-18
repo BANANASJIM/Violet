@@ -118,7 +118,7 @@ void App::drawFrame() {
 
     vk::RenderPassBeginInfo renderPassInfo;
     renderPassInfo.renderPass = renderPass.getRenderPass();
-    renderPassInfo.framebuffer = swapchain.getFramebuffers()[imageIndex];
+    renderPassInfo.framebuffer = swapchain.getFramebuffer(imageIndex);
     renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
     renderPassInfo.renderArea.extent = swapchain.getExtent();
     renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());

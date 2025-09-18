@@ -57,7 +57,15 @@ void VioletApp::createResources() {
     loadAsset("/Users/jim/Dev/Violet/assets/Models/Sponza/glTF/Sponza.gltf");
 
     // Create default material for all mesh entities that don't have materials
-    createDefaultMaterialsForMeshes();
+    try {
+        VT_INFO("About to call createDefaultMaterialsForMeshes");
+        createDefaultMaterialsForMeshes();
+        VT_INFO("createDefaultMaterialsForMeshes completed successfully");
+    } catch (const std::exception& e) {
+        VT_ERROR("Exception in createDefaultMaterialsForMeshes: {}", e.what());
+    } catch (...) {
+        VT_ERROR("Unknown exception in createDefaultMaterialsForMeshes");
+    }
 }
 
 void VioletApp::createTestResources() {
@@ -114,11 +122,6 @@ void VioletApp::update(float deltaTime) {
                    Input::isKeyHeld(GLFW_KEY_SPACE) || Input::isKeyHeld(GLFW_KEY_LEFT_SHIFT);
 
     if (isMoving && !wasMoving) {
-        VT_DEBUG("Input detected - W:{} A:{} S:{} D:{} Space:{} Shift:{} ImGui wants keyboard:{}",
-                     Input::isKeyHeld(GLFW_KEY_W), Input::isKeyHeld(GLFW_KEY_A),
-                     Input::isKeyHeld(GLFW_KEY_S), Input::isKeyHeld(GLFW_KEY_D),
-                     Input::isKeyHeld(GLFW_KEY_SPACE), Input::isKeyHeld(GLFW_KEY_LEFT_SHIFT),
-                     ImGui::GetIO().WantCaptureKeyboard);
     }
     wasMoving = isMoving;
 
@@ -127,8 +130,6 @@ void VioletApp::update(float deltaTime) {
     bool isRightHeld = Input::isMouseButtonHeld(MouseButton::Right);
     if (isRightHeld && !wasRightHeld) {
         glm::vec2 delta = Input::getMouseDelta();
-        VT_DEBUG("Mouse input - Right button held, delta:({:.2f},{:.2f}) ImGui wants mouse:{}",
-                     delta.x, delta.y, ImGui::GetIO().WantCaptureMouse);
     }
     wasRightHeld = isRightHeld;
 
@@ -195,6 +196,8 @@ void VioletApp::loadAsset(const eastl::string& path) {
 }
 
 void VioletApp::createDefaultMaterialsForMeshes() {
+    VT_INFO("=== Starting createDefaultMaterialsForMeshes ===");
+
     // Create a default material
     Material* defaultMaterial = renderer.createMaterial("build/shaders/pbr.vert.spv", "build/shaders/pbr.frag.spv");
     MaterialInstance* defaultMaterialInstance = renderer.createMaterialInstance(defaultMaterial);
@@ -207,11 +210,15 @@ void VioletApp::createDefaultMaterialsForMeshes() {
 
     // Assign default material to all mesh entities that don't have materials
     auto meshView = world.getRegistry().view<MeshComponent>();
+    uint32_t materialCount = 0;
+
     for (auto entity : meshView) {
         if (!world.getRegistry().try_get<MaterialComponent>(entity)) {
             world.addComponent<MaterialComponent>(entity, defaultMaterialInstance);
+            materialCount++;
         }
     }
+
 }
 
 
@@ -225,7 +232,6 @@ void VioletApp::onWindowResize(int width, int height) {
             if (cameraComp.isActive && cameraComp.camera) {
                 if (auto* perspectiveCamera = dynamic_cast<PerspectiveCamera*>(cameraComp.camera.get())) {
                     perspectiveCamera->setAspectRatio(aspectRatio);
-                    VT_DEBUG("Updated camera aspect ratio to {:.3f} ({}x{})", aspectRatio, width, height);
                 }
             }
         }

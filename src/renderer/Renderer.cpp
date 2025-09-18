@@ -39,9 +39,11 @@ void Renderer::collectRenderables(entt::registry& world) {
 
     auto view = world.view<TransformComponent, MeshComponent>();
 
+
     for (auto entity : view) {
         collectFromEntity(entity, world);
     }
+
 }
 
 void Renderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
@@ -61,14 +63,20 @@ void Renderer::collectFromEntity(entt::entity entity, entt::registry& world) {
 
     const auto& subMeshes = mesh->getSubMeshes();
 
+
     for (size_t i = 0; i < subMeshes.size(); ++i) {
         const SubMesh& subMesh = subMeshes[i];
-        if (!subMesh.isValid()) continue;
+        if (!subMesh.isValid()) {
+            VT_WARN("Entity {} submesh {} is invalid (indexCount={})",
+                    static_cast<uint32_t>(entity), i, subMesh.indexCount);
+            continue;
+        }
 
         MaterialInstance* matInstance = nullptr;
 
         if (auto* matComp = world.try_get<MaterialComponent>(entity)) {
             matInstance = matComp->material;
+        } else {
         }
 
         Renderable renderable(entity, mesh, matInstance ? matInstance->getMaterial() : nullptr,
@@ -103,9 +111,15 @@ void Renderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
     Material* currentMaterial = nullptr;
     Mesh* currentMesh = nullptr;
 
-    for (const auto& renderable : renderables) {
-        if (!renderable.visible || !renderable.mesh) continue;
 
+    uint32_t drawCallCount = 0;
+
+    for (const auto& renderable : renderables) {
+        if (!renderable.visible || !renderable.mesh) {
+            continue;
+        }
+
+        // Material binding
         if (renderable.material != currentMaterial) {
             currentMaterial = renderable.material;
             if (currentMaterial && currentMaterial->getPipeline()) {
@@ -116,11 +130,14 @@ void Renderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
                 commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                                 currentMaterial->getPipelineLayout(),
                                                 GLOBAL_SET, 1, &globalSet, 0, nullptr);
+            } else {
+                VT_WARN("Material or pipeline is null: material={}, pipeline={}",
+                        currentMaterial != nullptr,
+                        currentMaterial ? (currentMaterial->getPipeline() != nullptr) : false);
             }
         }
 
         // 绑定MaterialInstance的descriptor set (set 1)
-        // 需要从entity获取MaterialInstance
         MaterialInstance* matInstance = nullptr;
         if (auto* matComp = world.try_get<MaterialComponent>(renderable.entity)) {
             matInstance = matComp->material;
@@ -131,21 +148,39 @@ void Renderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
             commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                             currentMaterial->getPipelineLayout(),
                                             MATERIAL_SET, 1, &materialSet, 0, nullptr);
+        } else {
+            VT_WARN("Material instance or descriptor set is null: matInstance={}, descriptorSet={}",
+                    matInstance != nullptr,
+                    matInstance ? (matInstance->getDescriptorSet() != nullptr) : false);
         }
 
+        // Mesh binding
         if (renderable.mesh != currentMesh) {
             currentMesh = renderable.mesh;
-            commandBuffer.bindVertexBuffers(0, currentMesh->getVertexBuffer().getBuffer(), {0});
-            commandBuffer.bindIndexBuffer(currentMesh->getIndexBuffer().getBuffer(), 0,
-                                        currentMesh->getIndexBuffer().getIndexType());
+            vk::Buffer vertexBuffer = currentMesh->getVertexBuffer().getBuffer();
+            vk::Buffer indexBuffer = currentMesh->getIndexBuffer().getBuffer();
+
+            if (vertexBuffer && indexBuffer) {
+                commandBuffer.bindVertexBuffers(0, vertexBuffer, {0});
+                commandBuffer.bindIndexBuffer(indexBuffer, 0, currentMesh->getIndexBuffer().getIndexType());
+            } else {
+                VT_ERROR("Invalid vertex or index buffer: vertex={}, index={}",
+                         static_cast<void*>(vertexBuffer), static_cast<void*>(indexBuffer));
+                continue;
+            }
         }
 
+        // Draw call
         const SubMesh& subMesh = currentMesh->getSubMesh(renderable.subMeshIndex);
+
         commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+        drawCallCount++;
     }
+
 }
 
 Material* Renderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader) {
+
     auto material = eastl::make_unique<Material>();
 
     // Material自己管理descriptor set layout
@@ -159,10 +194,13 @@ Material* Renderer::createMaterial(const eastl::string& vertexShader, const east
 
     Material* ptr = material.get();
     materials.push_back(eastl::move(material));
+
+    VT_INFO("Material created: {} shaders", 2);
     return ptr;
 }
 
 MaterialInstance* Renderer::createMaterialInstance(Material* material) {
+
     auto instance = eastl::make_unique<MaterialInstance>();
     instance->create(context, material);
 
@@ -171,6 +209,7 @@ MaterialInstance* Renderer::createMaterialInstance(Material* material) {
 
     MaterialInstance* ptr = instance.get();
     materialInstances.push_back(eastl::move(instance));
+
     return ptr;
 }
 

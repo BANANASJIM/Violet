@@ -59,8 +59,8 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    Renderer(Renderer&&)            = default;
-    Renderer& operator=(Renderer&&) = default;
+    Renderer(Renderer&&)            = delete;
+    Renderer& operator=(Renderer&&) = delete;
 
     void init(VulkanContext* context, RenderPass* renderPass, uint32_t maxFramesInFlight);
     void cleanup();

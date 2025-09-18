@@ -6,31 +6,30 @@ namespace violet {
 
 void UniformBuffer::create(VulkanContext* ctx, size_t size) {
     context = ctx;
-    bufferSize = size;
 
-    createBuffer(ctx, size, vk::BufferUsageFlagBits::eUniformBuffer,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 buffer, bufferMemory);
+    BufferInfo bufferInfo;
+    bufferInfo.size = size;
+    bufferInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+    bufferInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    bufferInfo.debugName = "Uniform Buffer";
 
-    mapped = ctx->getDevice().mapMemory(bufferMemory, 0, size);
+    bufferResource = ResourceFactory::createBuffer(ctx, bufferInfo);
+    allocation = bufferResource.allocation;
+
+    // Buffer is automatically mapped due to CPU_TO_GPU usage
 }
 
 void UniformBuffer::cleanup() {
-    if (context && buffer) {
-        if (mapped) {
-            context->getDevice().unmapMemory(bufferMemory);
-            mapped = nullptr;
-        }
-        context->getDevice().destroyBuffer(buffer);
-        context->getDevice().freeMemory(bufferMemory);
-        buffer = nullptr;
-        bufferMemory = nullptr;
+    if (context) {
+        ResourceFactory::destroyBuffer(context, bufferResource);
+        allocation = VK_NULL_HANDLE;
+        context = nullptr;
     }
 }
 
 void UniformBuffer::update(const void* data, size_t size) {
-    if (mapped && size <= bufferSize) {
-        memcpy(mapped, data, size);
+    if (bufferResource.mappedData && size <= bufferResource.size) {
+        memcpy(bufferResource.mappedData, data, size);
     }
 }
 

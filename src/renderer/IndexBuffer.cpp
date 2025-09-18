@@ -15,23 +15,31 @@ void IndexBuffer::create(VulkanContext* ctx, const eastl::vector<uint32_t>& indi
 
     vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(context, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer
+    BufferInfo stagingInfo;
+    stagingInfo.size = bufferSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Index staging buffer";
 
-    void* data = context->getDevice().mapMemory(stagingBufferMemory, 0, bufferSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    context->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createBuffer(context, bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-                 vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
+    // Create index buffer
+    BufferInfo indexInfo;
+    indexInfo.size = bufferSize;
+    indexInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer;
+    indexInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+    indexInfo.debugName = "Index buffer (uint32)";
 
-    copyBuffer(context, stagingBuffer, buffer, bufferSize);
+    bufferResource = ResourceFactory::createBuffer(ctx, indexInfo);
+    allocation = bufferResource.allocation;
 
-    context->getDevice().destroyBuffer(stagingBuffer);
-    context->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::copyBuffer(ctx, stagingBuffer, bufferResource, bufferSize);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 }
 
 void IndexBuffer::create(VulkanContext* ctx, const eastl::vector<uint16_t>& indices) {
@@ -45,31 +53,37 @@ void IndexBuffer::create(VulkanContext* ctx, const eastl::vector<uint16_t>& indi
 
     vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(context, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer
+    BufferInfo stagingInfo;
+    stagingInfo.size = bufferSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Index staging buffer";
 
-    void* data = context->getDevice().mapMemory(stagingBufferMemory, 0, bufferSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    context->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createBuffer(context, bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-                 vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
+    // Create index buffer
+    BufferInfo indexInfo;
+    indexInfo.size = bufferSize;
+    indexInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer;
+    indexInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+    indexInfo.debugName = "Index buffer (uint16)";
 
-    copyBuffer(context, stagingBuffer, buffer, bufferSize);
+    bufferResource = ResourceFactory::createBuffer(ctx, indexInfo);
+    allocation = bufferResource.allocation;
 
-    context->getDevice().destroyBuffer(stagingBuffer);
-    context->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::copyBuffer(ctx, stagingBuffer, bufferResource, bufferSize);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 }
 
 void IndexBuffer::cleanup() {
-    if (context && buffer) {
-        context->getDevice().destroyBuffer(buffer);
-        context->getDevice().freeMemory(bufferMemory);
-        buffer = nullptr;
-        bufferMemory = nullptr;
+    if (context) {
+        ResourceFactory::destroyBuffer(context, bufferResource);
+        allocation = VK_NULL_HANDLE;
         context = nullptr;
         indexCount = 0;
     }

@@ -45,6 +45,35 @@ void copyBuffer(VulkanContext* context, vk::Buffer srcBuffer, vk::Buffer dstBuff
     endSingleTimeCommands(context, commandBuffer);
 }
 
+void createBuffer(VulkanContext* context, vk::DeviceSize size, vk::BufferUsageFlags usage,
+                  vk::MemoryPropertyFlags properties, vk::raii::Buffer& buffer, vk::raii::DeviceMemory& bufferMemory) {
+    vk::BufferCreateInfo bufferInfo;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    buffer = vk::raii::Buffer(context->getDeviceRAII(), bufferInfo);
+
+    vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+
+    vk::MemoryAllocateInfo allocInfo;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(context, memRequirements.memoryTypeBits, properties);
+
+    bufferMemory = vk::raii::DeviceMemory(context->getDeviceRAII(), allocInfo);
+    buffer.bindMemory(*bufferMemory, 0);
+}
+
+void copyBuffer(VulkanContext* context, const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
+    vk::raii::CommandBuffer commandBuffer = beginSingleTimeCommandsRAII(context);
+
+    vk::BufferCopy copyRegion;
+    copyRegion.size = size;
+    commandBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
+
+    endSingleTimeCommands(context, commandBuffer);
+}
+
 vk::CommandBuffer beginSingleTimeCommands(VulkanContext* context) {
     vk::CommandBufferAllocateInfo allocInfo;
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -72,6 +101,35 @@ void endSingleTimeCommands(VulkanContext* context, vk::CommandBuffer commandBuff
     context->getGraphicsQueue().waitIdle();
 
     context->getDevice().freeCommandBuffers(context->getCommandPool(), 1, &commandBuffer);
+}
+
+vk::raii::CommandBuffer beginSingleTimeCommandsRAII(VulkanContext* context) {
+    vk::CommandBufferAllocateInfo allocInfo;
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandPool = context->getCommandPool();
+    allocInfo.commandBufferCount = 1;
+
+    vk::raii::CommandBuffers commandBuffers(context->getDeviceRAII(), allocInfo);
+    vk::raii::CommandBuffer commandBuffer = std::move(commandBuffers[0]);
+
+    vk::CommandBufferBeginInfo beginInfo;
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    commandBuffer.begin(beginInfo);
+
+    return commandBuffer;
+}
+
+void endSingleTimeCommands(VulkanContext* context, const vk::raii::CommandBuffer& commandBuffer) {
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo;
+    submitInfo.commandBufferCount = 1;
+    vk::CommandBuffer cmdBuf = *commandBuffer;
+    submitInfo.pCommandBuffers = &cmdBuf;
+
+    context->getGraphicsQueue().submit(1, &submitInfo, {});
+    context->getGraphicsQueue().waitIdle();
+    // RAII CommandBuffer will automatically free itself
 }
 
 }

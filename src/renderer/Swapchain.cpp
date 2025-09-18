@@ -17,34 +17,14 @@ void Swapchain::init(VulkanContext* ctx) {
 }
 
 void Swapchain::cleanup() {
-    auto device = context->getDevice();
-
-    for (auto framebuffer : framebuffers) {
-        device.destroyFramebuffer(framebuffer);
-    }
+    // RAII objects will automatically clean themselves up
+    // Reset in reverse order of creation
     framebuffers.clear();
-
-    if (depthImageView) {
-        VT_TRACE("Destroying depth image view");
-        device.destroyImageView(depthImageView);
-        depthImageView = nullptr;
-    }
-    if (depthImage) {
-        VT_TRACE("Destroying depth image");
-        device.destroyImage(depthImage);
-        depthImage = nullptr;
-    }
-    if (depthImageMemory) {
-        VT_TRACE("Freeing depth image memory");
-        device.freeMemory(depthImageMemory);
-        depthImageMemory = nullptr;
-    }
-
-    for (auto imageView : imageViews) {
-        device.destroyImageView(imageView);
-    }
-
-    device.destroySwapchainKHR(swapchain);
+    depthImageView = nullptr;
+    depthImageMemory = nullptr;
+    depthImage = nullptr;
+    imageViews.clear();
+    swapchain = nullptr;
 }
 
 void Swapchain::recreate() {
@@ -91,8 +71,8 @@ void Swapchain::create() {
         createInfo.imageSharingMode = vk::SharingMode::eExclusive;
     }
     
-    swapchain = context->getDevice().createSwapchainKHR(createInfo);
-    auto stdImages = context->getDevice().getSwapchainImagesKHR(swapchain);
+    swapchain = vk::raii::SwapchainKHR(context->getDeviceRAII(), createInfo);
+    auto stdImages = swapchain.getImages();
     images.clear();
     for (const auto& img : stdImages) {
         images.push_back(img);
@@ -101,8 +81,9 @@ void Swapchain::create() {
 }
 
 void Swapchain::createImageViews() {
-    imageViews.resize(images.size());
-    
+    imageViews.clear();
+    imageViews.reserve(images.size());
+
     for (size_t i = 0; i < images.size(); i++) {
         vk::ImageViewCreateInfo createInfo;
         createInfo.image = images[i];
@@ -117,25 +98,27 @@ void Swapchain::createImageViews() {
         createInfo.subresourceRange.levelCount = 1;
         createInfo.subresourceRange.baseArrayLayer = 0;
         createInfo.subresourceRange.layerCount = 1;
-        
-        imageViews[i] = context->getDevice().createImageView(createInfo);
+
+        imageViews.emplace_back(context->getDeviceRAII(), createInfo);
     }
 }
 
 uint32_t Swapchain::acquireNextImage(vk::Semaphore semaphore) {
     uint32_t imageIndex;
-    context->getDevice().acquireNextImageKHR(swapchain, UINT64_MAX, semaphore, {}, &imageIndex);
+    auto result = swapchain.acquireNextImage(UINT64_MAX, semaphore);
+    imageIndex = result.second;
     return imageIndex;
 }
 
 void Swapchain::present(uint32_t imageIndex, vk::Semaphore waitSemaphore) {
+    vk::SwapchainKHR swapchainHandle = *swapchain;
     vk::PresentInfoKHR presentInfo;
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = &waitSemaphore;
     presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pSwapchains = &swapchainHandle;
     presentInfo.pImageIndices = &imageIndex;
-    
+
     context->getPresentQueue().presentKHR(presentInfo);
 }
 
@@ -182,12 +165,13 @@ vk::Extent2D Swapchain::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capab
 }
 
 void Swapchain::createFramebuffers(vk::RenderPass renderPass) {
-    framebuffers.resize(imageViews.size());
+    framebuffers.clear();
+    framebuffers.reserve(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); i++) {
         eastl::array<vk::ImageView, 2> attachments = {
-            imageViews[i],
-            depthImageView
+            *imageViews[i],
+            *depthImageView
         };
 
         vk::FramebufferCreateInfo framebufferInfo;
@@ -198,7 +182,7 @@ void Swapchain::createFramebuffers(vk::RenderPass renderPass) {
         framebufferInfo.height = extent.height;
         framebufferInfo.layers = 1;
 
-        framebuffers[i] = context->getDevice().createFramebuffer(framebufferInfo);
+        framebuffers.emplace_back(context->getDeviceRAII(), framebufferInfo);
     }
 }
 
@@ -220,22 +204,22 @@ void Swapchain::createDepthResources() {
     imageInfo.samples = vk::SampleCountFlagBits::e1;
     imageInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    depthImage = context->getDevice().createImage(imageInfo);
+    depthImage = vk::raii::Image(context->getDeviceRAII(), imageInfo);
 
-    vk::MemoryRequirements memRequirements = context->getDevice().getImageMemoryRequirements(depthImage);
+    vk::MemoryRequirements memRequirements = depthImage.getMemoryRequirements();
 
     vk::MemoryAllocateInfo allocInfo;
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = findMemoryType(context, memRequirements.memoryTypeBits,
                                                vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    depthImageMemory = context->getDevice().allocateMemory(allocInfo);
+    depthImageMemory = vk::raii::DeviceMemory(context->getDeviceRAII(), allocInfo);
 
-    context->getDevice().bindImageMemory(depthImage, depthImageMemory, 0);
+    depthImage.bindMemory(*depthImageMemory, 0);
 
     // Create depth image view
     vk::ImageViewCreateInfo viewInfo;
-    viewInfo.image = depthImage;
+    viewInfo.image = *depthImage;
     viewInfo.viewType = vk::ImageViewType::e2D;
     viewInfo.format = depthFormat;
     viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
@@ -244,7 +228,7 @@ void Swapchain::createDepthResources() {
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    depthImageView = context->getDevice().createImageView(viewInfo);
+    depthImageView = vk::raii::ImageView(context->getDeviceRAII(), viewInfo);
 }
 
 }

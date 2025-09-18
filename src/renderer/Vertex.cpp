@@ -9,23 +9,31 @@ void VertexBuffer::create(VulkanContext* ctx, const eastl::vector<Vertex>& verti
 
     vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(ctx, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer
+    BufferInfo stagingInfo;
+    stagingInfo.size = bufferSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Vertex staging buffer";
 
-    void* data = ctx->getDevice().mapMemory(stagingBufferMemory, 0, bufferSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    ctx->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createBuffer(ctx, bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
-                 vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
+    // Create vertex buffer
+    BufferInfo vertexInfo;
+    vertexInfo.size = bufferSize;
+    vertexInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer;
+    vertexInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+    vertexInfo.debugName = "Vertex buffer";
 
-    copyBuffer(ctx, stagingBuffer, buffer, bufferSize);
+    bufferResource = ResourceFactory::createBuffer(ctx, vertexInfo);
+    allocation = bufferResource.allocation;
 
-    ctx->getDevice().destroyBuffer(stagingBuffer);
-    ctx->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::copyBuffer(ctx, stagingBuffer, bufferResource, bufferSize);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 }
 
 void VertexBuffer::create(VulkanContext* ctx, const eastl::vector<uint32_t>& indices) {
@@ -34,23 +42,31 @@ void VertexBuffer::create(VulkanContext* ctx, const eastl::vector<uint32_t>& ind
 
     vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(ctx, bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer
+    BufferInfo stagingInfo;
+    stagingInfo.size = bufferSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Index staging buffer";
 
-    void* data = ctx->getDevice().mapMemory(stagingBufferMemory, 0, bufferSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    ctx->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createBuffer(ctx, bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-                 vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
+    // Create index buffer
+    BufferInfo indexInfo;
+    indexInfo.size = bufferSize;
+    indexInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer;
+    indexInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+    indexInfo.debugName = "Index buffer";
 
-    copyBuffer(ctx, stagingBuffer, buffer, bufferSize);
+    bufferResource = ResourceFactory::createBuffer(ctx, indexInfo);
+    allocation = bufferResource.allocation;
 
-    ctx->getDevice().destroyBuffer(stagingBuffer);
-    ctx->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::copyBuffer(ctx, stagingBuffer, bufferResource, bufferSize);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 }
 
 void VertexBuffer::createWithDeduplication(VulkanContext* ctx, const eastl::vector<Vertex>& inputVertices) {
@@ -64,51 +80,43 @@ void VertexBuffer::createWithDeduplication(VulkanContext* ctx, const eastl::vect
     // Create vertex buffer with unique vertices
     vk::DeviceSize vertexBufferSize = sizeof(Vertex) * uniqueVertices.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(ctx, vertexBufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer for vertices
+    BufferInfo stagingInfo;
+    stagingInfo.size = vertexBufferSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Vertex dedup staging buffer";
 
-    void* data = ctx->getDevice().mapMemory(stagingBufferMemory, 0, vertexBufferSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, uniqueVertices.data(), static_cast<size_t>(vertexBufferSize));
-    ctx->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createBuffer(ctx, vertexBufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
-                 vk::MemoryPropertyFlagBits::eDeviceLocal, buffer, bufferMemory);
+    // Create vertex buffer
+    BufferInfo vertexInfo;
+    vertexInfo.size = vertexBufferSize;
+    vertexInfo.usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer;
+    vertexInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+    vertexInfo.debugName = "Deduplicated vertex buffer";
 
-    copyBuffer(ctx, stagingBuffer, buffer, vertexBufferSize);
+    bufferResource = ResourceFactory::createBuffer(ctx, vertexInfo);
+    allocation = bufferResource.allocation;
 
-    ctx->getDevice().destroyBuffer(stagingBuffer);
-    ctx->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::copyBuffer(ctx, stagingBuffer, bufferResource, vertexBufferSize);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
-    // Create index buffer
+    // Store index count for reference, but don't create index buffer here
+    // as VertexBuffer only manages vertex data
     indexCount = static_cast<uint32_t>(indices.size());
-    vk::DeviceSize indexBufferSize = sizeof(uint32_t) * indices.size();
-
-    vk::Buffer indexStagingBuffer;
-    vk::DeviceMemory indexStagingBufferMemory;
-    createBuffer(ctx, indexBufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 indexStagingBuffer, indexStagingBufferMemory);
-
-    data = ctx->getDevice().mapMemory(indexStagingBufferMemory, 0, indexBufferSize);
-    memcpy(data, indices.data(), static_cast<size_t>(indexBufferSize));
-    ctx->getDevice().unmapMemory(indexStagingBufferMemory);
-
-    // Note: We'll need a separate buffer for indices, for now we skip this
-    // as the current implementation uses a single buffer per VertexBuffer instance
-
-    ctx->getDevice().destroyBuffer(indexStagingBuffer);
-    ctx->getDevice().freeMemory(indexStagingBufferMemory);
 }
 
 void VertexBuffer::cleanup() {
-    if (context && buffer) {
-        context->getDevice().destroyBuffer(buffer);
-        context->getDevice().freeMemory(bufferMemory);
-        buffer = nullptr;
-        bufferMemory = nullptr;
+    if (context) {
+        ResourceFactory::destroyBuffer(context, bufferResource);
+        allocation = VK_NULL_HANDLE;
+        context = nullptr;
+        indexCount = 0;
     }
 }
 

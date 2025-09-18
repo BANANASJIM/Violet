@@ -5,6 +5,8 @@
 #include <EASTL/vector.h>
 #include <EASTL/array.h>
 #include <EASTL/hash_map.h>
+#include "GPUResource.hpp"
+#include "ResourceFactory.hpp"
 
 namespace violet {
 
@@ -76,31 +78,46 @@ struct Vertex {
     }
 };
 
-class VertexBuffer {
+class VertexBuffer : public GPUResource {
 public:
     VertexBuffer() = default;
-    ~VertexBuffer() { cleanup(); }
+    ~VertexBuffer() override { cleanup(); }
 
     // Delete copy operations
     VertexBuffer(const VertexBuffer&) = delete;
     VertexBuffer& operator=(const VertexBuffer&) = delete;
 
     // Enable move operations
-    VertexBuffer(VertexBuffer&&) = default;
-    VertexBuffer& operator=(VertexBuffer&&) = default;
+    VertexBuffer(VertexBuffer&& other) noexcept
+        : GPUResource(eastl::move(other))
+        , bufferResource(other.bufferResource)
+        , indexCount(other.indexCount) {
+        other.bufferResource = {};
+        other.indexCount = 0;
+    }
+
+    VertexBuffer& operator=(VertexBuffer&& other) noexcept {
+        if (this != &other) {
+            cleanup();
+            GPUResource::operator=(eastl::move(other));
+            bufferResource = other.bufferResource;
+            indexCount = other.indexCount;
+            other.bufferResource = {};
+            other.indexCount = 0;
+        }
+        return *this;
+    }
 
     void create(VulkanContext* context, const eastl::vector<Vertex>& vertices);
     void create(VulkanContext* context, const eastl::vector<uint32_t>& indices);
     void createWithDeduplication(VulkanContext* context, const eastl::vector<Vertex>& inputVertices);
-    void cleanup();
+    void cleanup() override;
 
-    vk::Buffer getBuffer() const { return buffer; }
+    vk::Buffer getBuffer() const { return bufferResource.buffer; }
     uint32_t getIndexCount() const { return indexCount; }
 
 private:
-    VulkanContext* context = nullptr;
-    vk::Buffer buffer = nullptr;
-    vk::DeviceMemory bufferMemory = nullptr;
+    BufferResource bufferResource;
     uint32_t indexCount = 0;
 };
 

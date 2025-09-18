@@ -1,6 +1,7 @@
 #include "TestTexture.hpp"
 #include "renderer/VulkanContext.hpp"
 #include "renderer/Buffer.hpp"
+#include "renderer/ResourceFactory.hpp"
 
 namespace violet {
 
@@ -27,31 +28,39 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
 
     vk::DeviceSize imageSize = pixels.size();
 
-    // Create staging buffer
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(context, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer using ResourceFactory
+    BufferInfo stagingInfo;
+    stagingInfo.size = imageSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "Checkerboard staging buffer";
 
-    void* data = context->getDevice().mapMemory(stagingBufferMemory, 0, imageSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(context, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(context, stagingBuffer);
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
-    context->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(context, stagingBuffer);
 
-    // Set context and create texture using the existing methods
+    // Set context and create image using ResourceFactory
     texture.context = context;
-    texture.createImage(context, width, height, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
-                        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    ImageInfo imageInfo;
+    imageInfo.width = width;
+    imageInfo.height = height;
+    imageInfo.format = vk::Format::eR8G8B8A8Srgb;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.debugName = "Checkerboard texture";
+
+    texture.imageResource = ResourceFactory::createImage(context, imageInfo);
+    texture.allocation = texture.imageResource.allocation;
 
     texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
                                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-    texture.copyBufferToImage(context, stagingBuffer, width, height);
+    ResourceFactory::copyBufferToImage(context, stagingBuffer, texture.imageResource, width, height);
     texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
                                   vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    context->getDevice().destroyBuffer(stagingBuffer);
-    context->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::destroyBuffer(context, stagingBuffer);
 
     texture.createImageView(context, vk::Format::eR8G8B8A8Srgb);
     texture.createSampler(context);
@@ -64,29 +73,39 @@ void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
 
     vk::DeviceSize imageSize = pixels.size();
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(context, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 stagingBuffer, stagingBufferMemory);
+    // Create staging buffer using ResourceFactory
+    BufferInfo stagingInfo;
+    stagingInfo.size = imageSize;
+    stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingInfo.debugName = "White texture staging buffer";
 
-    void* data = context->getDevice().mapMemory(stagingBufferMemory, 0, imageSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(context, stagingInfo);
+
+    void* data = ResourceFactory::mapBuffer(context, stagingBuffer);
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
-    context->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(context, stagingBuffer);
 
+    // Set context and create image using ResourceFactory
     texture.context = context;
-    texture.createImage(context, width, height, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
-                        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    ImageInfo imageInfo;
+    imageInfo.width = width;
+    imageInfo.height = height;
+    imageInfo.format = vk::Format::eR8G8B8A8Srgb;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.debugName = "White texture";
+
+    texture.imageResource = ResourceFactory::createImage(context, imageInfo);
+    texture.allocation = texture.imageResource.allocation;
 
     texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
                                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-    texture.copyBufferToImage(context, stagingBuffer, width, height);
+    ResourceFactory::copyBufferToImage(context, stagingBuffer, texture.imageResource, width, height);
     texture.transitionImageLayout(context, vk::Format::eR8G8B8A8Srgb,
                                   vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    context->getDevice().destroyBuffer(stagingBuffer);
-    context->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::destroyBuffer(context, stagingBuffer);
 
     texture.createImageView(context, vk::Format::eR8G8B8A8Srgb);
     texture.createSampler(context);

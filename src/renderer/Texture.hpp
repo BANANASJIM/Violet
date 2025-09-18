@@ -1,7 +1,8 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
-
+#include "GPUResource.hpp"
+#include "ResourceFactory.hpp"
 #include <EASTL/string.h>
 
 namespace violet {
@@ -9,44 +10,56 @@ namespace violet {
 class VulkanContext;
 class TestTexture;
 
-class Texture {
+class Texture : public GPUResource {
     friend class TestTexture;
 
 public:
     Texture() = default;
-    ~Texture() { cleanup(); }
+    ~Texture() override { cleanup(); }
 
     // Delete copy operations
     Texture(const Texture&) = delete;
     Texture& operator=(const Texture&) = delete;
 
     // Enable move operations
-    Texture(Texture&&) = default;
-    Texture& operator=(Texture&&) = default;
+    Texture(Texture&& other) noexcept
+        : GPUResource(eastl::move(other))
+        , imageResource(other.imageResource)
+        , imageView(eastl::move(other.imageView))
+        , sampler(eastl::move(other.sampler)) {
+        other.imageResource = {};
+    }
+
+    Texture& operator=(Texture&& other) noexcept {
+        if (this != &other) {
+            cleanup();
+            GPUResource::operator=(eastl::move(other));
+            imageResource = other.imageResource;
+            imageView = eastl::move(other.imageView);
+            sampler = eastl::move(other.sampler);
+            other.imageResource = {};
+        }
+        return *this;
+    }
 
     void loadFromFile(VulkanContext* context, const eastl::string& filePath);
     void loadFromKTX2(VulkanContext* context, const eastl::string& filePath);
-    void cleanup();
+    void cleanup() override;
 
-    [[nodiscard]] vk::Image getImage() const { return image; }
-    [[nodiscard]] vk::ImageView getImageView() const { return imageView; }
-    [[nodiscard]] vk::Sampler getSampler() const { return sampler; }
+    [[nodiscard]] vk::Image getImage() const { return imageResource.image; }
+    [[nodiscard]] vk::ImageView getImageView() const { return *imageView; }
+    [[nodiscard]] vk::Sampler getSampler() const { return *sampler; }
 
 private:
-    void createImage(VulkanContext* context, uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
-                     vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties);
     void createImageView(VulkanContext* context, vk::Format format);
     void createSampler(VulkanContext* context);
     void transitionImageLayout(VulkanContext* context, vk::Format format, vk::ImageLayout oldLayout,
                                vk::ImageLayout newLayout);
-    void copyBufferToImage(VulkanContext* context, vk::Buffer buffer, uint32_t width, uint32_t height);
 
 private:
-    VulkanContext* context = nullptr;
-    vk::Image image = nullptr;
-    vk::DeviceMemory imageMemory = nullptr;
-    vk::ImageView imageView = nullptr;
-    vk::Sampler sampler = nullptr;
+    ImageResource imageResource;
+    vk::raii::ImageView imageView{nullptr};
+    vk::raii::Sampler sampler{nullptr};
 };
 
 } // namespace violet

@@ -23,30 +23,40 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
         throw std::runtime_error("Failed to load texture image!");
     }
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(ctx, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer,
-                 stagingBufferMemory);
+    // Create staging buffer using ResourceFactory
+    BufferInfo stagingBufferInfo;
+    stagingBufferInfo.size = imageSize;
+    stagingBufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingBufferInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingBufferInfo.debugName = "Texture staging buffer";
 
-    void* data = ctx->getDevice().mapMemory(stagingBufferMemory, 0, imageSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingBufferInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
-    ctx->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     stbi_image_free(pixels);
 
-    createImage(ctx, texWidth, texHeight, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+    // Create image using ResourceFactory
+    ImageInfo imageInfo;
+    imageInfo.width = static_cast<uint32_t>(texWidth);
+    imageInfo.height = static_cast<uint32_t>(texHeight);
+    imageInfo.format = vk::Format::eR8G8B8A8Srgb;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.debugName = filePath;
+
+    imageResource = ResourceFactory::createImage(ctx, imageInfo);
+    allocation = imageResource.allocation;
 
     transitionImageLayout(ctx, vk::Format::eR8G8B8A8Srgb, vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eTransferDstOptimal);
-    copyBufferToImage(ctx, stagingBuffer, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource,
+                                       static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
     transitionImageLayout(ctx, vk::Format::eR8G8B8A8Srgb, vk::ImageLayout::eTransferDstOptimal,
                           vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    ctx->getDevice().destroyBuffer(stagingBuffer);
-    ctx->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, vk::Format::eR8G8B8A8Srgb);
     createSampler(ctx);
@@ -67,26 +77,35 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     vk::DeviceSize imageSize = kTexture->dataSize;
     vk::Format format = static_cast<vk::Format>(kTexture->vkFormat);
 
-    vk::Buffer stagingBuffer;
-    vk::DeviceMemory stagingBufferMemory;
-    createBuffer(ctx, imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer,
-                 stagingBufferMemory);
+    // Create staging buffer using ResourceFactory
+    BufferInfo stagingBufferInfo;
+    stagingBufferInfo.size = imageSize;
+    stagingBufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingBufferInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingBufferInfo.debugName = "KTX2 staging buffer";
 
-    void* data = ctx->getDevice().mapMemory(stagingBufferMemory, 0, imageSize);
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingBufferInfo);
+
+    void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, kTexture->pData, static_cast<size_t>(imageSize));
-    ctx->getDevice().unmapMemory(stagingBufferMemory);
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
-    createImage(ctx, kTexture->baseWidth, kTexture->baseHeight, format, vk::ImageTiling::eOptimal,
-                vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+    // Create image using ResourceFactory
+    ImageInfo imageInfo;
+    imageInfo.width = kTexture->baseWidth;
+    imageInfo.height = kTexture->baseHeight;
+    imageInfo.format = format;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.debugName = filePath;
+
+    imageResource = ResourceFactory::createImage(ctx, imageInfo);
+    allocation = imageResource.allocation;
 
     transitionImageLayout(ctx, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-    copyBufferToImage(ctx, stagingBuffer, kTexture->baseWidth, kTexture->baseHeight);
+    ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource, kTexture->baseWidth, kTexture->baseHeight);
     transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    ctx->getDevice().destroyBuffer(stagingBuffer);
-    ctx->getDevice().freeMemory(stagingBufferMemory);
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, format);
     createSampler(ctx);
@@ -96,61 +115,21 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
 
 void Texture::cleanup() {
     if (context) {
-        auto device = context->getDevice();
-        if (sampler) {
-            VT_TRACE("Destroying texture sampler");
-            device.destroySampler(sampler);
-            sampler = nullptr;
-        }
-        if (imageView) {
-            VT_TRACE("Destroying texture image view");
-            device.destroyImageView(imageView);
-            imageView = nullptr;
-        }
-        if (image) {
-            VT_TRACE("Destroying texture image");
-            device.destroyImage(image);
-            image = nullptr;
-        }
-        if (imageMemory) {
-            VT_TRACE("Freeing texture image memory");
-            device.freeMemory(imageMemory);
-            imageMemory = nullptr;
-        }
+        // Clean up RAII objects
+        sampler = nullptr;
+        imageView = nullptr;
+
+        // Clean up VMA resources
+        ResourceFactory::destroyImage(context, imageResource);
+        allocation = VK_NULL_HANDLE;
+        context = nullptr;
     }
 }
 
-void Texture::createImage(VulkanContext* ctx, uint32_t width, uint32_t height, vk::Format format,
-                          vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) {
-    vk::ImageCreateInfo imageInfo;
-    imageInfo.imageType = vk::ImageType::e2D;
-    imageInfo.extent.width = width;
-    imageInfo.extent.height = height;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.format = format;
-    imageInfo.tiling = tiling;
-    imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-    imageInfo.usage = usage;
-    imageInfo.samples = vk::SampleCountFlagBits::e1;
-    imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-    image = ctx->getDevice().createImage(imageInfo);
-
-    vk::MemoryRequirements memRequirements = ctx->getDevice().getImageMemoryRequirements(image);
-    vk::MemoryAllocateInfo allocInfo;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(ctx, memRequirements.memoryTypeBits, properties);
-
-    // TODO later use VMA
-    imageMemory = ctx->getDevice().allocateMemory(allocInfo);
-    ctx->getDevice().bindImageMemory(image, imageMemory, 0);
-}
 
 void Texture::createImageView(VulkanContext* ctx, vk::Format format) {
     vk::ImageViewCreateInfo viewInfo;
-    viewInfo.image = image;
+    viewInfo.image = imageResource.image;
     viewInfo.viewType = vk::ImageViewType::e2D;
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
@@ -159,7 +138,7 @@ void Texture::createImageView(VulkanContext* ctx, vk::Format format) {
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
-    imageView = ctx->getDevice().createImageView(viewInfo);
+    imageView = vk::raii::ImageView(ctx->getDeviceRAII(), viewInfo);
 }
 
 void Texture::createSampler(VulkanContext* ctx) {
@@ -179,7 +158,7 @@ void Texture::createSampler(VulkanContext* ctx) {
     samplerInfo.compareOp = vk::CompareOp::eAlways;
     samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
 
-    sampler = ctx->getDevice().createSampler(samplerInfo);
+    sampler = vk::raii::Sampler(ctx->getDeviceRAII(), samplerInfo);
 }
 
 void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::ImageLayout oldLayout,
@@ -191,7 +170,7 @@ void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::I
     barrier.newLayout = newLayout;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image;
+    barrier.image = imageResource.image;
     barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
@@ -221,23 +200,5 @@ void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::I
     endSingleTimeCommands(ctx, commandBuffer);
 }
 
-void Texture::copyBufferToImage(VulkanContext* ctx, vk::Buffer buffer, uint32_t width, uint32_t height) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(ctx);
-
-    vk::BufferImageCopy region;
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = vk::Offset3D{0, 0, 0};
-    region.imageExtent = vk::Extent3D{width, height, 1};
-
-    commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
-
-    endSingleTimeCommands(ctx, commandBuffer);
-}
 
 } // namespace violet

@@ -13,16 +13,16 @@ public:
     void cleanup();
     void recreate();
     
-    vk::SwapchainKHR getSwapchain() const { return swapchain; }
+    vk::SwapchainKHR getSwapchain() const { return *swapchain; }
     vk::Format getImageFormat() const { return imageFormat; }
     vk::Extent2D getExtent() const { return extent; }
-    const eastl::vector<vk::ImageView>& getImageViews() const { return imageViews; }
     
     uint32_t acquireNextImage(vk::Semaphore semaphore);
     void present(uint32_t imageIndex, vk::Semaphore waitSemaphore);
 
     void createFramebuffers(vk::RenderPass renderPass);
-    const eastl::vector<vk::Framebuffer>& getFramebuffers() const { return framebuffers; }
+    vk::Framebuffer getFramebuffer(size_t index) const { return *framebuffers[index]; }
+    size_t getFramebufferCount() const { return framebuffers.size(); }
 
     void createDepthResources();
 
@@ -37,14 +37,14 @@ private:
 private:
     VulkanContext* context;
     
-    vk::SwapchainKHR swapchain = nullptr;
+    vk::raii::SwapchainKHR swapchain{nullptr};
     eastl::vector<vk::Image> images;
-    eastl::vector<vk::ImageView> imageViews;
-    eastl::vector<vk::Framebuffer> framebuffers;
+    eastl::vector<vk::raii::ImageView> imageViews;
+    eastl::vector<vk::raii::Framebuffer> framebuffers;
 
-    vk::Image depthImage = nullptr;
-    vk::DeviceMemory depthImageMemory = nullptr;
-    vk::ImageView depthImageView = nullptr;
+    vk::raii::Image depthImage{nullptr};
+    vk::raii::DeviceMemory depthImageMemory{nullptr};
+    vk::raii::ImageView depthImageView{nullptr};
 
     vk::Format imageFormat;
     vk::Extent2D extent;
