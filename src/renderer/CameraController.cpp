@@ -4,10 +4,10 @@
 
 #include <glm/common.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <spdlog/spdlog.h>
 
 #include <imgui.h>
 
+#include "core/Log.hpp"
 #include "input/Input.hpp"
 
 using MouseButton = violet::MouseButton;
@@ -25,6 +25,7 @@ void CameraController::update(float deltaTime) {
     if (!camera)
         return;
 
+    processScroll();
     processMouse();
     processKeyboard(deltaTime);
 }
@@ -36,12 +37,12 @@ void CameraController::setPosition(const glm::vec3& pos) {
 
 void CameraController::processKeyboard(float deltaTime) {
     float velocity = movementSpeed * deltaTime;
-    bool moved = false;
+    bool  moved    = false;
 
     if (Input::isKeyHeld(GLFW_KEY_W)) {
         position += front * velocity;
         moved = true;
-        spdlog::info("Camera moved forward");
+        VT_INFO("Camera moved forward");
     }
     if (Input::isKeyHeld(GLFW_KEY_S)) {
         position -= front * velocity;
@@ -93,17 +94,33 @@ void CameraController::processMouse() {
         return;
     }
 
-    float yawDelta = mouseDelta.x * sensitivity;
+    float yawDelta   = mouseDelta.x * sensitivity;
     float pitchDelta = mouseDelta.y * sensitivity;
 
     yaw += yawDelta;
     pitch -= pitchDelta;
-
     pitch = glm::clamp(pitch, -maxPitch, maxPitch);
-
-    spdlog::debug("Camera: yaw:{:.1f}° pitch:{:.1f}°", glm::degrees(yaw), glm::degrees(pitch));
-
     updateCameraVectors();
+}
+
+void CameraController::processScroll() {
+    // Don't process scroll input if ImGui wants it
+    if (ImGui::GetIO().WantCaptureMouse) {
+        return;
+    }
+
+    glm::vec2 scrollDelta = Input::consumeScrollDelta();
+
+    if (scrollDelta.y != 0.0f) {
+        // Scroll up increases speed, scroll down decreases speed
+        float speedMultiplier = 1.0f + (scrollDelta.y * 0.2f); // 20% change per scroll step
+        movementSpeed *= speedMultiplier;
+
+        // Clamp movement speed to reasonable range
+        movementSpeed = glm::clamp(movementSpeed, 1.0f, 1000.0f);
+
+        VT_INFO("Movement speed adjusted to {:.1f}", movementSpeed);
+    }
 }
 
 void CameraController::updateCameraVectors() {
@@ -112,10 +129,10 @@ void CameraController::updateCameraVectors() {
     newFront.x = cos(yaw) * cos(pitch);
     newFront.y = sin(pitch);            // Y component for pitch (up/down)
     newFront.z = sin(yaw) * cos(pitch); // Z component for yaw (left/right)
-    front = glm::normalize(newFront);
+    front      = glm::normalize(newFront);
 
     right = glm::normalize(glm::cross(front, worldUp));
-    up = glm::normalize(glm::cross(right, front));
+    up    = glm::normalize(glm::cross(right, front));
 
     if (camera) {
         camera->setPosition(position);

@@ -1,7 +1,7 @@
 #include "FileSystem.hpp"
+#include "Log.hpp"
 #include <filesystem>
 #include <fstream>
-#include <spdlog/spdlog.h>
 
 namespace violet {
 
@@ -23,7 +23,7 @@ eastl::vector<uint8_t> FileSystem::readBinary(const eastl::string& path) {
     std::ifstream file(path.c_str(), std::ios::binary | std::ios::ate);
     
     if (!file.is_open()) {
-        spdlog::error("Failed to open file: {}", path.c_str());
+        VT_ERROR("Failed to open file: {}", path.c_str());
         return {};
     }
     
@@ -41,7 +41,7 @@ eastl::string FileSystem::readText(const eastl::string& path) {
     std::ifstream file(path.c_str());
     
     if (!file.is_open()) {
-        spdlog::error("Failed to open file: {}", path.c_str());
+        VT_ERROR("Failed to open file: {}", path.c_str());
         return "";
     }
     

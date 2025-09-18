@@ -24,8 +24,8 @@ public:
 
 protected:
     virtual void createResources() = 0;
-    virtual void updateUniforms(uint32_t frameIndex) = 0;
-    virtual void recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageIndex) = 0;
+    virtual void updateUniforms(uint32_t frameIndex) {}
+    virtual void recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageIndex) {}
     virtual void update(float deltaTime) {}
     virtual void onWindowResize(int width, int height) {}
     virtual void cleanup() {}

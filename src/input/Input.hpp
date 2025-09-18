@@ -38,10 +38,14 @@ public:
     static void setMouseCursor(bool enabled);
     static bool isMouseCursorEnabled();
 
+    static glm::vec2 getScrollDelta();
+    static glm::vec2 consumeScrollDelta();
+
 private:
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
     static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos);
+    static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
 
 private:
     static GLFWwindow* s_window;
@@ -53,6 +57,8 @@ private:
     static glm::vec2 s_mouseDelta;
     static bool s_firstMouse;
     static bool s_cursorEnabled;
+
+    static glm::vec2 s_scrollDelta;
 };
 
 }

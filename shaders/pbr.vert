@@ -1,10 +1,10 @@
 #version 450
 
-layout(binding = 0) uniform UniformBufferObject {
+layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 model;
     mat4 view;
     mat4 proj;
-} ubo;
+} global;
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -19,15 +19,15 @@ layout(location = 3) out vec3 fragTangent;
 layout(location = 4) out vec3 fragBitangent;
 
 void main() {
-    vec4 worldPos = ubo.model * vec4(inPosition, 1.0);
+    vec4 worldPos = global.model * vec4(inPosition, 1.0);
     fragPos = worldPos.xyz;
-    
-    mat3 normalMatrix = transpose(inverse(mat3(ubo.model)));
+
+    mat3 normalMatrix = transpose(inverse(mat3(global.model)));
     fragNormal = normalize(normalMatrix * inNormal);
     fragTangent = normalize(normalMatrix * inTangent.xyz);
     fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
-    
+
     fragTexCoord = inTexCoord;
-    
-    gl_Position = ubo.proj * ubo.view * worldPos;
+
+    gl_Position = global.proj * global.view * worldPos;
 }

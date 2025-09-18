@@ -2,14 +2,15 @@
 #include "VulkanContext.hpp"
 #include "RenderPass.hpp"
 #include "DescriptorSet.hpp"
+#include "Material.hpp"
 #include "Vertex.hpp"
 #include "UniformBuffer.hpp"
 #include "core/FileSystem.hpp"
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 
 namespace violet {
 
-void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* descriptorSet, const eastl::string& vertPath, const eastl::string& fragPath) {
+void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDescriptorSet, Material* material, const eastl::string& vertPath, const eastl::string& fragPath) {
     context = ctx;
 
     auto vertShaderCode = readFile(vertPath);
@@ -85,18 +86,17 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* descripto
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    vk::PushConstantRange pushConstantRange;
-    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eFragment;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(PushConstants);
-
-    vk::DescriptorSetLayout setLayout = descriptorSet->getLayout();
+    // 使用统一约定：global set (0) 和 material set (1)
+    vk::DescriptorSetLayout setLayouts[] = {
+        globalDescriptorSet->getLayout(),        // set = 0 (GLOBAL_SET)
+        material->getDescriptorSetLayout()       // set = 1 (MATERIAL_SET)
+    };
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &setLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+    pipelineLayoutInfo.setLayoutCount = 2;
+    pipelineLayoutInfo.pSetLayouts = setLayouts;
+    pipelineLayoutInfo.pushConstantRangeCount = 0;  // 移除push constants
+    pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
     pipelineLayout = context->getDevice().createPipelineLayout(pipelineLayoutInfo);
 
@@ -141,7 +141,7 @@ void Pipeline::cleanup() {
 eastl::vector<char> Pipeline::readFile(const eastl::string& filename) {
     auto data = FileSystem::readBinary(filename);
     if (data.empty()) {
-        spdlog::error("Failed to open file: {}", filename.c_str());
+        VT_ERROR("Failed to open file: {}", filename.c_str());
         throw std::runtime_error("Failed to open shader file");
     }
 
@@ -158,6 +158,10 @@ vk::ShaderModule Pipeline::createShaderModule(const eastl::vector<char>& code) {
     createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
     return context->getDevice().createShaderModule(createInfo);
+}
+
+void Pipeline::bind(vk::CommandBuffer commandBuffer) {
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
 }
 
 }

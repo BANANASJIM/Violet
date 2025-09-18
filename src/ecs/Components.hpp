@@ -3,17 +3,17 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+
 #include <EASTL/unique_ptr.h>
+
 #include "renderer/Camera.hpp"
 #include "renderer/CameraController.hpp"
+#include "renderer/Renderable.hpp"
+#include "renderer/Mesh.hpp"
 
 namespace violet {
 
-class VertexBuffer;
-class Pipeline;
-class DescriptorSet;
-class Mesh;
-class Material;
+class MaterialInstance;
 
 struct Transform {
     glm::vec3 position{0.0f, 0.0f, 0.0f};
@@ -36,38 +36,50 @@ struct Transform {
     void setScale(float uniformScale) { scale = glm::vec3(uniformScale); }
 };
 
-struct Renderable {
-    Mesh* mesh = nullptr;
-    Material* material = nullptr;
+struct TransformComponent {
+    Transform local;        // Local transform relative to parent
+    Transform world;        // World transform (computed from hierarchy)
+    bool      dirty = true; // Whether world transform needs recomputation
 
-    // Legacy support - will be removed later
-    VertexBuffer* vertexBuffer = nullptr;
-    VertexBuffer* indexBuffer = nullptr;
-    Pipeline* pipeline = nullptr;
-    DescriptorSet* descriptorSet = nullptr;
-
-    bool visible = true;
+    TransformComponent() = default;
+    TransformComponent(const Transform& localTransform) : local(localTransform) {}
 };
+
+struct MeshComponent {
+    eastl::unique_ptr<Mesh> mesh;
+    bool dirty = true;
+
+    MeshComponent() = default;
+    MeshComponent(eastl::unique_ptr<Mesh> meshPtr) : mesh(eastl::move(meshPtr)) {}
+};
+
+struct MaterialComponent {
+    MaterialInstance* material = nullptr;
+
+    MaterialComponent() = default;
+    MaterialComponent(MaterialInstance* materialPtr) : material(materialPtr) {}
+};
+
+// Renderable has been moved to renderer/Renderable.hpp
 
 struct CameraComponent {
     eastl::unique_ptr<Camera> camera;
-    bool isActive = false;
+    bool                      isActive = false;
 
     CameraComponent() = default;
     CameraComponent(eastl::unique_ptr<Camera> cam) : camera(eastl::move(cam)) {}
 
-    CameraComponent(CameraComponent&& other) noexcept
-        : camera(eastl::move(other.camera)), isActive(other.isActive) {}
+    CameraComponent(CameraComponent&& other) noexcept : camera(eastl::move(other.camera)), isActive(other.isActive) {}
 
     CameraComponent& operator=(CameraComponent&& other) noexcept {
         if (this != &other) {
-            camera = eastl::move(other.camera);
+            camera   = eastl::move(other.camera);
             isActive = other.isActive;
         }
         return *this;
     }
 
-    CameraComponent(const CameraComponent&) = delete;
+    CameraComponent(const CameraComponent&)            = delete;
     CameraComponent& operator=(const CameraComponent&) = delete;
 };
 
@@ -75,11 +87,9 @@ struct CameraControllerComponent {
     eastl::unique_ptr<CameraController> controller;
 
     CameraControllerComponent() = default;
-    CameraControllerComponent(eastl::unique_ptr<CameraController> ctrl)
-        : controller(eastl::move(ctrl)) {}
+    CameraControllerComponent(eastl::unique_ptr<CameraController> ctrl) : controller(eastl::move(ctrl)) {}
 
-    CameraControllerComponent(CameraControllerComponent&& other) noexcept
-        : controller(eastl::move(other.controller)) {}
+    CameraControllerComponent(CameraControllerComponent&& other) noexcept : controller(eastl::move(other.controller)) {}
 
     CameraControllerComponent& operator=(CameraControllerComponent&& other) noexcept {
         if (this != &other) {
@@ -88,8 +98,8 @@ struct CameraControllerComponent {
         return *this;
     }
 
-    CameraControllerComponent(const CameraControllerComponent&) = delete;
+    CameraControllerComponent(const CameraControllerComponent&)            = delete;
     CameraControllerComponent& operator=(const CameraControllerComponent&) = delete;
 };
 
-}
+} // namespace violet

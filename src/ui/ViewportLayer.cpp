@@ -1,6 +1,6 @@
 #include "ViewportLayer.hpp"
 #include <imgui.h>
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 
 namespace violet {
 
@@ -24,7 +24,7 @@ void ViewportLayer::onImGuiRender() {
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
             const char* path = (const char*)payload->Data;
-            spdlog::info("Asset dropped in viewport: {}", path);
+            VT_INFO("Asset dropped in viewport: {}", path);
 
             if (onAssetDropped) {
                 onAssetDropped(path);

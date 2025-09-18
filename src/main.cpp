@@ -1,5 +1,5 @@
-#include "examples/ECSTestApp.hpp"
-#include <spdlog/spdlog.h>
+#include "examples/VioletApp.hpp"
+#include "core/Log.hpp"
 #include <cstdlib>
 
 void* operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line) {
@@ -11,13 +11,13 @@ void* operator new[](size_t size, size_t alignment, size_t alignmentOffset, cons
 }
 
 int main() {
-    spdlog::set_level(spdlog::level::debug);
+    violet::Log::init();
 
-    violet::ECSTestApp app;
+    violet::VioletApp app;
     try {
         app.run();
     } catch (const std::exception& e) {
-        spdlog::critical("Exception: {}", e.what());
+        VT_CRITICAL("Exception: {}", e.what());
         return EXIT_FAILURE;
     }
 

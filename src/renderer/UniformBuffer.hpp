@@ -23,13 +23,24 @@ struct PushConstants {
 
 class UniformBuffer {
 public:
+    UniformBuffer() = default;
+    ~UniformBuffer() { cleanup(); }
+
+    // Delete copy operations
+    UniformBuffer(const UniformBuffer&) = delete;
+    UniformBuffer& operator=(const UniformBuffer&) = delete;
+
+    // Enable move operations
+    UniformBuffer(UniformBuffer&&) = default;
+    UniformBuffer& operator=(UniformBuffer&&) = default;
+
     void create(VulkanContext* context, size_t bufferSize);
     void cleanup();
     void update(const void* data, size_t size);
 
     vk::Buffer getBuffer() const { return buffer; }
     vk::DescriptorBufferInfo getDescriptorInfo() const {
-        return vk::DescriptorBufferInfo{buffer, 0, sizeof(UniformBufferObject)};
+        return vk::DescriptorBufferInfo{buffer, 0, bufferSize};
     }
 
 private:

@@ -78,6 +78,17 @@ struct Vertex {
 
 class VertexBuffer {
 public:
+    VertexBuffer() = default;
+    ~VertexBuffer() { cleanup(); }
+
+    // Delete copy operations
+    VertexBuffer(const VertexBuffer&) = delete;
+    VertexBuffer& operator=(const VertexBuffer&) = delete;
+
+    // Enable move operations
+    VertexBuffer(VertexBuffer&&) = default;
+    VertexBuffer& operator=(VertexBuffer&&) = default;
+
     void create(VulkanContext* context, const eastl::vector<Vertex>& vertices);
     void create(VulkanContext* context, const eastl::vector<uint32_t>& indices);
     void createWithDeduplication(VulkanContext* context, const eastl::vector<Vertex>& inputVertices);

@@ -1,7 +1,7 @@
 #include "AssetBrowserLayer.hpp"
 #include "core/FileSystem.hpp"
 #include <imgui.h>
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 
 namespace violet {
 
@@ -18,7 +18,7 @@ void AssetBrowserLayer::onDetach() {
 
 void AssetBrowserLayer::scanAssetDirectory() {
     if (!FileSystem::exists(assetDirectory)) {
-        spdlog::warn("Asset directory not found: {}", assetDirectory.c_str());
+        VT_WARN("Asset directory not found: {}", assetDirectory.c_str());
         statusMessage = "Asset directory not found";
         return;
     }
@@ -42,7 +42,7 @@ void AssetBrowserLayer::scanAssetDirectory() {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "Found %d assets", totalAssets);
     statusMessage = buffer;
-    spdlog::info("Found {} assets in {}", totalAssets, assetDirectory.c_str());
+    VT_INFO("Found {} assets in {}", totalAssets, assetDirectory.c_str());
 }
 
 void AssetBrowserLayer::onImGuiRender() {
@@ -109,7 +109,7 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
 
         // Selectable item that can be dragged
         if (ImGui::Selectable(node.name.c_str())) {
-            spdlog::info("File selected: {}", node.fullPath.c_str());
+            VT_INFO("File selected: {}", node.fullPath.c_str());
         }
 
         // Drag source

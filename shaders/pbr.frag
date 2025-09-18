@@ -1,14 +1,6 @@
 #version 450
 
-layout(binding = 1) uniform sampler2D texSampler;
-
-layout(push_constant) uniform PushConstants {
-    vec4 baseColor;
-    float metallic;
-    float roughness;
-    float normalScale;
-    float occlusionStrength;
-} pushConstants;
+layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 
 layout(location = 0) in vec3 fragPos;
 layout(location = 1) in vec3 fragNormal;
@@ -22,7 +14,7 @@ const vec3 lightPos = vec3(5.0, 5.0, 5.0);
 const vec3 lightColor = vec3(1.0);
 
 vec3 getNormalFromMap() {
-    vec3 tangentNormal = texture(texSampler, fragTexCoord).xyz * 2.0 - 1.0;
+    vec3 tangentNormal = texture(baseColorTexture, fragTexCoord).xyz * 2.0 - 1.0;
     
     vec3 N = normalize(fragNormal);
     vec3 T = normalize(fragTangent);
@@ -69,45 +61,22 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 }
 
 void main() {
-    vec3 albedo = pushConstants.baseColor.rgb * texture(texSampler, fragTexCoord).rgb;
-    float metallic = pushConstants.metallic;
-    float roughness = pushConstants.roughness;
-    float ao = 1.0;
+    vec3 albedo = texture(baseColorTexture, fragTexCoord).rgb;
 
     vec3 N = normalize(fragNormal);
-    vec3 V = normalize(-fragPos);
-
-    vec3 F0 = vec3(0.04);
-    F0 = mix(F0, albedo, metallic);
-
-    vec3 Lo = vec3(0.0);
-    
     vec3 L = normalize(lightPos - fragPos);
-    vec3 H = normalize(V + L);
-    float distance = length(lightPos - fragPos);
-    float attenuation = 1.0 / (distance * distance);
-    vec3 radiance = lightColor * attenuation;
+    vec3 V = normalize(-fragPos);
+    vec3 H = normalize(L + V);
 
-    float NDF = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-    vec3 kS = F;
-    vec3 kD = vec3(1.0) - kS;
-    kD *= 1.0 - metallic;
-
-    vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-    vec3 specular = numerator / denominator;
-
+    // Simple Blinn-Phong lighting
     float NdotL = max(dot(N, L), 0.0);
-    Lo += (kD * albedo / 3.14159265359 + specular) * radiance * NdotL;
+    float NdotH = max(dot(N, H), 0.0);
 
-    vec3 ambient = vec3(0.03) * albedo * ao;
-    vec3 color = ambient + Lo;
+    vec3 ambient = 0.1 * albedo;
+    vec3 diffuse = albedo * lightColor * NdotL;
+    vec3 specular = lightColor * pow(NdotH, 32.0) * 0.5;
 
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec2(1.0/2.2, 1.0).xxx);
+    vec3 color = ambient + diffuse + specular;
 
-    outColor = vec4(color, pushConstants.baseColor.a);
+    outColor = vec4(color, 1.0);
 }

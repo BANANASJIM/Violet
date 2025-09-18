@@ -2,28 +2,51 @@
 #include "VulkanContext.hpp"
 #include "UniformBuffer.hpp"
 #include "Texture.hpp"
+#include "core/Log.hpp"
 
 namespace violet {
 
+DescriptorSet::~DescriptorSet() {
+    VT_TRACE("DescriptorSet destructor");
+    cleanup();
+}
+
 void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight) {
+    // 默认创建材质纹理类型的descriptor set
+    create(ctx, maxFramesInFlight, DescriptorSetType::MaterialTextures);
+}
+
+void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, DescriptorSetType type) {
     context = ctx;
 
-    // Create descriptor set layout
-    eastl::vector<vk::DescriptorSetLayoutBinding> bindings(2);
+    eastl::vector<vk::DescriptorSetLayoutBinding> bindings;
+    eastl::vector<vk::DescriptorPoolSize> poolSizes;
 
-    // UBO binding
-    bindings[0].binding = 0;
-    bindings[0].descriptorCount = 1;
-    bindings[0].descriptorType = vk::DescriptorType::eUniformBuffer;
-    bindings[0].pImmutableSamplers = nullptr;
-    bindings[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
+    if (type == DescriptorSetType::GlobalUniforms) {
+        // Global uniform buffer layout
+        bindings.resize(1);
+        bindings[0].binding = 0;  // CAMERA_UBO_BINDING
+        bindings[0].descriptorCount = 1;
+        bindings[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+        bindings[0].pImmutableSamplers = nullptr;
+        bindings[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
 
-    // Combined image sampler binding
-    bindings[1].binding = 1;
-    bindings[1].descriptorCount = 1;
-    bindings[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    bindings[1].pImmutableSamplers = nullptr;
-    bindings[1].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        poolSizes.resize(1);
+        poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
+        poolSizes[0].descriptorCount = maxFramesInFlight;
+    } else if (type == DescriptorSetType::MaterialTextures) {
+        // Material texture sampler layout
+        bindings.resize(1);
+        bindings[0].binding = 0;  // BASE_COLOR_TEXTURE_BINDING
+        bindings[0].descriptorCount = 1;
+        bindings[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        bindings[0].pImmutableSamplers = nullptr;
+        bindings[0].stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+        poolSizes.resize(1);
+        poolSizes[0].type = vk::DescriptorType::eCombinedImageSampler;
+        poolSizes[0].descriptorCount = maxFramesInFlight;
+    }
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -32,12 +55,6 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight) {
     descriptorSetLayout = ctx->getDevice().createDescriptorSetLayout(layoutInfo);
 
     // Create descriptor pool
-    eastl::vector<vk::DescriptorPoolSize> poolSizes(2);
-    poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
-    poolSizes[0].descriptorCount = maxFramesInFlight;
-    poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
-    poolSizes[1].descriptorCount = maxFramesInFlight;
-
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
@@ -62,8 +79,16 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight) {
 void DescriptorSet::cleanup() {
     if (context) {
         auto device = context->getDevice();
-        if (descriptorPool) device.destroyDescriptorPool(descriptorPool);
-        if (descriptorSetLayout) device.destroyDescriptorSetLayout(descriptorSetLayout);
+        if (descriptorPool) {
+            VT_TRACE("Destroying DescriptorPool: {}", (void*)descriptorPool);
+            device.destroyDescriptorPool(descriptorPool);
+            descriptorPool = nullptr;
+        }
+        if (descriptorSetLayout) {
+            VT_TRACE("Destroying DescriptorSetLayout: {}", (void*)descriptorSetLayout);
+            device.destroyDescriptorSetLayout(descriptorSetLayout);
+            descriptorSetLayout = nullptr;
+        }
     }
 }
 
@@ -93,7 +118,7 @@ void DescriptorSet::updateTexture(uint32_t frameIndex, Texture* texture) {
 
     vk::WriteDescriptorSet descriptorWrite;
     descriptorWrite.dstSet = descriptorSets[frameIndex];
-    descriptorWrite.dstBinding = 1;
+    descriptorWrite.dstBinding = 0;  // BASE_COLOR_TEXTURE_BINDING = 0
     descriptorWrite.dstArrayElement = 0;
     descriptorWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
     descriptorWrite.descriptorCount = 1;

@@ -34,6 +34,7 @@ public:
 private:
     void processKeyboard(float deltaTime);
     void processMouse();
+    void processScroll();
     void updateCameraVectors();
 
 private:

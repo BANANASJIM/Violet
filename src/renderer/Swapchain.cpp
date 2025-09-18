@@ -1,6 +1,7 @@
 #include "Swapchain.hpp"
 #include "VulkanContext.hpp"
 #include "Buffer.hpp"
+#include "core/Log.hpp"
 #include <GLFW/glfw3.h>
 #include <EASTL/array.h>
 #include <algorithm>
@@ -24,17 +25,17 @@ void Swapchain::cleanup() {
     framebuffers.clear();
 
     if (depthImageView) {
-        spdlog::debug("Destroying depth image view");
+        VT_TRACE("Destroying depth image view");
         device.destroyImageView(depthImageView);
         depthImageView = nullptr;
     }
     if (depthImage) {
-        spdlog::debug("Destroying depth image");
+        VT_TRACE("Destroying depth image");
         device.destroyImage(depthImage);
         depthImage = nullptr;
     }
     if (depthImageMemory) {
-        spdlog::debug("Freeing depth image memory");
+        VT_TRACE("Freeing depth image memory");
         device.freeMemory(depthImageMemory);
         depthImageMemory = nullptr;
     }

@@ -126,20 +126,6 @@ void App::drawFrame() {
 
     commandBuffers[currentFrame].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-    vk::Viewport viewport;
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(swapchain.getExtent().width);
-    viewport.height = static_cast<float>(swapchain.getExtent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    commandBuffers[currentFrame].setViewport(0, 1, &viewport);
-
-    vk::Rect2D scissor;
-    scissor.offset = vk::Offset2D{0, 0};
-    scissor.extent = swapchain.getExtent();
-    commandBuffers[currentFrame].setScissor(0, 1, &scissor);
-
     updateUniforms(currentFrame);
     recordCommands(commandBuffers[currentFrame], imageIndex);
 

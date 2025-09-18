@@ -1,12 +1,37 @@
 #include "Mesh.hpp"
+#include "core/Log.hpp"
 
 namespace violet {
 
-void Mesh::create(VulkanContext* context,
-                  const eastl::vector<Vertex>& vertices,
-                  const eastl::vector<uint32_t>& indices,
-                  const eastl::vector<Primitive>& prims) {
-    primitives = prims;
+Mesh::~Mesh() {
+    VT_TRACE("Mesh destructor");
+    cleanup();
+}
+
+void Mesh::create(
+    VulkanContext*                 context,
+    const eastl::vector<Vertex>&   vertices,
+    const eastl::vector<uint32_t>& indices,
+    const eastl::vector<SubMesh>&  subMeshes_
+) {
+    subMeshes = subMeshes_;
+
+    if (!vertices.empty()) {
+        vertexBuffer.create(context, vertices);
+    }
+
+    if (!indices.empty()) {
+        indexBuffer.create(context, indices);
+    }
+}
+
+void Mesh::create(
+    VulkanContext*                 context,
+    const eastl::vector<Vertex>&   vertices,
+    const eastl::vector<uint16_t>& indices,
+    const eastl::vector<SubMesh>&  subMeshes_
+) {
+    subMeshes = subMeshes_;
 
     if (!vertices.empty()) {
         vertexBuffer.create(context, vertices);
@@ -20,7 +45,7 @@ void Mesh::create(VulkanContext* context,
 void Mesh::cleanup() {
     vertexBuffer.cleanup();
     indexBuffer.cleanup();
-    primitives.clear();
+    subMeshes.clear();
 }
 
-}
+} // namespace violet

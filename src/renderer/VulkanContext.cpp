@@ -1,5 +1,5 @@
 #include "VulkanContext.hpp"
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 #include <EASTL/set.h>
 #include <EASTL/algorithm.h>
 
@@ -54,7 +54,7 @@ void VulkanContext::createInstance() {
     createInfo.ppEnabledExtensionNames = extensions.data();
 
     instance = vk::createInstance(createInfo);
-    spdlog::info("Vulkan instance created");
+    VT_INFO("Vulkan instance created");
 }
 
 void VulkanContext::setupDebugMessenger() {
@@ -85,7 +85,7 @@ void VulkanContext::pickPhysicalDevice() {
     }
     
     auto properties = physicalDevice.getProperties();
-    spdlog::info("Selected GPU: {}", properties.deviceName.data());
+    VT_INFO("Selected GPU: {}", properties.deviceName.data());
 }
 
 void VulkanContext::createLogicalDevice() {
@@ -234,7 +234,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
     void* pUserData) {
     
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        spdlog::error("Validation: {}", pCallbackData->pMessage);
+        VT_ERROR("Validation: {}", pCallbackData->pMessage);
     }
     
     return VK_FALSE;

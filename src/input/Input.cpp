@@ -1,5 +1,5 @@
 #include "Input.hpp"
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 
 namespace violet {
 
@@ -13,12 +13,15 @@ glm::vec2 Input::s_mouseDelta{0.0f};
 bool Input::s_firstMouse = true;
 bool Input::s_cursorEnabled = true;
 
+glm::vec2 Input::s_scrollDelta{0.0f};
+
 void Input::initialize(GLFWwindow* window) {
     s_window = window;
 
     glfwSetKeyCallback(window, keyCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetScrollCallback(window, scrollCallback);
 
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
@@ -51,6 +54,8 @@ void Input::update() {
         }
     }
 
+    // Reset scroll delta each frame
+    s_scrollDelta = glm::vec2(0.0f);
 }
 
 void Input::shutdown() {
@@ -103,6 +108,16 @@ glm::vec2 Input::consumeMouseDelta() {
     return delta;
 }
 
+glm::vec2 Input::getScrollDelta() {
+    return s_scrollDelta;
+}
+
+glm::vec2 Input::consumeScrollDelta() {
+    glm::vec2 delta = s_scrollDelta;
+    s_scrollDelta = glm::vec2(0.0f);
+    return delta;
+}
+
 void Input::setMouseCursor(bool enabled) {
     if (s_cursorEnabled != enabled) {
         s_cursorEnabled = enabled;
@@ -146,6 +161,11 @@ void Input::cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     s_mouseDelta = currentPos - s_lastMousePosition;
     s_lastMousePosition = currentPos;
     s_mousePosition = currentPos;
+}
+
+void Input::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    s_scrollDelta.x += static_cast<float>(xoffset);
+    s_scrollDelta.y += static_cast<float>(yoffset);
 }
 
 }

@@ -5,7 +5,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <GLFW/glfw3.h>
-#include <spdlog/spdlog.h>
+#include "core/Log.hpp"
 
 namespace violet {
 
@@ -67,7 +67,7 @@ void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Render
     uploadFonts();
     
     initialized = true;
-    spdlog::info("ImGui Vulkan backend initialized");
+    VT_INFO("ImGui Vulkan backend initialized");
 }
 
 void ImGuiVulkanBackend::cleanup() {

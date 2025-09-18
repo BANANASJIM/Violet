@@ -9,9 +9,16 @@ class VulkanContext;
 class UniformBuffer;
 class Texture;
 
+enum class DescriptorSetType {
+    GlobalUniforms,    // 全局uniform buffer (相机等)
+    MaterialTextures   // 材质纹理采样器
+};
+
 class DescriptorSet {
 public:
+    ~DescriptorSet();
     void create(VulkanContext* context, uint32_t maxFramesInFlight);
+    void create(VulkanContext* context, uint32_t maxFramesInFlight, DescriptorSetType type);
     void cleanup();
 
     void updateBuffer(uint32_t frameIndex, UniformBuffer* uniformBuffer);
