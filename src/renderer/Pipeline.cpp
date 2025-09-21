@@ -7,6 +7,7 @@
 #include "UniformBuffer.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Log.hpp"
+#include <glm/glm.hpp>
 
 namespace violet {
 
@@ -92,11 +93,17 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
         material->getDescriptorSetLayout()       // set = 1 (MATERIAL_SET)
     };
 
+    // Push constant range for model matrix
+    vk::PushConstantRange pushConstantRange;
+    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(glm::mat4); // 64 bytes for mat4
+
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setLayoutCount = 2;
     pipelineLayoutInfo.pSetLayouts = setLayouts;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;  // 移除push constants
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 

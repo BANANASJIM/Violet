@@ -22,8 +22,10 @@ BufferResource ResourceFactory::createBuffer(VulkanContext* context, const Buffe
     VkBuffer vkBuffer;
     VkBufferCreateInfo vkBufferCreateInfo = bufferCreateInfo;
 
+    // Get allocation info to retrieve mapped pointer for CPU-visible memory
+    VmaAllocationInfo vmaAllocInfo;
     VkResult vmaResult = vmaCreateBuffer(context->getAllocator(), &vkBufferCreateInfo, &allocInfo,
-                                         &vkBuffer, &result.allocation, nullptr);
+                                         &vkBuffer, &result.allocation, &vmaAllocInfo);
 
     if (vmaResult != VK_SUCCESS) {
         VT_ERROR("Failed to create buffer with VMA: error code {}", static_cast<int>(vmaResult));
@@ -31,6 +33,11 @@ BufferResource ResourceFactory::createBuffer(VulkanContext* context, const Buffe
     }
 
     result.buffer = vkBuffer;
+
+    // If the memory was created with MAPPED flag, store the mapped pointer
+    if (allocInfo.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) {
+        result.mappedData = vmaAllocInfo.pMappedData;
+    }
 
     if (!info.debugName.empty()) {
         vmaSetAllocationName(context->getAllocator(), result.allocation, info.debugName.c_str());
@@ -86,10 +93,10 @@ ImageResource ResourceFactory::createImage(VulkanContext* context, const ImageIn
 
 void ResourceFactory::destroyBuffer(VulkanContext* context, BufferResource& buffer) {
     if (buffer.allocation != VK_NULL_HANDLE) {
-        if (buffer.mappedData) {
-            vmaUnmapMemory(context->getAllocator(), buffer.allocation);
-            buffer.mappedData = nullptr;
-        }
+        // Note: If buffer was created with VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        // the memory is automatically unmapped when the allocation is destroyed.
+        // We should NOT call vmaUnmapMemory for such allocations.
+        buffer.mappedData = nullptr;
         vmaDestroyBuffer(context->getAllocator(), buffer.buffer, buffer.allocation);
         buffer.buffer = VK_NULL_HANDLE;
         buffer.allocation = VK_NULL_HANDLE;
@@ -121,10 +128,10 @@ void* ResourceFactory::mapBuffer(VulkanContext* context, BufferResource& buffer)
 }
 
 void ResourceFactory::unmapBuffer(VulkanContext* context, BufferResource& buffer) {
-    if (buffer.mappedData) {
-        vmaUnmapMemory(context->getAllocator(), buffer.allocation);
-        buffer.mappedData = nullptr;
-    }
+    // Note: This function should only be called for buffers that were manually mapped.
+    // Buffers created with VMA_ALLOCATION_CREATE_MAPPED_BIT should NOT be unmapped.
+    // For now, we'll just clear the pointer without unmapping.
+    buffer.mappedData = nullptr;
 }
 
 void ResourceFactory::copyBuffer(VulkanContext* context, BufferResource& src, BufferResource& dst, vk::DeviceSize size) {

@@ -1,7 +1,4 @@
 #include "VioletApp.hpp"
-#include "scene/SceneLoader.hpp"
-#include "core/Log.hpp"
-#include "renderer/Mesh.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -10,15 +7,19 @@
 
 #include <chrono>
 
-#include "core/TestData.hpp"
-#include "core/TestTexture.hpp"
+#include "core/Log.hpp"
+#include "examples/TestData.hpp"
+#include "examples/TestTexture.hpp"
+#include "renderer/Mesh.hpp"
+#include "scene/SceneLoader.hpp"
 
 namespace violet {
 
 VioletApp::VioletApp() {
     assetBrowser = eastl::make_unique<AssetBrowserLayer>();
-    viewport = eastl::make_unique<ViewportLayer>();
-    compositeUI = eastl::make_unique<CompositeUILayer>();
+    viewport     = eastl::make_unique<ViewportLayer>();
+    sceneDebug   = eastl::make_unique<SceneDebugLayer>(&world);
+    compositeUI  = eastl::make_unique<CompositeUILayer>();
 
     viewport->setOnAssetDropped([this](const eastl::string& path) {
         VT_INFO("Asset dropped: {}", path.c_str());
@@ -27,6 +28,7 @@ VioletApp::VioletApp() {
 
     compositeUI->addLayer(assetBrowser.get());
     compositeUI->addLayer(viewport.get());
+    compositeUI->addLayer(sceneDebug.get());
 
     setUILayer(compositeUI.get());
 }
@@ -40,6 +42,7 @@ VioletApp::~VioletApp() {
 
     // Clear unique_ptrs in correct order
     compositeUI.reset();
+    sceneDebug.reset();
     viewport.reset();
     assetBrowser.reset();
 
@@ -53,18 +56,32 @@ void VioletApp::createResources() {
 
     initializeScene();
 
-    // Test auto-load Sponza scene
-    loadAsset("/Users/jim/Dev/Violet/assets/Models/Sponza/glTF/Sponza.gltf");
-
-    // Create default material for all mesh entities that don't have materials
+    eastl::string scenePath = "assets/Models/Sponza/glTF/Sponza.gltf";
     try {
-        VT_INFO("About to call createDefaultMaterialsForMeshes");
-        createDefaultMaterialsForMeshes();
-        VT_INFO("createDefaultMaterialsForMeshes completed successfully");
+        VT_INFO("Loading default scene: {}", scenePath.c_str());
+        currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, &defaultTexture);
+
+        if (currentScene) {
+            currentScene->updateWorldTransforms(world.getRegistry());
+            VT_INFO("Scene loaded with {} nodes", currentScene->getNodeCount());
+
+            auto controllerView = world.view<CameraControllerComponent>();
+            for (auto entity : controllerView) {
+                auto& controllerComp = controllerView.get<CameraControllerComponent>(entity);
+                if (controllerComp.controller) {
+                    controllerComp.controller->setPosition(glm::vec3(0.0f, 0.0f, 3.0f));
+                    controllerComp.controller->setYaw(-90.0f);
+                    controllerComp.controller->setPitch(0.0f);
+                }
+            }
+        }
     } catch (const std::exception& e) {
-        VT_ERROR("Exception in createDefaultMaterialsForMeshes: {}", e.what());
-    } catch (...) {
-        VT_ERROR("Unknown exception in createDefaultMaterialsForMeshes");
+        VT_WARN("Failed to load scene: {}", e.what());
+        createTestCube();
+    }
+
+    if (!currentScene) {
+        createTestCube();
     }
 }
 
@@ -79,29 +96,23 @@ void VioletApp::initializeScene() {
     int width, height;
     glfwGetFramebufferSize(getWindow(), &width, &height);
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    auto camera = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 0.1f, 50000.0f);
+    auto  camera      = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 0.1f, 50000.0f);
 
-    auto& cameraComp = world.addComponent<CameraComponent>(cameraEntity, eastl::move(camera));
+    auto& cameraComp    = world.addComponent<CameraComponent>(cameraEntity, eastl::move(camera));
     cameraComp.isActive = true;
 
     auto controller = eastl::make_unique<CameraController>(cameraComp.camera.get());
-    controller->setPosition(glm::vec3(0.0f, 10.0f, 20.0f)); // Y-up: (x, y, z) where y is height
+    controller->setPosition(glm::vec3(0.0f, 15.0f, 30.0f));
     controller->setMovementSpeed(20.0f);
     controller->setSensitivity(0.002f);
 
-    // Calculate initial look direction towards origin
-    glm::vec3 camPos = glm::vec3(0.0f, 10.0f, 20.0f);
-    glm::vec3 targetPos = glm::vec3(0.0f, 0.0f, 0.0f);
-    glm::vec3 direction = glm::normalize(targetPos - camPos);
+    glm::vec3 camPos = glm::vec3(0.0f, 15.0f, 30.0f);
+    glm::vec3 direction = glm::normalize(-camPos);
 
-    // Set yaw and pitch to look at origin
     float yaw = glm::degrees(atan2(direction.z, direction.x));
-    float pitch = glm::degrees(asin(-direction.y));
+    float pitch = glm::degrees(asin(direction.y));
     controller->setYaw(yaw);
     controller->setPitch(pitch);
-
-    VT_INFO("Camera initialized - position: ({:.1f},{:.1f},{:.1f}), yaw: {:.1f}, pitch: {:.1f}",
-                 camPos.x, camPos.y, camPos.z, yaw, pitch);
 
     auto& controllerComp = world.addComponent<CameraControllerComponent>(cameraEntity, eastl::move(controller));
 }
@@ -115,25 +126,6 @@ void VioletApp::update(float deltaTime) {
         }
     }
 
-    // Debug input detection (only log when keys are actually pressed)
-    static bool wasMoving = false;
-    bool isMoving = Input::isKeyHeld(GLFW_KEY_W) || Input::isKeyHeld(GLFW_KEY_A) ||
-                   Input::isKeyHeld(GLFW_KEY_S) || Input::isKeyHeld(GLFW_KEY_D) ||
-                   Input::isKeyHeld(GLFW_KEY_SPACE) || Input::isKeyHeld(GLFW_KEY_LEFT_SHIFT);
-
-    if (isMoving && !wasMoving) {
-    }
-    wasMoving = isMoving;
-
-    // Log mouse input when right button is held
-    static bool wasRightHeld = false;
-    bool isRightHeld = Input::isMouseButtonHeld(MouseButton::Right);
-    if (isRightHeld && !wasRightHeld) {
-        glm::vec2 delta = Input::getMouseDelta();
-    }
-    wasRightHeld = isRightHeld;
-
-    // Update world transforms if scene exists
     if (currentScene) {
         currentScene->updateWorldTransforms(world.getRegistry());
     }
@@ -145,7 +137,9 @@ void VioletApp::updateUniforms(uint32_t frameIndex) {
 
 void VioletApp::recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageIndex) {
     renderer.collectRenderables(world.getRegistry());
-    renderer.setViewport(commandBuffer, getSwapchain()->getExtent());
+
+    auto extent = getSwapchain()->getExtent();
+    renderer.setViewport(commandBuffer, extent);
     renderer.renderScene(commandBuffer, getCurrentFrame(), world.getRegistry());
 }
 
@@ -158,67 +152,23 @@ void VioletApp::loadAsset(const eastl::string& path) {
 
         if (ext == ".gltf") {
             try {
-                // Clear existing scene
                 if (currentScene) {
                     currentScene->clear();
                 }
 
-                // Load new scene using SceneLoader - now creates ECS entities directly
-                currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry());
-
-                // Force all loaded entities to origin position
-                auto transformView = world.getRegistry().view<TransformComponent>();
-                for (auto entity : transformView) {
-                    auto& transform = transformView.get<TransformComponent>(entity);
-                    // Only modify non-camera entities (cameras have CameraComponent)
-                    if (!world.getRegistry().try_get<CameraComponent>(entity)) {
-                        transform.local.position = glm::vec3(0.0f, 0.0f, 0.0f);
-                        VT_INFO("Set entity transform position to origin");
-                    }
-                }
-
-                // Update world transforms for the newly loaded scene
+                currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
                 currentScene->updateWorldTransforms(world.getRegistry());
 
-                VT_INFO("Scene loaded with {} nodes", currentScene->getNodeCount());
-
                 viewport->setStatusMessage("Scene loaded successfully");
-                VT_INFO("Scene loaded successfully: {}", path.c_str());
+                VT_INFO("Scene loaded: {}", path.c_str());
             } catch (const std::exception& e) {
                 viewport->setStatusMessage("Failed to load model");
                 VT_ERROR("Failed to load model {}: {}", path.c_str(), e.what());
             }
         } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
             viewport->setStatusMessage("Texture loading not implemented");
-            VT_INFO("Texture loading not implemented yet: {}", path.c_str());
         }
     }
-}
-
-void VioletApp::createDefaultMaterialsForMeshes() {
-    VT_INFO("=== Starting createDefaultMaterialsForMeshes ===");
-
-    // Create a default material
-    Material* defaultMaterial = renderer.createMaterial("build/shaders/pbr.vert.spv", "build/shaders/pbr.frag.spv");
-    MaterialInstance* defaultMaterialInstance = renderer.createMaterialInstance(defaultMaterial);
-
-    // Set default texture for the material instance
-    defaultMaterialInstance->setBaseColorTexture(&defaultTexture);
-
-    // Update descriptor set with texture
-    defaultMaterialInstance->updateDescriptorSet(0);
-
-    // Assign default material to all mesh entities that don't have materials
-    auto meshView = world.getRegistry().view<MeshComponent>();
-    uint32_t materialCount = 0;
-
-    for (auto entity : meshView) {
-        if (!world.getRegistry().try_get<MaterialComponent>(entity)) {
-            world.addComponent<MaterialComponent>(entity, defaultMaterialInstance);
-            materialCount++;
-        }
-    }
-
 }
 
 
@@ -236,6 +186,96 @@ void VioletApp::onWindowResize(int width, int height) {
             }
         }
     }
+}
+
+void VioletApp::createTestCube() {
+    auto cubeEntity = world.createEntity();
+    auto& transformComp          = world.addComponent<TransformComponent>(cubeEntity);
+    transformComp.local.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    transformComp.local.scale    = glm::vec3(1.f, 1.0f, 1.0f);
+
+    transformComp.world.position = transformComp.local.position;
+    transformComp.world.rotation = transformComp.local.rotation;
+    transformComp.world.scale = transformComp.local.scale;
+    transformComp.dirty = false;
+
+    auto mesh = eastl::make_unique<Mesh>();
+    eastl::vector<Vertex> vertices = TestData::getCubeVertices();
+    eastl::vector<uint32_t> indices = TestData::getCubeIndices();
+    eastl::vector<SubMesh> subMeshes;
+    SubMesh                cubeSubMesh;
+    cubeSubMesh.firstIndex    = 0;
+    cubeSubMesh.indexCount    = static_cast<uint32_t>(indices.size());
+    cubeSubMesh.materialIndex = 0;
+    subMeshes.push_back(cubeSubMesh);
+
+    mesh->create(getContext(), vertices, indices, subMeshes);
+    auto& meshComp = world.addComponent<MeshComponent>(cubeEntity, eastl::move(mesh));
+
+    eastl::string vertShaderPath = "build/shaders/pbr.vert.spv";
+    eastl::string fragShaderPath = "build/shaders/pbr.frag.spv";
+
+    Material* material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::MaterialTextures);
+
+    if (!material) {
+        vertShaderPath = "build/shaders/unlit.vert.spv";
+        fragShaderPath = "build/shaders/unlit.frag.spv";
+        material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::UnlitMaterialTextures);
+    }
+
+    if (!material) {
+        VT_ERROR("Failed to create material");
+        return;
+    }
+
+    MaterialInstance* materialInstance = nullptr;
+    if (vertShaderPath.find("pbr") != eastl::string::npos) {
+        materialInstance = renderer.createPBRMaterialInstance(material);
+        if (materialInstance) {
+            auto* pbrInstance = static_cast<PBRMaterialInstance*>(materialInstance);
+            auto& materialData = pbrInstance->getData();
+            materialData.baseColorFactor = glm::vec4(0.8f, 0.6f, 0.4f, 1.0f);
+            materialData.metallicFactor = 0.1f;
+            materialData.roughnessFactor = 0.4f;
+            materialData.normalScale = 1.0f;
+            materialData.occlusionStrength = 1.0f;
+            materialData.emissiveFactor = glm::vec3(0.0f);
+            materialData.alphaCutoff = 0.5f;
+
+            pbrInstance->setBaseColorTexture(&defaultTexture);
+            pbrInstance->setMetallicRoughnessTexture(&defaultTexture);
+            pbrInstance->setNormalTexture(&defaultTexture);
+            pbrInstance->setOcclusionTexture(&defaultTexture);
+            pbrInstance->setEmissiveTexture(&defaultTexture);
+        }
+    }
+
+    if (!materialInstance) {
+        materialInstance = renderer.createUnlitMaterialInstance(material);
+        if (!materialInstance) {
+            VT_ERROR("Failed to create material instance");
+            return;
+        }
+
+        auto* unlitInstance = static_cast<UnlitMaterialInstance*>(materialInstance);
+        auto& materialData = unlitInstance->getData();
+        materialData.baseColor = glm::vec4(1.0f, 0.5f, 0.3f, 1.0f);
+        unlitInstance->setBaseColorTexture(&defaultTexture);
+    }
+
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        materialInstance->setDirty(true);
+        materialInstance->updateDescriptorSet(frame);
+    }
+
+    // Register the material instance with a unique ID for the test cube
+    static uint32_t testMaterialId = 0xFFFF0000; // High ID for test materials
+    renderer.registerMaterialInstance(testMaterialId, materialInstance);
+
+    // Create material component with the ID
+    MaterialComponent matComp;
+    matComp.materialIndexToId[0] = testMaterialId; // Single material for SubMesh 0
+    world.addComponent<MaterialComponent>(cubeEntity, eastl::move(matComp));
 }
 
 void VioletApp::cleanup() {

@@ -5,6 +5,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <EASTL/unique_ptr.h>
+#include <EASTL/vector.h>
+#include <EASTL/hash_map.h>
 
 #include "renderer/Camera.hpp"
 #include "renderer/CameraController.hpp"
@@ -54,10 +56,21 @@ struct MeshComponent {
 };
 
 struct MaterialComponent {
-    MaterialInstance* material = nullptr;
+    // Map from SubMesh material index to global material ID
+    eastl::hash_map<uint32_t, uint32_t> materialIndexToId;
 
     MaterialComponent() = default;
-    MaterialComponent(MaterialInstance* materialPtr) : material(materialPtr) {}
+    MaterialComponent(const eastl::vector<uint32_t>& materialIds) {
+        // Store material IDs with their original GLTF indices
+        for (size_t i = 0; i < materialIds.size(); ++i) {
+            materialIndexToId[static_cast<uint32_t>(i)] = materialIds[i];
+        }
+    }
+
+    uint32_t getMaterialId(uint32_t subMeshMaterialIndex) const {
+        auto it = materialIndexToId.find(subMeshMaterialIndex);
+        return it != materialIndexToId.end() ? it->second : 0;
+    }
 };
 
 // Renderable has been moved to renderer/Renderable.hpp

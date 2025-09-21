@@ -3,7 +3,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <EASTL/unique_ptr.h>
-#include <EASTL/unordered_map.h>
+#include <EASTL/hash_map.h>
 #include <EASTL/vector.h>
 
 #include <entt/entt.hpp>
@@ -13,6 +13,7 @@
 #include "renderer/Renderable.hpp"
 #include "renderer/DescriptorSet.hpp"
 #include "renderer/UniformBuffer.hpp"
+#include "renderer/Texture.hpp"
 #include "renderer/Material.hpp"
 
 namespace violet {
@@ -30,9 +31,13 @@ class RenderPass;
 class Camera;
 
 struct GlobalUBO {
-    alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+    alignas(16) glm::vec3 cameraPos;
+};
+
+struct PushConstantData {
+    glm::mat4 model;
 };
 
 class GlobalUniforms {
@@ -49,6 +54,7 @@ private:
     VulkanContext* context = nullptr;
     eastl::unique_ptr<DescriptorSet> descriptorSet;
     eastl::vector<eastl::unique_ptr<UniformBuffer>> uniformBuffers;
+    GlobalUBO cachedUBO{};
 };
 
 class Renderer {
@@ -73,7 +79,17 @@ public:
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
 
     Material*         createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader);
+    Material*         createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType);
     MaterialInstance* createMaterialInstance(Material* material);
+    MaterialInstance* createPBRMaterialInstance(Material* material);
+    MaterialInstance* createUnlitMaterialInstance(Material* material);
+
+    // Global material instance management
+    void              registerMaterialInstance(uint32_t index, MaterialInstance* instance);
+    MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const;
+
+    // Texture management for scene loading
+    Texture* addTexture(eastl::unique_ptr<Texture> texture);
 
     void                             clearRenderables() { renderables.clear(); }
     const eastl::vector<Renderable>& getRenderables() const { return renderables; }
@@ -83,14 +99,19 @@ private:
 
     VulkanContext* context    = nullptr;
     RenderPass*    renderPass = nullptr;
+    uint32_t       maxFramesInFlight = 0;
 
     GlobalUniforms globalUniforms;
 
     eastl::vector<Renderable>                          renderables;
     eastl::vector<eastl::unique_ptr<Material>>         materials;
     eastl::vector<eastl::unique_ptr<MaterialInstance>> materialInstances;
+    eastl::vector<eastl::unique_ptr<Texture>>          textures;
 
-    eastl::unordered_map<entt::entity, eastl::vector<uint32_t>> renderableCache;
+    // Global material instance index (GLTF material index -> MaterialInstance pointer)
+    eastl::hash_map<uint32_t, MaterialInstance*> globalMaterialIndex;
+
+    eastl::hash_map<entt::entity, eastl::vector<uint32_t>> renderableCache;
 };
 
 } // namespace violet

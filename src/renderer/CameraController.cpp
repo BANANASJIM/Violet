@@ -42,7 +42,6 @@ void CameraController::processKeyboard(float deltaTime) {
     if (Input::isKeyHeld(GLFW_KEY_W)) {
         position += front * velocity;
         moved = true;
-        VT_INFO("Camera moved forward");
     }
     if (Input::isKeyHeld(GLFW_KEY_S)) {
         position -= front * velocity;

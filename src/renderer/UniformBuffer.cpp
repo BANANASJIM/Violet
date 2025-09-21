@@ -1,6 +1,7 @@
 #include "UniformBuffer.hpp"
 #include "VulkanContext.hpp"
 #include "Buffer.hpp"
+#include "core/Log.hpp"
 
 namespace violet {
 

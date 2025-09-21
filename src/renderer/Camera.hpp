@@ -30,7 +30,7 @@ protected:
 protected:
     glm::vec3 position{3.0f, 3.0f, 3.0f};
     glm::vec3 target{0.0f, 0.0f, 0.0f};
-    glm::vec3 up{0.0f, 0.0f, 1.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
 
     mutable glm::mat4 viewMatrix{1.0f};
     mutable glm::mat4 projectionMatrix{1.0f};

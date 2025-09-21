@@ -113,9 +113,82 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     ktxTexture_Destroy(ktxTexture(kTexture));
 }
 
+void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb) {
+    context = ctx;
+
+    // Calculate actual size needed
+    int requiredChannels = 4; // Always convert to RGBA
+    vk::DeviceSize imageSize = width * height * requiredChannels;
+
+    // Create staging buffer using ResourceFactory
+    BufferInfo stagingBufferInfo;
+    stagingBufferInfo.size = imageSize;
+    stagingBufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingBufferInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
+    stagingBufferInfo.debugName = "Texture memory staging buffer";
+
+    BufferResource stagingBuffer = ResourceFactory::createBuffer(ctx, stagingBufferInfo);
+
+    void* mappedData = ResourceFactory::mapBuffer(ctx, stagingBuffer);
+
+    // Convert to RGBA if needed
+    unsigned char* dst = static_cast<unsigned char*>(mappedData);
+    if (channels == 4) {
+        memcpy(dst, data, static_cast<size_t>(imageSize));
+    } else if (channels == 3) {
+        for (int i = 0; i < width * height; i++) {
+            dst[i * 4 + 0] = data[i * 3 + 0];
+            dst[i * 4 + 1] = data[i * 3 + 1];
+            dst[i * 4 + 2] = data[i * 3 + 2];
+            dst[i * 4 + 3] = 255;
+        }
+    } else if (channels == 2) {
+        for (int i = 0; i < width * height; i++) {
+            dst[i * 4 + 0] = data[i * 2 + 0];
+            dst[i * 4 + 1] = data[i * 2 + 0];
+            dst[i * 4 + 2] = data[i * 2 + 0];
+            dst[i * 4 + 3] = data[i * 2 + 1];
+        }
+    } else if (channels == 1) {
+        for (int i = 0; i < width * height; i++) {
+            dst[i * 4 + 0] = data[i];
+            dst[i * 4 + 1] = data[i];
+            dst[i * 4 + 2] = data[i];
+            dst[i * 4 + 3] = 255;
+        }
+    }
+
+    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
+
+    // Create image using ResourceFactory
+    vk::Format format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+    ImageInfo imageInfo;
+    imageInfo.width = static_cast<uint32_t>(width);
+    imageInfo.height = static_cast<uint32_t>(height);
+    imageInfo.format = format;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.debugName = "Texture from memory";
+
+    imageResource = ResourceFactory::createImage(ctx, imageInfo);
+    allocation = imageResource.allocation;
+
+    transitionImageLayout(ctx, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource,
+                                       static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    ResourceFactory::destroyBuffer(ctx, stagingBuffer);
+
+    createImageView(ctx, format);
+    createSampler(ctx);
+}
+
 void Texture::cleanup() {
     if (context) {
-        // Clean up RAII objects
+        // Cleaning up texture resources
+
+        // Clean up RAII objects in reverse order
+        // Destroying texture RAII objects
         sampler = nullptr;
         imageView = nullptr;
 
@@ -123,6 +196,8 @@ void Texture::cleanup() {
         ResourceFactory::destroyImage(context, imageResource);
         allocation = VK_NULL_HANDLE;
         context = nullptr;
+
+        // Texture cleanup completed
     }
 }
 
@@ -139,6 +214,7 @@ void Texture::createImageView(VulkanContext* ctx, vk::Format format) {
     viewInfo.subresourceRange.layerCount = 1;
 
     imageView = vk::raii::ImageView(ctx->getDeviceRAII(), viewInfo);
+    // ImageView created
 }
 
 void Texture::createSampler(VulkanContext* ctx) {
@@ -159,6 +235,7 @@ void Texture::createSampler(VulkanContext* ctx) {
     samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
 
     sampler = vk::raii::Sampler(ctx->getDeviceRAII(), samplerInfo);
+    // Sampler created
 }
 
 void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::ImageLayout oldLayout,

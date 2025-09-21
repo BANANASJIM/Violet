@@ -6,7 +6,6 @@
 namespace violet {
 
 void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& texture, uint32_t width, uint32_t height) {
-    // Create checkerboard pattern
     eastl::vector<uint8_t> pixels(width * height * 4);
     for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++) {
@@ -14,21 +13,20 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
             uint32_t index = (y * width + x) * 4;
 
             if (checker) {
-                pixels[index + 0] = 255;  // R
-                pixels[index + 1] = 255;  // G
-                pixels[index + 2] = 255;  // B
+                pixels[index + 0] = 255;
+                pixels[index + 1] = 255;
+                pixels[index + 2] = 255;
             } else {
-                pixels[index + 0] = 64;   // R
-                pixels[index + 1] = 64;   // G
-                pixels[index + 2] = 64;   // B
+                pixels[index + 0] = 64;
+                pixels[index + 1] = 64;
+                pixels[index + 2] = 64;
             }
-            pixels[index + 3] = 255;  // A
+            pixels[index + 3] = 255;
         }
     }
 
     vk::DeviceSize imageSize = pixels.size();
 
-    // Create staging buffer using ResourceFactory
     BufferInfo stagingInfo;
     stagingInfo.size = imageSize;
     stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -41,7 +39,6 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
     ResourceFactory::unmapBuffer(context, stagingBuffer);
 
-    // Set context and create image using ResourceFactory
     texture.context = context;
 
     ImageInfo imageInfo;
@@ -73,7 +70,6 @@ void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
 
     vk::DeviceSize imageSize = pixels.size();
 
-    // Create staging buffer using ResourceFactory
     BufferInfo stagingInfo;
     stagingInfo.size = imageSize;
     stagingInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -86,7 +82,6 @@ void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
     ResourceFactory::unmapBuffer(context, stagingBuffer);
 
-    // Set context and create image using ResourceFactory
     texture.context = context;
 
     ImageInfo imageInfo;

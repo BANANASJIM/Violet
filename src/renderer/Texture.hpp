@@ -44,6 +44,7 @@ public:
 
     void loadFromFile(VulkanContext* context, const eastl::string& filePath);
     void loadFromKTX2(VulkanContext* context, const eastl::string& filePath);
+    void loadFromMemory(VulkanContext* context, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb = true);
     void cleanup() override;
 
     [[nodiscard]] vk::Image getImage() const { return imageResource.image; }

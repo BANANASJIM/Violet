@@ -73,7 +73,6 @@ void VulkanContext::createInstance() {
 }
 
 void VulkanContext::setupDebugMessenger() {
-    // Skip debug messenger for now to avoid linking issues
     return;
 }
 

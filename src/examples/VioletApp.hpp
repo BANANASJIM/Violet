@@ -9,6 +9,7 @@
 #include "ui/AssetBrowserLayer.hpp"
 #include "ui/ViewportLayer.hpp"
 #include "ui/CompositeUILayer.hpp"
+#include "ui/SceneDebugLayer.hpp"
 #include <EASTL/vector.h>
 #include <EASTL/unique_ptr.h>
 #include <entt/entt.hpp>
@@ -32,7 +33,7 @@ private:
     void createTestResources();
     void initializeScene();
     void loadAsset(const eastl::string& path);
-    void createDefaultMaterialsForMeshes();
+    void createTestCube();
 
 private:
     World world;
@@ -43,6 +44,7 @@ private:
 
     eastl::unique_ptr<AssetBrowserLayer> assetBrowser;
     eastl::unique_ptr<ViewportLayer> viewport;
+    eastl::unique_ptr<SceneDebugLayer> sceneDebug;
     eastl::unique_ptr<CompositeUILayer> compositeUI;
 };
 

@@ -19,22 +19,22 @@ void Mesh::create(
 
     if (!vertices.empty()) {
         vertexBuffer.create(context, vertices);
-    } else {
-        VT_WARN("Mesh created with empty vertices");
     }
 
     if (!indices.empty()) {
         indexBuffer.create(context, indices);
-    } else {
-        VT_WARN("Mesh created with empty indices");
     }
 
-    // Validate submeshes
-    for (size_t i = 0; i < subMeshes.size(); ++i) {
-        const auto& submesh = subMeshes[i];
+    // Validate submeshes - only warn once if there are invalid submeshes
+    bool hasInvalidSubMesh = false;
+    for (const auto& submesh : subMeshes) {
         if (!submesh.isValid()) {
-            VT_WARN("SubMesh[{}] is invalid (indexCount = 0)", i);
+            hasInvalidSubMesh = true;
+            break;
         }
+    }
+    if (hasInvalidSubMesh) {
+        VT_WARN("Mesh contains one or more invalid submeshes");
     }
 }
 
@@ -49,22 +49,22 @@ void Mesh::create(
 
     if (!vertices.empty()) {
         vertexBuffer.create(context, vertices);
-    } else {
-        VT_WARN("Mesh created with empty vertices");
     }
 
     if (!indices.empty()) {
         indexBuffer.create(context, indices);
-    } else {
-        VT_WARN("Mesh created with empty indices");
     }
 
-    // Validate submeshes
-    for (size_t i = 0; i < subMeshes.size(); ++i) {
-        const auto& submesh = subMeshes[i];
+    // Validate submeshes - only warn once if there are invalid submeshes
+    bool hasInvalidSubMesh = false;
+    for (const auto& submesh : subMeshes) {
         if (!submesh.isValid()) {
-            VT_WARN("SubMesh[{}] is invalid (indexCount = 0)", i);
+            hasInvalidSubMesh = true;
+            break;
         }
+    }
+    if (hasInvalidSubMesh) {
+        VT_WARN("Mesh contains one or more invalid submeshes");
     }
 }
 

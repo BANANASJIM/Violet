@@ -3,10 +3,13 @@
 #include <tiny_gltf.h>
 
 #include <stdexcept>
+#include <EASTL/algorithm.h>
 
 #include "core/Log.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
+#include "renderer/Renderer.hpp"
+#include "renderer/Texture.hpp"
 #include "renderer/Vertex.hpp"
 #include "renderer/VulkanContext.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
@@ -15,7 +18,7 @@
 namespace violet {
 
 eastl::unique_ptr<Scene>
-SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath, entt::registry* world) {
+SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath, entt::registry* world, Renderer* renderer, Texture* defaultTexture) {
     auto scene = eastl::make_unique<Scene>();
 
     tinygltf::Model    gltfModel;
@@ -39,17 +42,30 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
 
     VT_INFO("Loading glTF scene: {}", filePath.c_str());
     VT_INFO(
-        "Nodes: {}, Meshes: {}, Materials: {}",
+        "Nodes: {}, Meshes: {}, Materials: {}, Textures: {}, Images: {}",
         gltfModel.nodes.size(),
         gltfModel.meshes.size(),
-        gltfModel.materials.size()
+        gltfModel.materials.size(),
+        gltfModel.textures.size(),
+        gltfModel.images.size()
     );
 
+    // Create loading context
+    GLTFLoadContext loadCtx;
+    loadCtx.vulkanContext = context;
+    loadCtx.renderer = renderer;
+    loadCtx.defaultTexture = defaultTexture;
+
+    // Load textures first
+    loadTextures(loadCtx, &gltfModel);
+
+    // Load materials
+    loadMaterials(loadCtx, &gltfModel, filePath);
 
     const tinygltf::Scene& gltfScene = gltfModel.scenes[gltfModel.defaultScene > -1 ? gltfModel.defaultScene : 0];
 
     for (size_t i = 0; i < gltfScene.nodes.size(); i++) {
-        loadNode(context, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, 0, world);
+        loadNode(loadCtx, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, 0, world);
     }
 
     VT_INFO("Scene loaded successfully: {} nodes", scene->getNodeCount());
@@ -58,7 +74,7 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
 }
 
 void SceneLoader::loadNode(
-    VulkanContext*  context,
+    GLTFLoadContext& loadCtx,
     Scene*          scene,
     void*           nodePtr,
     const void*     modelPtr,
@@ -85,7 +101,8 @@ void SceneLoader::loadNode(
     world->emplace<TransformComponent>(entity, localTransform);
 
     // Log node position
-    VT_INFO("Node '{}' added at position: ({:.2f}, {:.2f}, {:.2f})",
+    // Node position logged only in debug builds
+    VT_DEBUG("Node '{}' added at position: ({:.2f}, {:.2f}, {:.2f})",
             node->name.c_str(),
             localTransform.position.x,
             localTransform.position.y,
@@ -196,22 +213,40 @@ void SceneLoader::loadNode(
         if (!vertices.empty()) {
             // Create mesh and store as ECS component using unique_ptr for RAII
             auto meshPtr = eastl::make_unique<Mesh>();
-            meshPtr->create(context, vertices, indices, subMeshes);
+            meshPtr->create(loadCtx.vulkanContext, vertices, indices, subMeshes);
             world->emplace<MeshComponent>(entity, eastl::move(meshPtr));
 
-            VT_INFO("Created mesh component for node: {}", gltfNode->name.c_str());
+            VT_DEBUG("Created mesh component for node: {}", gltfNode->name.c_str());
 
-            // Add material component if available
-            if (!gltfMesh.primitives.empty() && gltfMesh.primitives[0].material > -1) {
-                // Material handling will be implemented when materials are properly loaded
-                // For now, we'll leave MaterialComponent empty
+            // Create material ID mapping for this mesh
+            eastl::vector<uint32_t> meshMaterialIds;
+            for (const auto& subMesh : subMeshes) {
+                uint32_t gltfMatIndex = subMesh.materialIndex;
+                if (gltfMatIndex < loadCtx.materialIds.size()) {
+                    meshMaterialIds.push_back(loadCtx.materialIds[gltfMatIndex]);
+                } else {
+                    // Use first material ID as fallback
+                    meshMaterialIds.push_back(!loadCtx.materialIds.empty() ? loadCtx.materialIds[0] : 0);
+                }
+            }
+
+            if (!meshMaterialIds.empty()) {
+                MaterialComponent matComp;
+                // Store the mapping from SubMesh material index to global material ID
+                for (const auto& subMesh : subMeshes) {
+                    uint32_t gltfMatIndex = subMesh.materialIndex;
+                    if (gltfMatIndex < loadCtx.materialIds.size()) {
+                        matComp.materialIndexToId[gltfMatIndex] = loadCtx.materialIds[gltfMatIndex];
+                    }
+                }
+                world->emplace<MaterialComponent>(entity, eastl::move(matComp));
             }
         }
     }
 
     for (size_t i = 0; i < gltfNode->children.size(); i++) {
         loadNode(
-            context,
+            loadCtx,
             scene,
             const_cast<tinygltf::Node*>(&gltfModel->nodes[gltfNode->children[i]]),
             modelPtr,
@@ -221,7 +256,211 @@ void SceneLoader::loadNode(
     }
 }
 
-void SceneLoader::loadTextures(Scene* scene, Node* nodePtr) {}
+void SceneLoader::loadTextures(GLTFLoadContext& loadCtx, const void* modelPtr) {
+    const tinygltf::Model* gltfModel = static_cast<const tinygltf::Model*>(modelPtr);
+
+    loadCtx.textures.resize(gltfModel->textures.size());
+
+    for (size_t i = 0; i < gltfModel->textures.size(); i++) {
+        const tinygltf::Texture& gltfTexture = gltfModel->textures[i];
+
+        if (gltfTexture.source >= 0 && gltfTexture.source < gltfModel->images.size()) {
+            const tinygltf::Image& gltfImage = gltfModel->images[gltfTexture.source];
+
+            auto texture = eastl::make_unique<Texture>();
+
+            if (!gltfImage.image.empty()) {
+                // Load from embedded image data - format determined later based on usage
+                texture->loadFromMemory(
+                    loadCtx.vulkanContext,
+                    gltfImage.image.data(),
+                    gltfImage.image.size(),
+                    gltfImage.width,
+                    gltfImage.height,
+                    gltfImage.component,
+                    true  // Default to sRGB, will be corrected later
+                );
+                VT_DEBUG("Loaded embedded texture {}: {}x{}, {} channels", i, gltfImage.width, gltfImage.height, gltfImage.component);
+            } else if (!gltfImage.uri.empty()) {
+                // Load from external file
+                texture->loadFromFile(loadCtx.vulkanContext, eastl::string(gltfImage.uri.c_str()));
+                VT_DEBUG("Loaded external texture {}: {}", i, gltfImage.uri.c_str());
+            }
+
+            // Transfer ownership to Renderer for persistent storage
+            Texture* texturePtr = loadCtx.renderer->addTexture(eastl::move(texture));
+            loadCtx.textures[i] = texturePtr;
+        }
+    }
+}
+
+void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, const eastl::string& filePath) {
+    const tinygltf::Model* gltfModel = static_cast<const tinygltf::Model*>(modelPtr);
+
+    loadCtx.materials.resize(gltfModel->materials.size());
+
+    for (size_t i = 0; i < gltfModel->materials.size(); i++) {
+        const tinygltf::Material& gltfMaterial = gltfModel->materials[i];
+
+        // Create material and instance
+        Material* material = loadCtx.renderer->createMaterial("build/shaders/pbr.vert.spv", "build/shaders/pbr.frag.spv");
+        PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(loadCtx.renderer->createPBRMaterialInstance(material));
+
+        // Extract PBR material data
+        PBRMaterialData& data = instance->getData();
+
+        // Base color
+        if (gltfMaterial.values.find("baseColorFactor") != gltfMaterial.values.end()) {
+            const auto& factor = gltfMaterial.values.at("baseColorFactor").ColorFactor();
+            data.baseColorFactor = glm::vec4(factor[0], factor[1], factor[2], factor[3]);
+        }
+
+        // Metallic and roughness
+        if (gltfMaterial.values.find("metallicFactor") != gltfMaterial.values.end()) {
+            data.metallicFactor = static_cast<float>(gltfMaterial.values.at("metallicFactor").Factor());
+        }
+        if (gltfMaterial.values.find("roughnessFactor") != gltfMaterial.values.end()) {
+            data.roughnessFactor = static_cast<float>(gltfMaterial.values.at("roughnessFactor").Factor());
+        }
+
+        // Normal scale
+        if (gltfMaterial.normalTexture.scale != 0) {
+            data.normalScale = static_cast<float>(gltfMaterial.normalTexture.scale);
+        }
+
+        // Occlusion strength
+        if (gltfMaterial.occlusionTexture.strength != 0) {
+            data.occlusionStrength = static_cast<float>(gltfMaterial.occlusionTexture.strength);
+        }
+
+        // Emissive factor
+        if (gltfMaterial.emissiveFactor.size() == 3) {
+            data.emissiveFactor = glm::vec3(
+                gltfMaterial.emissiveFactor[0],
+                gltfMaterial.emissiveFactor[1],
+                gltfMaterial.emissiveFactor[2]
+            );
+        }
+
+        // Alpha cutoff
+        if (gltfMaterial.alphaCutoff != 0) {
+            data.alphaCutoff = static_cast<float>(gltfMaterial.alphaCutoff);
+        }
+
+        // Set alpha mode
+        if (gltfMaterial.alphaMode == "OPAQUE") {
+            material->setAlphaMode(Material::AlphaMode::Opaque);
+        } else if (gltfMaterial.alphaMode == "MASK") {
+            material->setAlphaMode(Material::AlphaMode::Mask);
+        } else if (gltfMaterial.alphaMode == "BLEND") {
+            material->setAlphaMode(Material::AlphaMode::Blend);
+        }
+
+        // Double sided
+        material->setDoubleSided(gltfMaterial.doubleSided);
+
+        // Assign textures
+        // Base color texture
+        if (gltfMaterial.values.find("baseColorTexture") != gltfMaterial.values.end()) {
+            int texIndex = gltfMaterial.values.at("baseColorTexture").TextureIndex();
+            if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                instance->setBaseColorTexture(loadCtx.textures[texIndex]);
+                VT_DEBUG("Material {} assigned baseColor texture {}", i, texIndex);
+            } else {
+                instance->setBaseColorTexture(loadCtx.defaultTexture);
+                VT_WARN("Material {} using default baseColor texture (invalid index {})", i, texIndex);
+            }
+        } else {
+            instance->setBaseColorTexture(loadCtx.defaultTexture);
+            VT_DEBUG("Material {} using default baseColor texture", i);
+        }
+
+        // Metallic-roughness texture
+        if (gltfMaterial.values.find("metallicRoughnessTexture") != gltfMaterial.values.end()) {
+            int texIndex = gltfMaterial.values.at("metallicRoughnessTexture").TextureIndex();
+            if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                instance->setMetallicRoughnessTexture(loadCtx.textures[texIndex]);
+                VT_DEBUG("Material {} assigned metallicRoughness texture {}", i, texIndex);
+            } else {
+                instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
+                VT_WARN("Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
+            }
+        } else {
+            instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
+            VT_DEBUG("Material {} using default metallicRoughness texture", i);
+        }
+
+        // Normal texture
+        if (gltfMaterial.normalTexture.index >= 0) {
+            int texIndex = gltfMaterial.normalTexture.index;
+            if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                instance->setNormalTexture(loadCtx.textures[texIndex]);
+                VT_DEBUG("Material {} assigned normal texture {}", i, texIndex);
+            } else {
+                instance->setNormalTexture(loadCtx.defaultTexture);
+                VT_WARN("Material {} using default normal texture (invalid index {})", i, texIndex);
+            }
+        } else {
+            instance->setNormalTexture(loadCtx.defaultTexture);
+            VT_DEBUG("Material {} using default normal texture", i);
+        }
+
+        // Occlusion texture
+        if (gltfMaterial.occlusionTexture.index >= 0) {
+            int texIndex = gltfMaterial.occlusionTexture.index;
+            if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                instance->setOcclusionTexture(loadCtx.textures[texIndex]);
+            } else {
+                instance->setOcclusionTexture(loadCtx.defaultTexture);
+            }
+        } else {
+            instance->setOcclusionTexture(loadCtx.defaultTexture);
+        }
+
+        // Emissive texture
+        if (gltfMaterial.emissiveTexture.index >= 0) {
+            int texIndex = gltfMaterial.emissiveTexture.index;
+            if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                instance->setEmissiveTexture(loadCtx.textures[texIndex]);
+            } else {
+                instance->setEmissiveTexture(loadCtx.defaultTexture);
+            }
+        } else {
+            instance->setEmissiveTexture(loadCtx.defaultTexture);
+        }
+
+        // Update descriptor set for all frames in flight
+        // Force dirty flag for each frame to ensure all get updated
+        for (uint32_t frame = 0; frame < 3; ++frame) {
+            instance->setDirty(true);  // Force dirty state for each frame
+            instance->updateDescriptorSet(frame);
+        }
+
+        // Generate unique material ID (combine file hash with material index for uniqueness)
+        // For now, use a simple scheme: high bits for file, low bits for material index
+        static uint32_t fileIdCounter = 0;
+        static eastl::hash_map<eastl::string, uint32_t> fileIdMap;
+
+        uint32_t fileId = 0;
+        auto it = fileIdMap.find(filePath);
+        if (it == fileIdMap.end()) {
+            fileId = ++fileIdCounter;
+            fileIdMap[filePath] = fileId;
+        } else {
+            fileId = it->second;
+        }
+
+        // Create unique material ID: fileId << 16 | materialIndex
+        uint32_t materialId = (fileId << 16) | static_cast<uint32_t>(i);
+
+        // Register material instance globally
+        loadCtx.renderer->registerMaterialInstance(materialId, instance);
+
+        loadCtx.materials[i] = instance;
+        loadCtx.materialIds.push_back(materialId);
+        VT_DEBUG("Loaded material {}: {} (id={})", i, gltfMaterial.name.c_str(), materialId);
+    }
+}
 
 Transform SceneLoader::extractTransform(const void* nodePtr) {
     const tinygltf::Node* gltfNode = static_cast<const tinygltf::Node*>(nodePtr);
