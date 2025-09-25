@@ -70,6 +70,10 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
 
     VT_INFO("Scene loaded successfully: {} nodes", scene->getNodeCount());
 
+    // Build BVH for the loaded scene
+    renderer->collectRenderables(*world);
+    renderer->buildSceneBVH(*world);
+
     return scene;
 }
 
@@ -215,6 +219,9 @@ void SceneLoader::loadNode(
             auto meshPtr = eastl::make_unique<Mesh>();
             meshPtr->create(loadCtx.vulkanContext, vertices, indices, subMeshes);
             world->emplace<MeshComponent>(entity, eastl::move(meshPtr));
+
+            // NOTE: World bounds will be updated after world transforms are computed
+            // Don't update bounds here since world transform hasn't been calculated yet
 
             VT_DEBUG("Created mesh component for node: {}", gltfNode->name.c_str());
 
@@ -511,6 +518,19 @@ Transform SceneLoader::extractTransform(const void* nodePtr) {
             transform.scale = glm::vec3(gltfNode->scale[0], gltfNode->scale[1], gltfNode->scale[2]);
         }
     }
+
+    // Check for very small scale values and normalize them to 1.0
+    if (transform.scale.x < 0.1f && transform.scale.x > 0.0f) {
+        float originalScale = transform.scale.x;
+        float scaleFactor = 1.0f / originalScale;
+        transform.scale = glm::vec3(1.0f);
+        VT_INFO("Normalized tiny scale ({:.3f}) to 1.0, vertices will appear {:.0f}x larger",
+                originalScale, scaleFactor);
+    }
+
+    VT_DEBUG("Final transform - Position: ({:.2f}, {:.2f}, {:.2f}), Scale: ({:.2f}, {:.2f}, {:.2f})",
+             transform.position.x, transform.position.y, transform.position.z,
+             transform.scale.x, transform.scale.y, transform.scale.z);
 
     return transform;
 }

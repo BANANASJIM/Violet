@@ -18,7 +18,7 @@ namespace violet {
 VioletApp::VioletApp() {
     assetBrowser = eastl::make_unique<AssetBrowserLayer>();
     viewport     = eastl::make_unique<ViewportLayer>();
-    sceneDebug   = eastl::make_unique<SceneDebugLayer>(&world);
+    sceneDebug   = eastl::make_unique<SceneDebugLayer>(&world, &renderer);
     compositeUI  = eastl::make_unique<CompositeUILayer>();
 
     viewport->setOnAssetDropped([this](const eastl::string& path) {
@@ -65,15 +65,18 @@ void VioletApp::createResources() {
             currentScene->updateWorldTransforms(world.getRegistry());
             VT_INFO("Scene loaded with {} nodes", currentScene->getNodeCount());
 
-            auto controllerView = world.view<CameraControllerComponent>();
-            for (auto entity : controllerView) {
-                auto& controllerComp = controllerView.get<CameraControllerComponent>(entity);
-                if (controllerComp.controller) {
-                    controllerComp.controller->setPosition(glm::vec3(0.0f, 0.0f, 3.0f));
-                    controllerComp.controller->setYaw(-90.0f);
-                    controllerComp.controller->setPitch(0.0f);
-                }
+            // Update world bounds for all MeshComponents after world transforms are computed
+            auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
+            for (auto [entity, transformComp, meshComp] : view.each()) {
+                meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                VT_DEBUG("Updated world bounds for entity {} - AABB min({:.2f}, {:.2f}, {:.2f}) max({:.2f}, {:.2f}, {:.2f})",
+                         static_cast<uint32_t>(entity),
+                         meshComp.worldBounds.min.x, meshComp.worldBounds.min.y, meshComp.worldBounds.min.z,
+                         meshComp.worldBounds.max.x, meshComp.worldBounds.max.y, meshComp.worldBounds.max.z);
             }
+
+            // Camera position and orientation are already set correctly in initializeScene()
+            // Don't override them here
         }
     } catch (const std::exception& e) {
         VT_WARN("Failed to load scene: {}", e.what());
@@ -96,23 +99,32 @@ void VioletApp::initializeScene() {
     int width, height;
     glfwGetFramebufferSize(getWindow(), &width, &height);
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    auto  camera      = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 0.1f, 50000.0f);
+    // Increase far plane to cover Sponza's huge range (~3600 units)
+    auto  camera      = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 1.0f, 5000.0f);
 
     auto& cameraComp    = world.addComponent<CameraComponent>(cameraEntity, eastl::move(camera));
     cameraComp.isActive = true;
 
     auto controller = eastl::make_unique<CameraController>(cameraComp.camera.get());
-    controller->setPosition(glm::vec3(0.0f, 15.0f, 30.0f));
-    controller->setMovementSpeed(20.0f);
+    // Position camera at better distance for Sponza scene viewing
+    // Sponza extends from Y:-126 to Y:1347, so position at Y:200 for good overview
+    controller->setPosition(glm::vec3(0.0f, 200.0f, 400.0f));
+    controller->setMovementSpeed(50.0f);  // Faster movement for large scene
     controller->setSensitivity(0.002f);
 
-    glm::vec3 camPos = glm::vec3(0.0f, 15.0f, 30.0f);
-    glm::vec3 direction = glm::normalize(-camPos);
+    // Look towards scene center (approximately Y:100 based on AABB analysis)
+    glm::vec3 camPos = glm::vec3(0.0f, 200.0f, 800.0f);
+    glm::vec3 sceneCenter = glm::vec3(0.0f, 100.0f, 0.0f);
+    glm::vec3 direction = glm::normalize(sceneCenter - camPos);
 
     float yaw = glm::degrees(atan2(direction.z, direction.x));
     float pitch = glm::degrees(asin(direction.y));
     controller->setYaw(yaw);
     controller->setPitch(pitch);
+
+    VT_INFO("Camera positioned at ({:.1f}, {:.1f}, {:.1f}) looking towards scene center",
+            camPos.x, camPos.y, camPos.z);
+    VT_INFO("Camera yaw: {:.1f}°, pitch: {:.1f}°", yaw, pitch);
 
     auto& controllerComp = world.addComponent<CameraControllerComponent>(cameraEntity, eastl::move(controller));
 }
@@ -155,6 +167,9 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 if (currentScene) {
                     currentScene->clear();
                 }
+
+                // Clear old renderables before loading new scene
+                renderer.clearRenderables();
 
                 currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
                 currentScene->updateWorldTransforms(world.getRegistry());

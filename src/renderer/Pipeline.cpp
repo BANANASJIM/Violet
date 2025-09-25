@@ -12,6 +12,11 @@
 namespace violet {
 
 void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDescriptorSet, Material* material, const eastl::string& vertPath, const eastl::string& fragPath) {
+    PipelineConfig defaultConfig;
+    init(ctx, rp, globalDescriptorSet, material, vertPath, fragPath, defaultConfig);
+}
+
+void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDescriptorSet, Material* material, const eastl::string& vertPath, const eastl::string& fragPath, const PipelineConfig& config) {
     context = ctx;
 
     auto vertShaderCode = readFile(vertPath);
@@ -42,7 +47,7 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
-    inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+    inputAssembly.topology = config.topology;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     vk::PipelineViewportStateCreateInfo viewportState;
@@ -52,9 +57,9 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
     vk::PipelineRasterizationStateCreateInfo rasterizer;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = vk::PolygonMode::eFill;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = vk::CullModeFlagBits::eNone;
+    rasterizer.polygonMode = config.polygonMode;
+    rasterizer.lineWidth = config.lineWidth;
+    rasterizer.cullMode = config.cullMode;
     rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -64,7 +69,15 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
 
     vk::PipelineColorBlendAttachmentState colorBlendAttachment;
     colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    colorBlendAttachment.blendEnable = VK_FALSE;
+    colorBlendAttachment.blendEnable = config.enableBlending;
+    if (config.enableBlending) {
+        colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+        colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+        colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+        colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
+        colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+    }
 
     vk::PipelineColorBlendStateCreateInfo colorBlending;
     colorBlending.logicOpEnable = VK_FALSE;
@@ -81,8 +94,8 @@ void Pipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDes
     dynamicState.pDynamicStates = dynamicStates.data();
 
     vk::PipelineDepthStencilStateCreateInfo depthStencil;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthTestEnable = config.enableDepthTest;
+    depthStencil.depthWriteEnable = config.enableDepthWrite;
     depthStencil.depthCompareOp = vk::CompareOp::eLess;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;

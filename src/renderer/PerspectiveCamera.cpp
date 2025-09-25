@@ -26,12 +26,14 @@ glm::mat4 PerspectiveCamera::getProjectionMatrix() const {
 void PerspectiveCamera::updateViewMatrix() {
     viewMatrix = glm::lookAt(position, target, up);
     viewDirty = false;
+    markFrustumDirty();
 }
 
 void PerspectiveCamera::updateProjectionMatrix() {
     projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
     projectionMatrix[1][1] *= -1;
     projectionDirty = false;
+    markFrustumDirty();
 }
 
 }

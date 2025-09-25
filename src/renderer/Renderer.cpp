@@ -26,9 +26,11 @@ void Renderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight)
     renderPass        = rp;
     maxFramesInFlight = framesInFlight;
     globalUniforms.init(context, maxFramesInFlight);
+    debugRenderer.init(context, renderPass, &globalUniforms, maxFramesInFlight);
 }
 
 void Renderer::cleanup() {
+    debugRenderer.cleanup();
     globalUniforms.cleanup();
     materialInstances.clear();
     materials.clear();
@@ -63,19 +65,20 @@ void Renderer::collectFromEntity(entt::entity entity, entt::registry& world) {
     Mesh*     mesh           = meshComp->mesh.get();
     glm::mat4 worldTransform = transform->world.getMatrix();
 
+
+    // Update world bounds if dirty
+    if (meshComp->dirty || transform->dirty) {
+        meshComp->updateWorldBounds(worldTransform);
+    }
+
     const auto& subMeshes = mesh->getSubMeshes();
 
 
     for (size_t i = 0; i < subMeshes.size(); ++i) {
         const SubMesh& subMesh = subMeshes[i];
         if (!subMesh.isValid()) {
-            violet::Log::warn(
-                "Renderer",
-                "Entity {} submesh {} is invalid (indexCount={})",
-                static_cast<uint32_t>(entity),
-                i,
-                subMesh.indexCount
-            );
+            VT_WARN("Entity {} submesh {} is invalid (indexCount={})",
+                static_cast<uint32_t>(entity), i, subMesh.indexCount);
             continue;
         }
 
@@ -121,13 +124,220 @@ void Renderer::setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& 
     commandBuffer.setScissor(0, 1, &scissor);
 }
 
+void Renderer::buildSceneBVH(entt::registry& world) {
+    // Build BVH from renderables
+    renderableBounds.clear();
+    renderableBounds.reserve(renderables.size());
+
+    // Force update all world bounds before building BVH
+    for (size_t i = 0; i < renderables.size(); i++) {
+        const auto& renderable = renderables[i];
+        if (renderable.mesh) {
+            auto* meshComp = world.try_get<MeshComponent>(renderable.entity);
+            if (meshComp) {
+                // Force update world bounds with current transform
+                meshComp->updateWorldBounds(renderable.worldTransform);
+
+                // Use SubMesh-specific bounds instead of entire mesh bounds
+                uint32_t subMeshIndex = renderable.subMeshIndex;
+                if (subMeshIndex < meshComp->getSubMeshCount()) {
+                    renderableBounds.push_back(meshComp->getSubMeshWorldBounds(subMeshIndex));
+
+                    // Debug logging for first few renderables
+                    if (i < 5) {
+                        const auto& bounds = meshComp->getSubMeshWorldBounds(subMeshIndex);
+                        VT_INFO("Renderable {} SubMesh {} AABB: min({:.2f}, {:.2f}, {:.2f}) max({:.2f}, {:.2f}, {:.2f})",
+                                i, subMeshIndex, bounds.min.x, bounds.min.y, bounds.min.z,
+                                bounds.max.x, bounds.max.y, bounds.max.z);
+                    }
+                } else {
+                    VT_WARN("Invalid subMeshIndex {} for renderable {}", subMeshIndex, i);
+                    // Fallback to legacy bounds
+                    renderableBounds.push_back(meshComp->worldBounds);
+                }
+            } else {
+                // Fallback: transform local bounds - this shouldn't happen anymore
+                VT_WARN("No MeshComponent found for renderable {}", i);
+                renderableBounds.push_back(renderable.mesh->getLocalBounds().transform(renderable.worldTransform));
+            }
+        }
+    }
+
+    // Build BVH once for the scene
+    sceneBVH.build(renderableBounds);
+    VT_INFO("Scene BVH built with {} renderables", renderables.size());
+
+}
+
 void Renderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world) {
+
+    // Get camera frustum for culling
+    Camera* activeCamera = globalUniforms.findActiveCamera(world);
+    if (!activeCamera) {
+        return;
+    }
+
+    // Perform frustum culling
+    const Frustum& frustum = activeCamera->getFrustum();
+
+    // Debug: Log camera and frustum info
+    glm::vec3 camPos = activeCamera->getPosition();
+    glm::vec3 camTarget = activeCamera->getTarget();
+
+    // Get view-projection matrix for debugging
+    glm::mat4 viewMatrix = activeCamera->getViewMatrix();
+    glm::mat4 projMatrix = activeCamera->getProjectionMatrix();
+    glm::mat4 viewProjMatrix = projMatrix * viewMatrix;
+
+    // Log culling stats occasionally
+    static int frameCount = 0;
+    frameCount++;
+    bool shouldLog = (frameCount % 300 == 0);  // Log every ~5 seconds at 60fps
+
+    // Log camera info and frustum planes occasionally
+    if (shouldLog) {
+        VT_INFO("Camera: pos({:.1f}, {:.1f}, {:.1f}) target({:.1f}, {:.1f}, {:.1f})",
+                camPos.x, camPos.y, camPos.z, camTarget.x, camTarget.y, camTarget.z);
+
+        // Basic frustum culling summary (detailed debug removed)
+    }
+
+    visibleIndices.clear();
+
+    // Debug: Temporarily disable culling to test if it's the cause
+    static bool disableCulling = false;  // Re-enable culling
+    if (disableCulling) {
+        // Render all objects without culling
+        for (uint32_t i = 0; i < renderables.size(); ++i) {
+            visibleIndices.push_back(i);
+        }
+        VT_DEBUG("Culling DISABLED: rendering all {} objects", renderables.size());
+    } else {
+        VT_DEBUG("Frustum culling with camera at ({:.1f}, {:.1f}, {:.1f})",
+                activeCamera->getPosition().x, activeCamera->getPosition().y, activeCamera->getPosition().z);
+
+        // Test new BVH implementation every frame
+        VT_INFO("Building BVH with {} renderables", renderables.size());
+        sceneBVH.build(renderableBounds);
+
+        // Use new template-based BVH traversal
+        sceneBVH.traverse(
+            [&frustum](const AABB& bounds) -> bool {
+                return frustum.testAABB(bounds);
+            },
+            [&](uint32_t primitiveIndex) {
+                visibleIndices.push_back(primitiveIndex);
+            }
+        );
+
+        VT_INFO("BVH traversal found {} visible renderables", visibleIndices.size());
+
+        /* Original code - now using BVH instead
+        // Bypass BVH and test each renderable directly
+        for (uint32_t i = 0; i < renderables.size(); ++i) {
+            if (i >= renderableBounds.size()) {
+                VT_WARN("Missing bounds for renderable {}", i);
+                continue;
+            }
+
+            const AABB& bounds = renderableBounds[i];
+
+            // Use detailed debug testing for first 3 objects
+            bool visible = (i < 3) ?
+                frustum.testAABBDebug(bounds, i) :
+                frustum.testAABB(bounds);
+
+            if (visible) {
+                visibleIndices.push_back(i);
+            }
+        }
+        */
+
+        if (shouldLog) {
+            float cullingRate = renderables.empty() ? 0.0f
+                : (1.0f - float(visibleIndices.size()) / float(renderables.size())) * 100.0f;
+            VT_INFO("Culling stats: {}/{} renderables visible ({:.1f}% culled)",
+                    visibleIndices.size(), renderables.size(), cullingRate);
+
+            // Debug: Show which objects are visible and their positions
+            if (!visibleIndices.empty()) {
+                VT_INFO("Visible object indices: [{}{}]",
+                        visibleIndices.size() <= 10 ? "" : "showing first 10 of ",
+                        [&]() {
+                            eastl::string indices;
+                            for (size_t i = 0; i < eastl::min(size_t(10), visibleIndices.size()); ++i) {
+                                if (i > 0) indices += ", ";
+                                indices += std::to_string(visibleIndices[i]).c_str();
+                            }
+                            return indices;
+                        }());
+
+                // Show positions of first few visible objects and re-test them with debug info
+                for (size_t i = 0; i < eastl::min(size_t(3), visibleIndices.size()); ++i) {
+                    uint32_t idx = visibleIndices[i];
+                    if (idx < renderableBounds.size()) {
+                        const auto& bounds = renderableBounds[idx];
+                        glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
+                        glm::vec3 size = bounds.max - bounds.min;
+
+                        VT_INFO("  Visible obj {}: AABB center({:.1f}, {:.1f}, {:.1f}) size({:.1f}, {:.1f}, {:.1f})",
+                                idx, center.x, center.y, center.z, size.x, size.y, size.z);
+
+                        // Distance from camera
+                        float distance = glm::length(center - camPos);
+                        VT_INFO("    Distance from camera: {:.1f} units", distance);
+
+                        // Re-test with debug info
+                        VT_INFO("    Re-testing with detailed frustum check:");
+                        bool passes = frustum.testAABBDebug(bounds, static_cast<int>(i));
+                        VT_INFO("    Final result: {}", passes ? "SHOULD BE VISIBLE" : "SHOULD BE CULLED");
+                    }
+                }
+            }
+
+            // Debug: Check for duplicate indices in BVH traversal
+            eastl::vector<uint32_t> sortedIndices = visibleIndices;
+            std::sort(sortedIndices.begin(), sortedIndices.end());
+            auto duplicateEnd = eastl::unique(sortedIndices.begin(), sortedIndices.end());
+            uint32_t uniqueCount = static_cast<uint32_t>(duplicateEnd - sortedIndices.begin());
+
+            if (uniqueCount != visibleIndices.size()) {
+                VT_WARN("BVH returned {} visible indices but only {} unique - {} duplicates!",
+                        visibleIndices.size(), uniqueCount, visibleIndices.size() - uniqueCount);
+
+                // Show first few duplicates
+                eastl::hash_map<uint32_t, uint32_t> indexCount;
+                for (uint32_t idx : visibleIndices) {
+                    indexCount[idx]++;
+                }
+
+                int duplicatesShown = 0;
+                for (const auto& pair : indexCount) {
+                    if (pair.second > 1 && duplicatesShown < 5) {
+                        VT_WARN("  Index {} appears {} times", pair.first, pair.second);
+                        duplicatesShown++;
+                    }
+                }
+            }
+        }
+    }
+
     Material* currentMaterial = nullptr;
     Mesh*     currentMesh     = nullptr;
     uint32_t  drawCallCount   = 0;
 
-    for (const auto& renderable : renderables) {
+    // Only render visible renderables
+    uint32_t skippedCount = 0;
+    uint32_t drawnCount = 0;
+
+    for (uint32_t idx : visibleIndices) {
+        if (idx >= renderables.size()) {
+            skippedCount++;
+            continue;
+        }
+        const auto& renderable = renderables[idx];
         if (!renderable.visible || !renderable.mesh) {
+            skippedCount++;
             continue;
         }
 
@@ -215,6 +425,53 @@ void Renderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
         const SubMesh& subMesh = currentMesh->getSubMesh(renderable.subMeshIndex);
         commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
         drawCallCount++;
+        drawnCount++;
+    }
+
+    // Log rendering statistics
+    static int renderFrameCount = 0;
+    renderFrameCount++;
+    if (renderFrameCount % 300 == 0) {  // Log every ~5 seconds
+        VT_INFO("Rendering stats: {}/{} visible objects processed, {} drawn, {} skipped, {} draw calls",
+                drawnCount + skippedCount, visibleIndices.size(), drawnCount, skippedCount, drawCallCount);
+    }
+
+    // Debug rendering (after main scene rendering)
+    if (debugRenderer.isEnabled()) {
+        if (debugRenderer.showFrustum()) {
+            debugRenderer.renderFrustum(commandBuffer, frameIndex, frustum);
+        }
+
+        if (debugRenderer.showAABBs()) {
+            // Collect SubMesh AABBs and visibility info
+            eastl::vector<AABB> aabbs;
+            eastl::vector<bool> visibility;
+            aabbs.reserve(renderables.size());
+            visibility.reserve(renderables.size());
+
+            for (size_t i = 0; i < renderables.size(); ++i) {
+                const auto& renderable = renderables[i];
+                if (renderable.mesh) {
+                    auto* meshComp = world.try_get<MeshComponent>(renderable.entity);
+                    if (meshComp) {
+                        // Use SubMesh-specific AABB instead of entire mesh AABB
+                        uint32_t subMeshIndex = renderable.subMeshIndex;
+                        if (subMeshIndex < meshComp->getSubMeshCount()) {
+                            aabbs.push_back(meshComp->getSubMeshWorldBounds(subMeshIndex));
+                        } else {
+                            // Fallback to legacy bounds if something is wrong
+                            aabbs.push_back(meshComp->worldBounds);
+                        }
+
+                        // Check if this renderable index is in visibleIndices
+                        bool isVisible = eastl::find(visibleIndices.begin(), visibleIndices.end(), i) != visibleIndices.end();
+                        visibility.push_back(isVisible);
+                    }
+                }
+            }
+
+            debugRenderer.renderAABBs(commandBuffer, frameIndex, aabbs, visibility);
+        }
     }
 }
 
@@ -375,12 +632,14 @@ Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
 void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex) {
     Camera* activeCamera = findActiveCamera(world);
     if (!activeCamera) {
+        VT_WARN("No active camera found!");
         return;
     }
 
     cachedUBO.view      = activeCamera->getViewMatrix();
     cachedUBO.proj      = activeCamera->getProjectionMatrix();
     cachedUBO.cameraPos = activeCamera->getPosition();
+
 
     uniformBuffers[frameIndex]->update(&cachedUBO, sizeof(cachedUBO));
     // REMOVED: descriptorSet->updateBuffer() - This was causing the UBO data to be lost!

@@ -11,13 +11,24 @@ class RenderPass;
 class DescriptorSet;
 class Material;
 
+struct PipelineConfig {
+    vk::PrimitiveTopology topology = vk::PrimitiveTopology::eTriangleList;
+    vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
+    vk::CullModeFlagBits cullMode = vk::CullModeFlagBits::eBack;
+    float lineWidth = 1.0f;
+    bool enableDepthTest = true;
+    bool enableDepthWrite = true;
+    bool enableBlending = false;
+};
+
 class Pipeline {
 public:
     void init(VulkanContext* context, RenderPass* renderPass, DescriptorSet* globalDescriptorSet, Material* material, const eastl::string& vertPath, const eastl::string& fragPath);
+    void init(VulkanContext* context, RenderPass* renderPass, DescriptorSet* globalDescriptorSet, Material* material, const eastl::string& vertPath, const eastl::string& fragPath, const PipelineConfig& config);
     void cleanup();
 
     vk::Pipeline getPipeline() const { return *graphicsPipeline; }
-    vk::PipelineLayout getLayout() const { return *pipelineLayout; }
+    vk::PipelineLayout getPipelineLayout() const { return *pipelineLayout; }
 
     void bind(vk::CommandBuffer commandBuffer);
 

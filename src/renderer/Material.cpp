@@ -94,7 +94,7 @@ void Material::cleanup() {
 }
 
 vk::PipelineLayout Material::getPipelineLayout() const {
-    return pipeline ? pipeline->getLayout() : vk::PipelineLayout{};
+    return pipeline ? pipeline->getPipelineLayout() : vk::PipelineLayout{};
 }
 
 vk::DescriptorSetLayout Material::getDescriptorSetLayout() const {

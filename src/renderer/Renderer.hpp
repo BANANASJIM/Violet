@@ -2,27 +2,30 @@
 
 #include <vulkan/vulkan.hpp>
 
-#include <EASTL/unique_ptr.h>
+#include <glm/glm.hpp>
+
 #include <EASTL/hash_map.h>
+#include <EASTL/string.h>
+#include <EASTL/unique_ptr.h>
 #include <EASTL/vector.h>
 
 #include <entt/entt.hpp>
-#include <glm/glm.hpp>
-#include <EASTL/string.h>
 
-#include "renderer/Renderable.hpp"
 #include "renderer/DescriptorSet.hpp"
-#include "renderer/UniformBuffer.hpp"
-#include "renderer/Texture.hpp"
 #include "renderer/Material.hpp"
+#include "renderer/Renderable.hpp"
+#include "renderer/Texture.hpp"
+#include "renderer/UniformBuffer.hpp"
+#include "renderer/DebugRenderer.hpp"
+#include "acceleration/BVH.hpp"
 
 namespace violet {
 
 // Descriptor Set and Binding 约定常量
-constexpr uint32_t GLOBAL_SET = 0;    // set = 0: 全局数据(相机、光照)
-constexpr uint32_t MATERIAL_SET = 1;  // set = 1: 材质数据(纹理、材质参数)
+constexpr uint32_t GLOBAL_SET   = 0; // set = 0: 全局数据(相机、光照)
+constexpr uint32_t MATERIAL_SET = 1; // set = 1: 材质数据(纹理、材质参数)
 
-constexpr uint32_t CAMERA_UBO_BINDING = 0;        // Global set binding 0: 相机变换矩阵
+constexpr uint32_t CAMERA_UBO_BINDING         = 0; // Global set binding 0: 相机变换矩阵
 constexpr uint32_t BASE_COLOR_TEXTURE_BINDING = 0; // Material set binding 0: 基础颜色纹理
 
 class VulkanContext;
@@ -30,11 +33,6 @@ class Pipeline;
 class RenderPass;
 class Camera;
 
-struct GlobalUBO {
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
-    alignas(16) glm::vec3 cameraPos;
-};
 
 struct PushConstantData {
     glm::mat4 model;
@@ -43,18 +41,22 @@ struct PushConstantData {
 class GlobalUniforms {
 public:
     ~GlobalUniforms();
-    void init(VulkanContext* context, uint32_t maxFramesInFlight);
-    void cleanup();
-    void update(entt::registry& world, uint32_t frameIndex);
+    void           init(VulkanContext* context, uint32_t maxFramesInFlight);
+    void           cleanup();
+    void           update(entt::registry& world, uint32_t frameIndex);
     DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
+    Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
 
 private:
-    Camera* findActiveCamera(entt::registry& world);
 
-    VulkanContext* context = nullptr;
-    eastl::unique_ptr<DescriptorSet> descriptorSet;
+    VulkanContext*                                  context = nullptr;
+    eastl::unique_ptr<DescriptorSet>                descriptorSet;
     eastl::vector<eastl::unique_ptr<UniformBuffer>> uniformBuffers;
-    GlobalUBO cachedUBO{};
+    struct GlobalUBO {
+        alignas(16) glm::mat4 view;
+        alignas(16) glm::mat4 proj;
+        alignas(16) glm::vec3 cameraPos;
+    } cachedUBO;
 };
 
 class Renderer {
@@ -78,8 +80,12 @@ public:
 
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
 
-    Material*         createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader);
-    Material*         createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType);
+    Material* createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader);
+    Material* createMaterial(
+        const eastl::string& vertexShader,
+        const eastl::string& fragmentShader,
+        DescriptorSetType    materialType
+    );
     MaterialInstance* createMaterialInstance(Material* material);
     MaterialInstance* createPBRMaterialInstance(Material* material);
     MaterialInstance* createUnlitMaterialInstance(Material* material);
@@ -94,16 +100,23 @@ public:
     void                             clearRenderables() { renderables.clear(); }
     const eastl::vector<Renderable>& getRenderables() const { return renderables; }
 
+    // BVH management
+    void buildSceneBVH(entt::registry& world);
+
+    // Debug rendering
+    DebugRenderer& getDebugRenderer() { return debugRenderer; }
+
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
 
-    VulkanContext* context    = nullptr;
-    RenderPass*    renderPass = nullptr;
+    VulkanContext* context           = nullptr;
+    RenderPass*    renderPass        = nullptr;
     uint32_t       maxFramesInFlight = 0;
 
     GlobalUniforms globalUniforms;
 
     eastl::vector<Renderable>                          renderables;
+    eastl::vector<AABB>                                renderableBounds;  // Bounds for each renderable
     eastl::vector<eastl::unique_ptr<Material>>         materials;
     eastl::vector<eastl::unique_ptr<MaterialInstance>> materialInstances;
     eastl::vector<eastl::unique_ptr<Texture>>          textures;
@@ -112,6 +125,13 @@ private:
     eastl::hash_map<uint32_t, MaterialInstance*> globalMaterialIndex;
 
     eastl::hash_map<entt::entity, eastl::vector<uint32_t>> renderableCache;
+
+    // BVH for frustum culling
+    BVH sceneBVH;
+    eastl::vector<uint32_t> visibleIndices;
+
+    // Debug rendering
+    DebugRenderer debugRenderer;
 };
 
 } // namespace violet

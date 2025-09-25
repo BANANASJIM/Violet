@@ -12,10 +12,10 @@ public:
     glm::mat4 getViewMatrix() const override;
     glm::mat4 getProjectionMatrix() const override;
 
-    void setFOV(float fov) { this->fov = fov; projectionDirty = true; }
-    void setAspectRatio(float aspectRatio) { this->aspectRatio = aspectRatio; projectionDirty = true; }
-    void setNearPlane(float nearPlane) { this->nearPlane = nearPlane; projectionDirty = true; }
-    void setFarPlane(float farPlane) { this->farPlane = farPlane; projectionDirty = true; }
+    void setFOV(float fov) { this->fov = fov; projectionDirty = true; markFrustumDirty(); }
+    void setAspectRatio(float aspectRatio) { this->aspectRatio = aspectRatio; projectionDirty = true; markFrustumDirty(); }
+    void setNearPlane(float nearPlane) { this->nearPlane = nearPlane; projectionDirty = true; markFrustumDirty(); }
+    void setFarPlane(float farPlane) { this->farPlane = farPlane; projectionDirty = true; markFrustumDirty(); }
 
     float getFOV() const { return fov; }
     float getAspectRatio() const { return aspectRatio; }

@@ -1,10 +1,14 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform GlobalUBO {
-    mat4 model;
     mat4 view;
     mat4 proj;
+    vec3 cameraPos;
 } global;
+
+layout(push_constant) uniform PushConstants {
+    mat4 model;
+} push;
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -17,17 +21,22 @@ layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragTangent;
 layout(location = 4) out vec3 fragBitangent;
+layout(location = 5) out vec3 fragViewPos;
 
 void main() {
-    vec4 worldPos = global.model * vec4(inPosition, 1.0);
+    vec4 worldPos = push.model * vec4(inPosition, 1.0);
     fragPos = worldPos.xyz;
 
-    mat3 normalMatrix = transpose(inverse(mat3(global.model)));
+    // Calculate view space position for lighting
+    vec4 viewPos = global.view * worldPos;
+    fragViewPos = viewPos.xyz;
+
+    mat3 normalMatrix = transpose(inverse(mat3(push.model)));
     fragNormal = normalize(normalMatrix * inNormal);
     fragTangent = normalize(normalMatrix * inTangent.xyz);
     fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
 
     fragTexCoord = inTexCoord;
 
-    gl_Position = global.proj * global.view * worldPos;
+    gl_Position = global.proj * viewPos;
 }
