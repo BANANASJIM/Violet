@@ -9,12 +9,15 @@
 
 namespace violet {
 
+class Scene;
+
 class ForwardRenderer;
 
 class SceneDebugLayer : public UILayer {
 public:
-    SceneDebugLayer(World* world) : world(world), renderer(nullptr) {}
-    SceneDebugLayer(World* world, ForwardRenderer* renderer) : world(world), renderer(renderer) {}
+    SceneDebugLayer(World* world) : world(world), renderer(nullptr), scene(nullptr) {}
+    SceneDebugLayer(World* world, ForwardRenderer* renderer) : world(world), renderer(renderer), scene(nullptr) {}
+    SceneDebugLayer(World* world, ForwardRenderer* renderer, Scene* scene) : world(world), renderer(renderer), scene(scene) {}
     ~SceneDebugLayer();
 
     void onAttach(VulkanContext* context, GLFWwindow* window) override;
@@ -24,14 +27,24 @@ public:
     void shutdown();
     void onImGuiRender() override;
 
+    void setScene(Scene* newScene) { scene = newScene; }
+
 private:
     World* world;
     ForwardRenderer* renderer;
+    Scene* scene;
 
     // Object selection and gizmo members
     entt::entity selectedEntity = entt::null;
-    int gizmoOperation = 7; // ImGuizmo::TRANSLATE
+    int gizmoOperation = 7; // ImGuizmo::TRANSLATE (7)
     bool enableGizmo = true;
+    int gizmoMode = 0; // ImGuizmo::WORLD (0), ImGuizmo::LOCAL (1)
+
+    // Snapping settings
+    bool enableSnap = false;
+    float snapTranslation = 0.5f;  // Translation snap in world units
+    float snapRotation = 15.0f;    // Rotation snap in degrees
+    float snapScale = 0.1f;        // Scale snap increment
 
     // Ray debugging members
     bool showRay = false;

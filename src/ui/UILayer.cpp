@@ -2,6 +2,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
+#include <ImGuizmo.h>
 #include <GLFW/glfw3.h>
 
 namespace violet {
@@ -26,6 +27,9 @@ void UILayer::beginFrame() {
     }
 
     ImGui::NewFrame();
+
+    // Initialize ImGuizmo for this frame
+    ImGuizmo::BeginFrame();
 }
 
 void UILayer::endFrame(vk::CommandBuffer commandBuffer) {

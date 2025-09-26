@@ -7,6 +7,8 @@
 #include "renderer/ForwardRenderer.hpp"
 #include "ecs/Components.hpp"
 #include "math/Ray.hpp"
+#include "scene/Scene.hpp"
+#include "scene/Node.hpp"
 
 namespace violet {
 
@@ -72,11 +74,7 @@ void SceneDebugLayer::onImGuiRender() {
     if (renderer && ImGui::CollapsingHeader("Debug Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
         auto& debugRenderer = renderer->getDebugRenderer();
 
-        // Enable debug rendering by default for initial testing
-        if (!debugRenderer.isEnabled()) {
-            debugRenderer.setEnabled(true);
-            debugRenderer.setShowAABBs(true);  // Show AABBs by default
-        }
+        // Note: Debug rendering state is now controlled only by user interaction
 
         bool debugEnabled = debugRenderer.isEnabled();
         if (ImGui::Checkbox("Enable Debug Rendering", &debugEnabled)) {
@@ -144,35 +142,112 @@ void SceneDebugLayer::onImGuiRender() {
         }
     }
 
-    if (ImGui::CollapsingHeader("Entities", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::BeginTable("EntityTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("ID");
-            ImGui::TableSetupColumn("World Position");
-            ImGui::TableSetupColumn("Local Position");
-            ImGui::TableSetupColumn("Scale");
-            ImGui::TableHeadersRow();
+    if (ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (scene) {
+            // Show hierarchical tree view of scene nodes
+            ImGui::Text("Scene Nodes: %zu", scene->getNodeCount());
+            ImGui::Separator();
 
-            auto transformView = world->view<TransformComponent>();
-            for (auto entity : transformView) {
-                auto& transform = transformView.get<TransformComponent>(entity);
+            // Helper lambda to recursively render tree nodes
+            auto renderNodeTree = [&](uint32_t nodeId, auto& self) -> void {
+                const Node* node = scene->getNode(nodeId);
+                if (!node) return;
 
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("%u", static_cast<uint32_t>(entity));
+                ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+                if (!node->hasChildren()) {
+                    nodeFlags |= ImGuiTreeNodeFlags_Leaf;
+                }
+                if (node->entity == selectedEntity) {
+                    nodeFlags |= ImGuiTreeNodeFlags_Selected;
+                }
 
-                ImGui::TableNextColumn();
-                glm::vec3 worldPos = transform.world.position;
-                ImGui::Text("%.1f, %.1f, %.1f", worldPos.x, worldPos.y, worldPos.z);
+                eastl::string nodeLabel = node->name.empty() ? "Unnamed" : node->name;
+                nodeLabel += " (ID: ";
+                nodeLabel += std::to_string(nodeId).c_str();
+                nodeLabel += ")";
 
-                ImGui::TableNextColumn();
-                glm::vec3 localPos = transform.local.position;
-                ImGui::Text("%.1f, %.1f, %.1f", localPos.x, localPos.y, localPos.z);
+                bool nodeOpen = ImGui::TreeNodeEx(nodeLabel.c_str(), nodeFlags);
 
-                ImGui::TableNextColumn();
-                glm::vec3 scale = transform.local.scale;
-                ImGui::Text("%.1f, %.1f, %.1f", scale.x, scale.y, scale.z);
+                // Handle node selection
+                if (ImGui::IsItemClicked() && node->entity != entt::null) {
+                    selectedEntity = node->entity;
+                    VT_INFO("Selected entity {} from hierarchy", static_cast<uint32_t>(selectedEntity));
+                }
+
+                // Show entity info if available
+                if (node->entity != entt::null) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(Entity: %u)", static_cast<uint32_t>(node->entity));
+
+                    if (auto* transform = world->getRegistry().try_get<TransformComponent>(node->entity)) {
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::BeginTooltip();
+                            ImGui::Text("Local Position: (%.2f, %.2f, %.2f)",
+                                transform->local.position.x, transform->local.position.y, transform->local.position.z);
+                            ImGui::Text("World Position: (%.2f, %.2f, %.2f)",
+                                transform->world.position.x, transform->world.position.y, transform->world.position.z);
+                            ImGui::EndTooltip();
+                        }
+                    }
+                }
+
+                if (nodeOpen) {
+                    for (uint32_t childId : node->childrenIds) {
+                        self(childId, self);
+                    }
+                    ImGui::TreePop();
+                }
+            };
+
+            // Render root nodes
+            for (uint32_t rootId : scene->getRootNodes()) {
+                renderNodeTree(rootId, renderNodeTree);
             }
-            ImGui::EndTable();
+        } else {
+            ImGui::Text("No scene loaded - showing flat entity list");
+            ImGui::Separator();
+
+            // Fallback to flat entity table
+            if (ImGui::BeginTable("EntityTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("ID");
+                ImGui::TableSetupColumn("World Position");
+                ImGui::TableSetupColumn("Local Position");
+                ImGui::TableSetupColumn("Scale");
+                ImGui::TableHeadersRow();
+
+                auto transformView = world->view<TransformComponent>();
+                for (auto entity : transformView) {
+                    auto& transform = transformView.get<TransformComponent>(entity);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+
+                    // Highlight selected entity
+                    if (entity == selectedEntity) {
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(100, 150, 200, 100));
+                    }
+
+                    eastl::string entityLabel = std::to_string(static_cast<uint32_t>(entity)).c_str();
+                    if (ImGui::Selectable(entityLabel.c_str(),
+                                         entity == selectedEntity, ImGuiSelectableFlags_SpanAllColumns)) {
+                        selectedEntity = entity;
+                        VT_INFO("Selected entity {} from table", static_cast<uint32_t>(selectedEntity));
+                    }
+
+                    ImGui::TableNextColumn();
+                    glm::vec3 worldPos = transform.world.position;
+                    ImGui::Text("%.1f, %.1f, %.1f", worldPos.x, worldPos.y, worldPos.z);
+
+                    ImGui::TableNextColumn();
+                    glm::vec3 localPos = transform.local.position;
+                    ImGui::Text("%.1f, %.1f, %.1f", localPos.x, localPos.y, localPos.z);
+
+                    ImGui::TableNextColumn();
+                    glm::vec3 scale = transform.local.scale;
+                    ImGui::Text("%.1f, %.1f, %.1f", scale.x, scale.y, scale.z);
+                }
+                ImGui::EndTable();
+            }
         }
     }
 
@@ -226,13 +301,90 @@ void SceneDebugLayer::onImGuiRender() {
         if (selectedEntity != entt::null) {
             ImGui::Text("Selected Entity: %u", static_cast<uint32_t>(selectedEntity));
 
-            // Show entity information
+            // Show entity information with editable fields
             auto& registry = world->getRegistry();
             if (auto* transform = registry.try_get<TransformComponent>(selectedEntity)) {
-                ImGui::Text("Position: (%.2f, %.2f, %.2f)",
+                ImGui::Text("Transform Editing:");
+
+                // Position editing
+                glm::vec3 localPos = transform->local.position;
+                if (ImGui::DragFloat3("Position", &localPos.x, 0.1f, -1000.0f, 1000.0f, "%.2f")) {
+                    transform->local.position = localPos;
+                    transform->dirty = true;
+
+                    // Update hierarchy
+                    if (scene) {
+                        scene->updateWorldTransforms(world->getRegistry());
+                        // Update world bounds
+                        auto meshView = world->view<TransformComponent, MeshComponent>();
+                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                            if (transformComp.dirty) {
+                                meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                                transformComp.dirty = false;
+                            }
+                        }
+                    } else {
+                        transform->world = transform->local;
+                        transform->dirty = false;
+                        if (auto* meshComp = registry.try_get<MeshComponent>(selectedEntity)) {
+                            meshComp->updateWorldBounds(transform->world.getMatrix());
+                        }
+                    }
+                }
+
+                // Rotation editing (as Euler angles)
+                glm::vec3 eulerAngles = glm::degrees(glm::eulerAngles(transform->local.rotation));
+                if (ImGui::DragFloat3("Rotation", &eulerAngles.x, 1.0f, -180.0f, 180.0f, "%.1f°")) {
+                    transform->local.rotation = glm::quat(glm::radians(eulerAngles));
+                    transform->dirty = true;
+
+                    // Update hierarchy
+                    if (scene) {
+                        scene->updateWorldTransforms(world->getRegistry());
+                        auto meshView = world->view<TransformComponent, MeshComponent>();
+                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                            if (transformComp.dirty) {
+                                meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                                transformComp.dirty = false;
+                            }
+                        }
+                    } else {
+                        transform->world = transform->local;
+                        transform->dirty = false;
+                        if (auto* meshComp = registry.try_get<MeshComponent>(selectedEntity)) {
+                            meshComp->updateWorldBounds(transform->world.getMatrix());
+                        }
+                    }
+                }
+
+                // Scale editing
+                glm::vec3 localScale = transform->local.scale;
+                if (ImGui::DragFloat3("Scale", &localScale.x, 0.01f, 0.001f, 100.0f, "%.3f")) {
+                    transform->local.scale = localScale;
+                    transform->dirty = true;
+
+                    // Update hierarchy
+                    if (scene) {
+                        scene->updateWorldTransforms(world->getRegistry());
+                        auto meshView = world->view<TransformComponent, MeshComponent>();
+                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                            if (transformComp.dirty) {
+                                meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                                transformComp.dirty = false;
+                            }
+                        }
+                    } else {
+                        transform->world = transform->local;
+                        transform->dirty = false;
+                        if (auto* meshComp = registry.try_get<MeshComponent>(selectedEntity)) {
+                            meshComp->updateWorldBounds(transform->world.getMatrix());
+                        }
+                    }
+                }
+
+                ImGui::Separator();
+                ImGui::Text("World Position: (%.2f, %.2f, %.2f)",
                     transform->world.position.x, transform->world.position.y, transform->world.position.z);
-                ImGui::Text("Scale: (%.2f, %.2f, %.2f)",
-                    transform->local.scale.x, transform->local.scale.y, transform->local.scale.z);
             }
 
             // Gizmo operation selection
@@ -241,6 +393,26 @@ void SceneDebugLayer::onImGuiRender() {
             ImGui::RadioButton("Rotate", &gizmoOperation, ImGuizmo::ROTATE);
             ImGui::SameLine();
             ImGui::RadioButton("Scale", &gizmoOperation, ImGuizmo::SCALE);
+
+            ImGui::Separator();
+
+            // Coordinate system selection
+            ImGui::Text("Coordinate System:");
+            ImGui::RadioButton("World", &gizmoMode, ImGuizmo::WORLD);
+            ImGui::SameLine();
+            ImGui::RadioButton("Local", &gizmoMode, ImGuizmo::LOCAL);
+
+            ImGui::Separator();
+
+            // Snapping controls
+            ImGui::Checkbox("Enable Snapping", &enableSnap);
+            if (enableSnap) {
+                ImGui::Indent();
+                ImGui::SliderFloat("Translation", &snapTranslation, 0.1f, 5.0f, "%.1f units");
+                ImGui::SliderFloat("Rotation", &snapRotation, 1.0f, 90.0f, "%.0f degrees");
+                ImGui::SliderFloat("Scale", &snapScale, 0.01f, 1.0f, "%.2f");
+                ImGui::Unindent();
+            }
 
             if (ImGui::Button("Deselect")) {
                 selectedEntity = entt::null;
@@ -251,7 +423,7 @@ void SceneDebugLayer::onImGuiRender() {
             ImGui::Text("Left-click on objects in 3D scene to select");
         }
 
-        ImGui::Text("Hotkeys: T(translate) R(rotate) S(scale) ESC(deselect)");
+        ImGui::Text("Hotkeys: T(translate) R(rotate) E(scale) TAB(coord) CTRL(snap) ESC(deselect)");
 
         // Mouse status for debugging
         glm::vec2 mousePos = InputManager::getMousePosition();
@@ -319,27 +491,50 @@ bool SceneDebugLayer::onMousePressed(const MousePressedEvent& event) {
 bool SceneDebugLayer::onKeyPressed(const KeyPressedEvent& event) {
     VT_DEBUG("SceneDebugLayer::onKeyPressed() called - key: {}", event.key);
 
+    // Only handle gizmo hotkeys when gizmo is enabled and entity is selected
+    bool shouldHandleGizmoKeys = enableGizmo && selectedEntity != entt::null;
+
     // Handle gizmo hotkeys
     switch (event.key) {
         case GLFW_KEY_T:
-            gizmoOperation = ImGuizmo::TRANSLATE;
-            VT_INFO("Gizmo operation changed to TRANSLATE");
-            return true;
+            if (shouldHandleGizmoKeys) {
+                gizmoOperation = ImGuizmo::TRANSLATE;
+                VT_INFO("Gizmo operation changed to TRANSLATE");
+                return true;
+            }
+            break;
         case GLFW_KEY_R:
-            gizmoOperation = ImGuizmo::ROTATE;
-            VT_INFO("Gizmo operation changed to ROTATE");
-            return true;
-        case GLFW_KEY_S:
-            gizmoOperation = ImGuizmo::SCALE;
-            VT_INFO("Gizmo operation changed to SCALE");
-            return true;
+            if (shouldHandleGizmoKeys) {
+                gizmoOperation = ImGuizmo::ROTATE;
+                VT_INFO("Gizmo operation changed to ROTATE");
+                return true;
+            }
+            break;
+        case GLFW_KEY_E:
+            if (shouldHandleGizmoKeys) {
+                gizmoOperation = ImGuizmo::SCALE;
+                VT_INFO("Gizmo operation changed to SCALE");
+                return true;
+            }
+            break;
         case GLFW_KEY_ESCAPE:
             selectedEntity = entt::null;
             VT_INFO("Entity deselected");
             return true;
+        case GLFW_KEY_TAB:
+            gizmoMode = (gizmoMode == ImGuizmo::WORLD) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+            VT_INFO("Gizmo coordinate system changed to {}", (gizmoMode == ImGuizmo::WORLD) ? "WORLD" : "LOCAL");
+            return true;
+        case GLFW_KEY_LEFT_CONTROL:
+        case GLFW_KEY_RIGHT_CONTROL:
+            enableSnap = !enableSnap;
+            VT_INFO("Gizmo snapping {}", enableSnap ? "enabled" : "disabled");
+            return true;
         default:
             return false;  // Don't consume other keys
     }
+
+    return false;  // Default: don't consume the event
 }
 
 
@@ -443,7 +638,10 @@ void SceneDebugLayer::renderGizmo() {
     // Get selected entity's transform
     auto& registry = world->getRegistry();
     auto* transform = registry.try_get<TransformComponent>(selectedEntity);
-    if (!transform) return;
+    if (!transform) {
+        VT_WARN("Selected entity {} has no TransformComponent", static_cast<uint32_t>(selectedEntity));
+        return;
+    }
 
     // Find active camera
     auto cameraView = world->view<CameraComponent>();
@@ -456,26 +654,101 @@ void SceneDebugLayer::renderGizmo() {
         }
     }
 
-    if (!activeCamera) return;
+    if (!activeCamera) {
+        VT_WARN("No active camera found for gizmo rendering");
+        return;
+    }
 
-    // Set up ImGuizmo
+    // Create transparent overlay window for gizmo
     ImGuiIO& io = ImGui::GetIO();
-    ImGuizmo::SetDrawlist();  // Initialize ImGuizmo drawlist
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+
+    // Window flags for transparent overlay
+    ImGuiWindowFlags gizmoWindowFlags =
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoFocusOnAppearing;
+
+    // Check if we should allow mouse input (preview check)
+    // We need to call ImGuizmo functions after SetDrawlist, so we'll do a conditional setup
+    static bool wasOverGizmo = false;
+
+    // Only allow mouse input if we were over gizmo in the previous frame
+    // This prevents the chicken-and-egg problem with ImGuizmo::IsOver()
+    if (!wasOverGizmo) {
+        gizmoWindowFlags |= ImGuiWindowFlags_NoMouseInputs;
+    }
+
+    bool gizmoWindowOpen = true;
+    if (!ImGui::Begin("##GizmoOverlay", &gizmoWindowOpen, gizmoWindowFlags)) {
+        ImGui::End();
+        return;
+    }
+
+    // Set up ImGuizmo for this window
+    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
     ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
 
     glm::mat4 view = activeCamera->getViewMatrix();
     glm::mat4 proj = activeCamera->getProjectionMatrix();
 
+    // Fix Vulkan coordinate system for ImGuizmo
+    // ImGuizmo expects standard projection matrix, so undo Vulkan Y-flip
+    glm::mat4 gizmoProj = proj;
+    gizmoProj[1][1] *= -1.0f;  // Undo the Vulkan Y-axis flip
+
     // Get current transform matrix
     glm::mat4 matrix = transform->world.getMatrix();
 
-    // Manipulate transform
-    if (ImGuizmo::Manipulate(
+    // Log gizmo rendering attempt
+    VT_DEBUG("Rendering gizmo for entity {} at position ({:.2f}, {:.2f}, {:.2f})",
+        static_cast<uint32_t>(selectedEntity),
+        transform->world.position.x, transform->world.position.y, transform->world.position.z);
+    VT_DEBUG("Gizmo operation: {}, mode: {}", gizmoOperation, gizmoMode);
+
+    // Prepare snap values if snapping is enabled
+    float* snap = nullptr;
+    float snapValues[3] = {0.0f, 0.0f, 0.0f};
+    if (enableSnap) {
+        if (gizmoOperation == ImGuizmo::TRANSLATE) {
+            snapValues[0] = snapValues[1] = snapValues[2] = snapTranslation;
+        } else if (gizmoOperation == ImGuizmo::ROTATE) {
+            snapValues[0] = snapValues[1] = snapValues[2] = snapRotation;
+        } else if (gizmoOperation == ImGuizmo::SCALE) {
+            snapValues[0] = snapValues[1] = snapValues[2] = snapScale;
+        }
+        snap = snapValues;
+    }
+
+    // Manipulate transform using corrected projection matrix
+    bool gizmoUsed = ImGuizmo::Manipulate(
         glm::value_ptr(view),
-        glm::value_ptr(proj),
+        glm::value_ptr(gizmoProj),
         static_cast<ImGuizmo::OPERATION>(gizmoOperation),
-        ImGuizmo::WORLD,
-        glm::value_ptr(matrix))) {
+        static_cast<ImGuizmo::MODE>(gizmoMode),
+        glm::value_ptr(matrix),
+        nullptr, // deltaMatrix (not needed)
+        snap); // snap values
+
+    // Update gizmo state for next frame's mouse input decision
+    bool currentlyOverGizmo = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
+    if (currentlyOverGizmo != wasOverGizmo) {
+        VT_DEBUG("Gizmo mouse state changed - IsOver: {}, IsUsing: {}, WillCaptureMouse: {}",
+                 ImGuizmo::IsOver(), ImGuizmo::IsUsing(), currentlyOverGizmo);
+        wasOverGizmo = currentlyOverGizmo;
+    }
+
+    if (gizmoUsed) {
+        VT_DEBUG("Gizmo was manipulated for entity {}", static_cast<uint32_t>(selectedEntity));
 
         // Decompose matrix back to transform components
         glm::vec3 translation, rotation, scale;
@@ -485,13 +758,52 @@ void SceneDebugLayer::renderGizmo() {
             glm::value_ptr(rotation),
             glm::value_ptr(scale));
 
-        // Update transform (assuming local == world for simplicity)
+        // Update local transform
         transform->local.position = translation;
         transform->local.rotation = glm::quat(glm::radians(rotation));
         transform->local.scale = scale;
-        transform->world = transform->local;  // Simplified - no hierarchy
-        transform->dirty = true;  // Trigger BVH update
+        transform->dirty = true;  // Mark for update
+
+        // Update world transforms through hierarchy if scene is available
+        if (scene) {
+            scene->updateWorldTransforms(world->getRegistry());
+
+            // Update world bounds for all affected entities
+            auto meshView = world->view<TransformComponent, MeshComponent>();
+            for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                if (transformComp.dirty) {
+                    meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                    transformComp.dirty = false;
+                }
+            }
+        } else {
+            // Fallback to simple local == world if no scene hierarchy
+            transform->world = transform->local;
+            transform->dirty = false;
+
+            // Update bounds for this entity only
+            if (auto* meshComp = world->getRegistry().try_get<MeshComponent>(selectedEntity)) {
+                meshComp->updateWorldBounds(transform->world.getMatrix());
+            }
+        }
+
+        // Trigger BVH rebuild for spatial acceleration structures
+        // Mark the scene as dirty so the renderer rebuilds the BVH
+        if (renderer) {
+            renderer->markSceneDirty();
+            VT_DEBUG("Transform modified by gizmo - marked scene dirty for BVH rebuild");
+        }
+    } else {
+        // Check if gizmo is visible/active
+        static int frameCounter = 0;
+        if (++frameCounter % 60 == 0) {  // Log every 60 frames to avoid spam
+            VT_DEBUG("Gizmo not being manipulated - IsUsing: {}, IsOver: {}",
+                ImGuizmo::IsUsing(), ImGuizmo::IsOver());
+        }
     }
+
+    // Close the transparent overlay window
+    ImGui::End();
 }
 
 void SceneDebugLayer::renderSelectedEntityOutline() {

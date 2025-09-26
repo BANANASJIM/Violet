@@ -71,6 +71,9 @@ void VioletApp::createResources() {
                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
             }
 
+            // Give SceneDebugLayer access to the scene for proper hierarchy handling
+            sceneDebug->setScene(currentScene.get());
+
             // Camera position and orientation are already set correctly in initializeScene()
             // Don't override them here
         }

@@ -114,6 +114,9 @@ public:
     // Statistics access
     const RenderStats& getRenderStats() const { return renderStats; }
 
+    // Scene state management
+    void markSceneDirty() { sceneDirty = true; }
+
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
 

@@ -49,7 +49,7 @@ void ForwardRenderer::render(vk::CommandBuffer commandBuffer, uint32_t frameInde
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
     renderables.clear();
-    sceneDirty = false; // Reset scene dirty flag
+    // Don't reset sceneDirty here - it should only be reset after BVH rebuild
 
     auto view = world.view<TransformComponent, MeshComponent>();
 
@@ -194,7 +194,13 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     } else {
         // Only rebuild BVH when objects have moved or changed
         if (!bvhBuilt || sceneDirty) {
-            sceneBVH.build(renderableBounds);
+            // Rebuild bounds when scene is dirty
+            if (sceneDirty) {
+                buildSceneBVH(world);
+                VT_INFO("Scene was dirty - rebuilt BVH with {} renderables", renderables.size());
+            } else {
+                sceneBVH.build(renderableBounds);
+            }
             sceneDirty = false;
             bvhBuilt = true;
         }
