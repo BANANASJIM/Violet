@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BaseRenderer.hpp"
 #include <vulkan/vulkan.hpp>
 
 #include <glm/glm.hpp>
@@ -28,11 +29,15 @@ constexpr uint32_t MATERIAL_SET = 1; // set = 1: 材质数据(纹理、材质参
 constexpr uint32_t CAMERA_UBO_BINDING         = 0; // Global set binding 0: 相机变换矩阵
 constexpr uint32_t BASE_COLOR_TEXTURE_BINDING = 0; // Material set binding 0: 基础颜色纹理
 
-class VulkanContext;
-class Pipeline;
-class RenderPass;
 class Camera;
 
+// Rendering statistics structure
+struct RenderStats {
+    uint32_t totalRenderables = 0;
+    uint32_t visibleRenderables = 0;
+    uint32_t drawCalls = 0;
+    uint32_t skippedRenderables = 0;
+};
 
 struct PushConstantData {
     glm::mat4 model;
@@ -59,23 +64,23 @@ private:
     } cachedUBO;
 };
 
-class Renderer {
+class ForwardRenderer : public BaseRenderer {
 public:
-    Renderer() = default;
-    ~Renderer();
+    ForwardRenderer() = default;
+    ~ForwardRenderer() override;
 
-    Renderer(const Renderer&)            = delete;
-    Renderer& operator=(const Renderer&) = delete;
+    ForwardRenderer(const ForwardRenderer&)            = delete;
+    ForwardRenderer& operator=(const ForwardRenderer&) = delete;
 
-    Renderer(Renderer&&)            = delete;
-    Renderer& operator=(Renderer&&) = delete;
+    ForwardRenderer(ForwardRenderer&&)            = delete;
+    ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
-    void init(VulkanContext* context, RenderPass* renderPass, uint32_t maxFramesInFlight);
-    void cleanup();
+    void init(VulkanContext* context, RenderPass* renderPass, uint32_t maxFramesInFlight) override;
+    void cleanup() override;
+    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) override;
 
     void collectRenderables(entt::registry& world);
     void updateGlobalUniforms(entt::registry& world, uint32_t frameIndex);
-    void setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& extent);
     void renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world);
 
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
@@ -106,12 +111,11 @@ public:
     // Debug rendering
     DebugRenderer& getDebugRenderer() { return debugRenderer; }
 
+    // Statistics access
+    const RenderStats& getRenderStats() const { return renderStats; }
+
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
-
-    VulkanContext* context           = nullptr;
-    RenderPass*    renderPass        = nullptr;
-    uint32_t       maxFramesInFlight = 0;
 
     GlobalUniforms globalUniforms;
 
@@ -129,6 +133,11 @@ private:
     // BVH for frustum culling
     BVH sceneBVH;
     eastl::vector<uint32_t> visibleIndices;
+    bool sceneDirty = true;    // Track if any objects moved
+    bool bvhBuilt = false;     // Track if BVH built at least once
+
+    // Rendering statistics
+    RenderStats renderStats;
 
     // Debug rendering
     DebugRenderer debugRenderer;

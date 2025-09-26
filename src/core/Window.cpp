@@ -1,5 +1,5 @@
 #include "Window.hpp"
-#include "input/Input.hpp"
+#include "input/InputManager.hpp"
 #include <stdexcept>
 
 namespace violet {
@@ -23,13 +23,12 @@ Window::Window(int width, int height, const std::string& title) {
     // Enable VSync for 60fps
     glfwSwapInterval(1);
 
-    Input::initialize(window);
-    Input::setMouseCursor(true);
+    InputManager::initialize(window);
 }
 
 Window::~Window() {
     if (window) {
-        Input::shutdown();
+        InputManager::shutdown();
         glfwDestroyWindow(window);
         glfwTerminate();
     }

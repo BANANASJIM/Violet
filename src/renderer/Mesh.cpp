@@ -102,9 +102,6 @@ void Mesh::computeSubMeshBounds(const eastl::vector<Vertex>& vertices,
             }
         }
 
-        VT_DEBUG("SubMesh bounds: min({:.2f}, {:.2f}, {:.2f}) max({:.2f}, {:.2f}, {:.2f})",
-                 subMesh.localBounds.min.x, subMesh.localBounds.min.y, subMesh.localBounds.min.z,
-                 subMesh.localBounds.max.x, subMesh.localBounds.max.y, subMesh.localBounds.max.z);
     }
 }
 
@@ -124,9 +121,6 @@ void Mesh::computeSubMeshBounds(const eastl::vector<Vertex>& vertices,
             }
         }
 
-        VT_DEBUG("SubMesh bounds (16bit): min({:.2f}, {:.2f}, {:.2f}) max({:.2f}, {:.2f}, {:.2f})",
-                 subMesh.localBounds.min.x, subMesh.localBounds.min.y, subMesh.localBounds.min.z,
-                 subMesh.localBounds.max.x, subMesh.localBounds.max.y, subMesh.localBounds.max.z);
     }
 }
 

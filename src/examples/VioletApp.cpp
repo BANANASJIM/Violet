@@ -16,18 +16,18 @@
 namespace violet {
 
 VioletApp::VioletApp() {
-    assetBrowser = eastl::make_unique<AssetBrowserLayer>();
-    viewport     = eastl::make_unique<ViewportLayer>();
+    // assetBrowser = eastl::make_unique<AssetBrowserLayer>();
+    // viewport     = eastl::make_unique<ViewportLayer>();
     sceneDebug   = eastl::make_unique<SceneDebugLayer>(&world, &renderer);
     compositeUI  = eastl::make_unique<CompositeUILayer>();
 
-    viewport->setOnAssetDropped([this](const eastl::string& path) {
-        VT_INFO("Asset dropped: {}", path.c_str());
-        loadAsset(path);
-    });
+    // viewport->setOnAssetDropped([this](const eastl::string& path) {
+    //     VT_INFO("Asset dropped: {}", path.c_str());
+    //     loadAsset(path);
+    // });
 
-    compositeUI->addLayer(assetBrowser.get());
-    compositeUI->addLayer(viewport.get());
+    // compositeUI->addLayer(assetBrowser.get());
+    // compositeUI->addLayer(viewport.get());
     compositeUI->addLayer(sceneDebug.get());
 
     setUILayer(compositeUI.get());
@@ -43,8 +43,8 @@ VioletApp::~VioletApp() {
     // Clear unique_ptrs in correct order
     compositeUI.reset();
     sceneDebug.reset();
-    viewport.reset();
-    assetBrowser.reset();
+    // viewport.reset();
+    // assetBrowser.reset();
 
     cleanup();
 }
@@ -69,10 +69,6 @@ void VioletApp::createResources() {
             auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
             for (auto [entity, transformComp, meshComp] : view.each()) {
                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
-                VT_DEBUG("Updated world bounds for entity {} - AABB min({:.2f}, {:.2f}, {:.2f}) max({:.2f}, {:.2f}, {:.2f})",
-                         static_cast<uint32_t>(entity),
-                         meshComp.worldBounds.min.x, meshComp.worldBounds.min.y, meshComp.worldBounds.min.z,
-                         meshComp.worldBounds.max.x, meshComp.worldBounds.max.y, meshComp.worldBounds.max.z);
             }
 
             // Camera position and orientation are already set correctly in initializeScene()
@@ -174,14 +170,14 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
                 currentScene->updateWorldTransforms(world.getRegistry());
 
-                viewport->setStatusMessage("Scene loaded successfully");
+                // viewport->setStatusMessage("Scene loaded successfully");
                 VT_INFO("Scene loaded: {}", path.c_str());
             } catch (const std::exception& e) {
-                viewport->setStatusMessage("Failed to load model");
+                // viewport->setStatusMessage("Failed to load model");
                 VT_ERROR("Failed to load model {}: {}", path.c_str(), e.what());
             }
         } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
-            viewport->setStatusMessage("Texture loading not implemented");
+            // viewport->setStatusMessage("Texture loading not implemented");
         }
     }
 }

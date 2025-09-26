@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -80,6 +81,7 @@ struct MeshComponent {
     }
 
     const AABB& getSubMeshWorldBounds(size_t index) const {
+        assert(index < subMeshWorldBounds.size() && "SubMesh index out of bounds");
         return subMeshWorldBounds[index];
     }
 

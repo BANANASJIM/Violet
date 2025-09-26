@@ -1,5 +1,6 @@
 #include "App.hpp"
 #include "ui/UILayer.hpp"
+#include "input/InputManager.hpp"
 #include <imgui.h>
 #include <EASTL/array.h>
 #include <array>
@@ -13,7 +14,7 @@ App::App() : window(1280, 720, "Violet Engine") {
     });
 
     // Initialize input system with the window
-    Input::initialize(window.getHandle());
+    InputManager::initialize(window.getHandle());
 }
 
 App::~App() {
@@ -58,13 +59,15 @@ void App::mainLoop() {
         lastFrameTime = currentTime;
 
         window.pollEvents();
-        Input::update();
 
         update(deltaTime);
 
         if (uiLayer) {
             uiLayer->onUpdate(deltaTime);
         }
+
+        // Process input events
+        InputManager::processEvents();
 
         drawFrame();
     }

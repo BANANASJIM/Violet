@@ -1,14 +1,18 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <EASTL/unordered_map.h>
 
 #include "Camera.hpp"
+#include "core/events/EventDispatcher.hpp"
+#include "input/InputEvents.hpp"
 
 namespace violet {
 
 class CameraController {
 public:
     CameraController(Camera* camera);
+    ~CameraController();
 
     void update(float deltaTime);
 
@@ -32,10 +36,14 @@ public:
     float getPitch() const { return glm::degrees(pitch); }
 
 private:
-    void processKeyboard(float deltaTime);
-    void processMouse();
-    void processScroll();
     void updateCameraVectors();
+
+    bool onKeyPressed(const KeyPressedEvent& event);
+    bool onKeyReleased(const KeyReleasedEvent& event);
+    bool onMousePressed(const MousePressedEvent& event);
+    bool onMouseReleased(const MouseReleasedEvent& event);
+    bool onMouseMoved(const MouseMovedEvent& event);
+    bool onScroll(const ScrollEvent& event);
 
 private:
     Camera* camera;
@@ -55,6 +63,15 @@ private:
     static constexpr float maxPitch = glm::pi<float>() / 2.0f - 0.01f;
 
     bool firstUpdate = true;
+    bool rightMouseHeld = false;
+    eastl::unordered_map<int, bool> heldKeys;
+
+    EventDispatcher::HandlerId keyPressedHandler;
+    EventDispatcher::HandlerId keyReleasedHandler;
+    EventDispatcher::HandlerId mousePressedHandler;
+    EventDispatcher::HandlerId mouseReleasedHandler;
+    EventDispatcher::HandlerId mouseMovedHandler;
+    EventDispatcher::HandlerId scrollHandler;
 };
 
 } // namespace violet

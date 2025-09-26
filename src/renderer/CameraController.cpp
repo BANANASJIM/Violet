@@ -8,9 +8,6 @@
 #include <imgui.h>
 
 #include "core/Log.hpp"
-#include "input/Input.hpp"
-
-using MouseButton = violet::MouseButton;
 
 namespace violet {
 
@@ -19,47 +16,64 @@ CameraController::CameraController(Camera* camera) : camera(camera) {
         position = camera->getPosition();
         updateCameraVectors();
     }
+
+    keyPressedHandler = EventDispatcher::subscribe<KeyPressedEvent>([this](const KeyPressedEvent& event) {
+        return onKeyPressed(event);
+    });
+    keyReleasedHandler = EventDispatcher::subscribe<KeyReleasedEvent>([this](const KeyReleasedEvent& event) {
+        return onKeyReleased(event);
+    });
+    mousePressedHandler = EventDispatcher::subscribe<MousePressedEvent>([this](const MousePressedEvent& event) {
+        return onMousePressed(event);
+    });
+    mouseReleasedHandler = EventDispatcher::subscribe<MouseReleasedEvent>([this](const MouseReleasedEvent& event) {
+        return onMouseReleased(event);
+    });
+    mouseMovedHandler = EventDispatcher::subscribe<MouseMovedEvent>([this](const MouseMovedEvent& event) {
+        return onMouseMoved(event);
+    });
+    scrollHandler = EventDispatcher::subscribe<ScrollEvent>([this](const ScrollEvent& event) {
+        return onScroll(event);
+    });
+}
+
+CameraController::~CameraController() {
+    EventDispatcher::unsubscribe<KeyPressedEvent>(keyPressedHandler);
+    EventDispatcher::unsubscribe<KeyReleasedEvent>(keyReleasedHandler);
+    EventDispatcher::unsubscribe<MousePressedEvent>(mousePressedHandler);
+    EventDispatcher::unsubscribe<MouseReleasedEvent>(mouseReleasedHandler);
+    EventDispatcher::unsubscribe<MouseMovedEvent>(mouseMovedHandler);
+    EventDispatcher::unsubscribe<ScrollEvent>(scrollHandler);
 }
 
 void CameraController::update(float deltaTime) {
     if (!camera)
         return;
 
-    processScroll();
-    processMouse();
-    processKeyboard(deltaTime);
-}
-
-void CameraController::setPosition(const glm::vec3& pos) {
-    position = pos;
-    updateCameraVectors();
-}
-
-void CameraController::processKeyboard(float deltaTime) {
     float velocity = movementSpeed * deltaTime;
-    bool  moved    = false;
+    bool moved = false;
 
-    if (Input::isKeyHeld(GLFW_KEY_W)) {
+    if (heldKeys[GLFW_KEY_W]) {
         position += front * velocity;
         moved = true;
     }
-    if (Input::isKeyHeld(GLFW_KEY_S)) {
+    if (heldKeys[GLFW_KEY_S]) {
         position -= front * velocity;
         moved = true;
     }
-    if (Input::isKeyHeld(GLFW_KEY_A)) {
+    if (heldKeys[GLFW_KEY_A]) {
         position -= right * velocity;
         moved = true;
     }
-    if (Input::isKeyHeld(GLFW_KEY_D)) {
+    if (heldKeys[GLFW_KEY_D]) {
         position += right * velocity;
         moved = true;
     }
-    if (Input::isKeyHeld(GLFW_KEY_SPACE)) {
+    if (heldKeys[GLFW_KEY_SPACE]) {
         position += worldUp * velocity;
         moved = true;
     }
-    if (Input::isKeyHeld(GLFW_KEY_LEFT_SHIFT)) {
+    if (heldKeys[GLFW_KEY_LEFT_SHIFT]) {
         position -= worldUp * velocity;
         moved = true;
     }
@@ -69,57 +83,83 @@ void CameraController::processKeyboard(float deltaTime) {
     }
 }
 
-void CameraController::processMouse() {
-    // Don't process mouse input if ImGui wants it
+void CameraController::setPosition(const glm::vec3& pos) {
+    position = pos;
+    updateCameraVectors();
+}
+
+bool CameraController::onKeyPressed(const KeyPressedEvent& event) {
+    heldKeys[event.key] = true;
+    return false;
+}
+
+bool CameraController::onKeyReleased(const KeyReleasedEvent& event) {
+    heldKeys[event.key] = false;
+    return false;
+}
+
+bool CameraController::onMousePressed(const MousePressedEvent& event) {
     if (ImGui::GetIO().WantCaptureMouse) {
-        return;
+        return false;
     }
 
-    // Only process mouse when right button is held
-    if (!Input::isMouseButtonHeld(MouseButton::Right)) {
-        firstUpdate = true; // Reset on right button release
-        return;
+    if (event.button == MouseButton::Right) {
+        rightMouseHeld = true;
+        firstUpdate = true;
+    }
+    return false;
+}
+
+bool CameraController::onMouseReleased(const MouseReleasedEvent& event) {
+    if (event.button == MouseButton::Right) {
+        rightMouseHeld = false;
+        firstUpdate = true;
+    }
+    return false;
+}
+
+bool CameraController::onMouseMoved(const MouseMovedEvent& event) {
+    if (ImGui::GetIO().WantCaptureMouse) {
+        return false;
     }
 
-    glm::vec2 mouseDelta = Input::consumeMouseDelta();
+    if (!rightMouseHeld) {
+        return false;
+    }
 
-    // Skip first frame after right button press to avoid jump
     if (firstUpdate) {
         firstUpdate = false;
-        return;
+        return false;
     }
 
-    if (mouseDelta.x == 0.0f && mouseDelta.y == 0.0f) {
-        return;
+    if (event.delta.x == 0.0f && event.delta.y == 0.0f) {
+        return false;
     }
 
-    float yawDelta   = mouseDelta.x * sensitivity;
-    float pitchDelta = mouseDelta.y * sensitivity;
+    float yawDelta = event.delta.x * sensitivity;
+    float pitchDelta = event.delta.y * sensitivity;
 
     yaw += yawDelta;
     pitch -= pitchDelta;
     pitch = glm::clamp(pitch, -maxPitch, maxPitch);
     updateCameraVectors();
+
+    return false;
 }
 
-void CameraController::processScroll() {
-    // Don't process scroll input if ImGui wants it
+bool CameraController::onScroll(const ScrollEvent& event) {
     if (ImGui::GetIO().WantCaptureMouse) {
-        return;
+        return false;
     }
 
-    glm::vec2 scrollDelta = Input::consumeScrollDelta();
-
-    if (scrollDelta.y != 0.0f) {
-        // Scroll up increases speed, scroll down decreases speed
-        float speedMultiplier = 1.0f + (scrollDelta.y * 0.2f); // 20% change per scroll step
+    if (event.offset.y != 0.0f) {
+        float speedMultiplier = 1.0f + (event.offset.y * 0.2f);
         movementSpeed *= speedMultiplier;
-
-        // Clamp movement speed to reasonable range
         movementSpeed = glm::clamp(movementSpeed, 1.0f, 1000.0f);
-
         VT_INFO("Movement speed adjusted to {:.1f}", movementSpeed);
     }
+
+    return false;
 }
 
 void CameraController::updateCameraVectors() {

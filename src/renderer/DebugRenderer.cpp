@@ -11,7 +11,9 @@
 #include "renderer/ResourceFactory.hpp"
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/DescriptorSet.hpp"
-#include "renderer/Renderer.hpp"
+#include "renderer/ForwardRenderer.hpp"
+#include "ecs/World.hpp"
+#include "ecs/Components.hpp"
 
 namespace violet {
 
@@ -19,11 +21,19 @@ DebugRenderer::~DebugRenderer() {
     cleanup();
 }
 
+void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight) {
+    // Base init - doesn't have GlobalUniforms
+    context = ctx;
+    renderPass = rp;
+    maxFramesInFlight = framesInFlight;
+    // We'll need GlobalUniforms for actual debug rendering, so this method doesn't do much
+}
+
 void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, uint32_t framesInFlight) {
     context = ctx;
     renderPass = rp;
-    globalUniforms = globalUnif;
     maxFramesInFlight = framesInFlight;
+    globalUniforms = globalUnif;
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -33,16 +43,52 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     debugPipeline = eastl::make_unique<Pipeline>();
     PipelineConfig config;
     config.topology = vk::PrimitiveTopology::eLineList;
-    config.polygonMode = vk::PolygonMode::eLine;
     config.cullMode = vk::CullModeFlagBits::eNone;
-    config.lineWidth = 2.0f;
     config.enableDepthTest = true;
     config.enableDepthWrite = false;
     config.enableBlending = true;
 
+    // Query available device features to determine what we can use
+    vk::PhysicalDeviceFeatures availableFeatures = context->getPhysicalDevice().getFeatures();
+
+    // For line topology, always use Fill mode. eLine mode is for wireframing triangles, not lines.
+    config.polygonMode = vk::PolygonMode::eFill;
+
+    // Use wider lines only if wideLines feature is supported
+    if (availableFeatures.wideLines) {
+        config.lineWidth = 2.0f;
+    } else {
+        config.lineWidth = 1.0f;  // Default line width
+    }
+
     // Use global uniforms from the main renderer
     debugPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
                        "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", config);
+
+    // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
+    wireframePipeline = eastl::make_unique<Pipeline>();
+    PipelineConfig wireframeConfig = config;  // Copy base config
+    wireframeConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
+
+    // Set wireframe mode for triangle rendering
+    if (availableFeatures.fillModeNonSolid) {
+        wireframeConfig.polygonMode = vk::PolygonMode::eLine;
+    } else {
+        wireframeConfig.polygonMode = vk::PolygonMode::eFill;
+    }
+
+    wireframePipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
+                           "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", wireframeConfig);
+
+    // Create solid pipeline for filled triangle rendering
+    solidPipeline = eastl::make_unique<Pipeline>();
+    PipelineConfig solidConfig = config;  // Copy base config
+    solidConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
+    solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
+    solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects
+
+    solidPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
+                       "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", solidConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);
@@ -68,7 +114,6 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
             ResourceFactory::createBuffer(context, indexInfo));
     }
 
-    VT_INFO("Debug renderer initialized with {} frames in flight", maxFramesInFlight);
 }
 
 void DebugRenderer::cleanup() {
@@ -88,10 +133,26 @@ void DebugRenderer::cleanup() {
         debugPipeline.reset();
     }
 
+    if (wireframePipeline) {
+        wireframePipeline->cleanup();
+        wireframePipeline.reset();
+    }
+
+    if (solidPipeline) {
+        solidPipeline->cleanup();
+        solidPipeline.reset();
+    }
+
     if (debugMaterial) {
         debugMaterial->cleanup();
         debugMaterial.reset();
     }
+}
+
+void DebugRenderer::render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
+    // Base render method - this would be called if DebugRenderer is used standalone
+    // For now, this is empty as debug rendering is typically done through specific methods
+    // like renderFrustum, renderAABBs, etc.
 }
 
 void DebugRenderer::generateFrustumGeometry(const Frustum& frustum, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices) {
@@ -209,13 +270,9 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Bind global descriptor set
+    // Use BaseRenderer's bindGlobalDescriptors helper
     vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        debugPipeline->getPipelineLayout(),
-        0, 1, &globalSet, 0, nullptr
-    );
+    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -223,17 +280,8 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
     commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
 
-    // Push constants
-    struct PushConstantData {
-        glm::mat4 model;
-    } pushData;
-    pushData.model = glm::mat4(1.0f);
-
-    commandBuffer.pushConstants(
-        debugPipeline->getPipelineLayout(),
-        vk::ShaderStageFlagBits::eVertex,
-        0, sizeof(PushConstantData), &pushData
-    );
+    // Use BaseRenderer's pushModelMatrix helper
+    pushModelMatrix(commandBuffer, debugPipeline->getPipelineLayout(), glm::mat4(1.0f));
 
     // Draw
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
@@ -296,17 +344,9 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Bind global descriptor set (set 0)
+    // Use BaseRenderer's bindGlobalDescriptors helper
     vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        debugPipeline->getPipelineLayout(),
-        0,  // GLOBAL_SET
-        1,
-        &globalSet,
-        0,
-        nullptr
-    );
+    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind vertex and index buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -314,19 +354,8 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
     commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
 
-    // Push model matrix (identity for debug rendering)
-    struct PushConstantData {
-        glm::mat4 model;
-    } pushData;
-    pushData.model = glm::mat4(1.0f);
-
-    commandBuffer.pushConstants(
-        debugPipeline->getPipelineLayout(),
-        vk::ShaderStageFlagBits::eVertex,
-        0,
-        sizeof(PushConstantData),
-        &pushData
-    );
+    // Use BaseRenderer's pushModelMatrix helper
+    pushModelMatrix(commandBuffer, debugPipeline->getPipelineLayout(), glm::mat4(1.0f));
 
     // Draw
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
@@ -340,6 +369,305 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
         }
         VT_INFO("Debug AABB rendering: {} AABBs ({} visible, {} culled), {} indices",
                 aabbs.size(), visibleCount, aabbs.size() - visibleCount, frame.indexCount);
+    }
+}
+
+void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length) {
+    if (!enabled || !solidPipeline) {  // Use solid pipeline for filled mesh
+        return;
+    }
+
+    // Generate ray as a box/beam mesh
+    eastl::vector<Vertex> vertices;
+    eastl::vector<uint32_t> indices;
+
+    // Create a box beam along the ray direction
+    float width = 1.0f;  // Width of the ray beam
+
+    // Calculate perpendicular vectors for the beam
+    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    if (glm::abs(glm::dot(direction, up)) > 0.99f) {
+        up = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+    glm::vec3 right = glm::normalize(glm::cross(direction, up)) * width;
+    glm::vec3 upVec = glm::normalize(glm::cross(right, direction)) * width;
+
+    glm::vec3 endPoint = origin + direction * length;
+
+    // Create 8 vertices for a box beam
+    vertices.reserve(8);
+
+    // Near face (at origin)
+    Vertex v0; v0.pos = origin - right - upVec; v0.color = DebugColors::RAY; vertices.push_back(v0);
+    Vertex v1; v1.pos = origin + right - upVec; v1.color = DebugColors::RAY; vertices.push_back(v1);
+    Vertex v2; v2.pos = origin + right + upVec; v2.color = DebugColors::RAY; vertices.push_back(v2);
+    Vertex v3; v3.pos = origin - right + upVec; v3.color = DebugColors::RAY; vertices.push_back(v3);
+
+    // Far face (at end)
+    Vertex v4; v4.pos = endPoint - right - upVec; v4.color = DebugColors::RAY; vertices.push_back(v4);
+    Vertex v5; v5.pos = endPoint + right - upVec; v5.color = DebugColors::RAY; vertices.push_back(v5);
+    Vertex v6; v6.pos = endPoint + right + upVec; v6.color = DebugColors::RAY; vertices.push_back(v6);
+    Vertex v7; v7.pos = endPoint - right + upVec; v7.color = DebugColors::RAY; vertices.push_back(v7);
+
+    // Create indices for triangle faces (12 triangles, 36 indices)
+    indices.reserve(36);
+
+    // Near face
+    indices.push_back(0); indices.push_back(1); indices.push_back(2);
+    indices.push_back(0); indices.push_back(2); indices.push_back(3);
+
+    // Far face
+    indices.push_back(4); indices.push_back(6); indices.push_back(5);
+    indices.push_back(4); indices.push_back(7); indices.push_back(6);
+
+    // Top face
+    indices.push_back(3); indices.push_back(2); indices.push_back(6);
+    indices.push_back(3); indices.push_back(6); indices.push_back(7);
+
+    // Bottom face
+    indices.push_back(0); indices.push_back(4); indices.push_back(5);
+    indices.push_back(0); indices.push_back(5); indices.push_back(1);
+
+    // Right face
+    indices.push_back(1); indices.push_back(5); indices.push_back(6);
+    indices.push_back(1); indices.push_back(6); indices.push_back(2);
+
+    // Left face
+    indices.push_back(0); indices.push_back(3); indices.push_back(7);
+    indices.push_back(0); indices.push_back(7); indices.push_back(4);
+
+    auto& frame = frameData[frameIndex];
+
+    // Update vertex buffer
+    if (frame.vertexBuffer && frame.vertexBuffer->mappedData) {
+        memcpy(frame.vertexBuffer->mappedData, vertices.data(),
+               vertices.size() * sizeof(Vertex));
+        frame.vertexCount = static_cast<uint32_t>(vertices.size());
+    }
+
+    // Update index buffer
+    if (frame.indexBuffer && frame.indexBuffer->mappedData) {
+        memcpy(frame.indexBuffer->mappedData, indices.data(),
+               indices.size() * sizeof(uint32_t));
+        frame.indexCount = static_cast<uint32_t>(indices.size());
+    }
+
+    // Bind solid pipeline for filled mesh rendering
+    solidPipeline->bind(commandBuffer);
+
+    // Use BaseRenderer's bindGlobalDescriptors helper
+    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    bindGlobalDescriptors(commandBuffer, solidPipeline->getPipelineLayout(), globalSet, 0);
+
+    // Bind buffers
+    vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
+    vk::DeviceSize offsets[] = { 0 };
+    commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+    commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
+
+    // Use BaseRenderer's pushModelMatrix helper
+    pushModelMatrix(commandBuffer, solidPipeline->getPipelineLayout(), glm::mat4(1.0f));
+
+    // Draw
+    commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
+}
+
+void DebugRenderer::generateWireframeGeometry(const eastl::vector<Vertex>& meshVertices,
+                                             const eastl::vector<uint32_t>& meshIndices,
+                                             const glm::vec3& color,
+                                             eastl::vector<Vertex>& outVertices,
+                                             eastl::vector<uint32_t>& outIndices) {
+    outVertices.clear();
+    outIndices.clear();
+
+    // Copy vertices and set color
+    outVertices.reserve(meshVertices.size());
+    for (const auto& vertex : meshVertices) {
+        Vertex wireVertex = vertex;
+        wireVertex.color = color;
+        outVertices.push_back(wireVertex);
+    }
+
+    // Convert triangle indices to line indices
+    outIndices.reserve(meshIndices.size() * 2); // Each triangle becomes 3 lines
+
+    for (size_t i = 0; i + 2 < meshIndices.size(); i += 3) {
+        uint32_t v0 = meshIndices[i];
+        uint32_t v1 = meshIndices[i + 1];
+        uint32_t v2 = meshIndices[i + 2];
+
+        // Three edges of the triangle
+        outIndices.push_back(v0);
+        outIndices.push_back(v1);
+
+        outIndices.push_back(v1);
+        outIndices.push_back(v2);
+
+        outIndices.push_back(v2);
+        outIndices.push_back(v0);
+    }
+}
+
+void DebugRenderer::setRayData(const glm::vec3& origin, const glm::vec3& direction, float length, bool enabled) {
+    storedRayOrigin = origin;
+    storedRayDirection = direction;
+    storedRayLength = length;
+    rayDataEnabled = enabled;
+}
+
+void DebugRenderer::clearRayData() {
+    rayDataEnabled = false;
+    storedRayOrigin = glm::vec3(0.0f);
+    storedRayDirection = glm::vec3(0.0f);
+    storedRayLength = 100.0f;
+}
+
+void DebugRenderer::beginRayBatch() {
+    batchedRayVertices.clear();
+    batchedRayIndices.clear();
+}
+
+void DebugRenderer::addRayToBatch(const glm::vec3& origin, const glm::vec3& direction, float length) {
+    if (!enabled) {
+        return;
+    }
+
+    // Get current vertex offset for indices
+    uint32_t baseVertexIndex = static_cast<uint32_t>(batchedRayVertices.size());
+
+    // Create a box beam along the ray direction
+    float width = 1.0f;  // Width of the ray beam
+
+    // Calculate perpendicular vectors for the beam
+    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    if (glm::abs(glm::dot(direction, up)) > 0.99f) {
+        up = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+    glm::vec3 right = glm::normalize(glm::cross(direction, up)) * width;
+    glm::vec3 upVec = glm::normalize(glm::cross(right, direction)) * width;
+
+    glm::vec3 endPoint = origin + direction * length;
+
+    // Add 8 vertices for this ray's box beam
+    // Near face (at origin)
+    batchedRayVertices.push_back({origin - right - upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({origin + right - upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({origin + right + upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({origin - right + upVec, {}, {}, DebugColors::RAY, {}});
+
+    // Far face (at end)
+    batchedRayVertices.push_back({endPoint - right - upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({endPoint + right - upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({endPoint + right + upVec, {}, {}, DebugColors::RAY, {}});
+    batchedRayVertices.push_back({endPoint - right + upVec, {}, {}, DebugColors::RAY, {}});
+
+    // Add indices for triangle faces (12 triangles, 36 indices per ray)
+    // Near face
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 1); batchedRayIndices.push_back(baseVertexIndex + 2);
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 2); batchedRayIndices.push_back(baseVertexIndex + 3);
+
+    // Far face
+    batchedRayIndices.push_back(baseVertexIndex + 4); batchedRayIndices.push_back(baseVertexIndex + 6); batchedRayIndices.push_back(baseVertexIndex + 5);
+    batchedRayIndices.push_back(baseVertexIndex + 4); batchedRayIndices.push_back(baseVertexIndex + 7); batchedRayIndices.push_back(baseVertexIndex + 6);
+
+    // Top face
+    batchedRayIndices.push_back(baseVertexIndex + 3); batchedRayIndices.push_back(baseVertexIndex + 2); batchedRayIndices.push_back(baseVertexIndex + 6);
+    batchedRayIndices.push_back(baseVertexIndex + 3); batchedRayIndices.push_back(baseVertexIndex + 6); batchedRayIndices.push_back(baseVertexIndex + 7);
+
+    // Bottom face
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 4); batchedRayIndices.push_back(baseVertexIndex + 5);
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 5); batchedRayIndices.push_back(baseVertexIndex + 1);
+
+    // Right face
+    batchedRayIndices.push_back(baseVertexIndex + 1); batchedRayIndices.push_back(baseVertexIndex + 5); batchedRayIndices.push_back(baseVertexIndex + 6);
+    batchedRayIndices.push_back(baseVertexIndex + 1); batchedRayIndices.push_back(baseVertexIndex + 6); batchedRayIndices.push_back(baseVertexIndex + 2);
+
+    // Left face
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 3); batchedRayIndices.push_back(baseVertexIndex + 7);
+    batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 7); batchedRayIndices.push_back(baseVertexIndex + 4);
+}
+
+void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
+    if (!enabled || !solidPipeline || batchedRayVertices.empty()) {
+        return;
+    }
+
+    auto& frame = frameData[frameIndex];
+
+    // Update vertex buffer with all batched rays
+    if (frame.vertexBuffer && frame.vertexBuffer->mappedData) {
+        size_t dataSize = batchedRayVertices.size() * sizeof(Vertex);
+        if (dataSize <= frame.vertexBuffer->size) {
+            memcpy(frame.vertexBuffer->mappedData, batchedRayVertices.data(), dataSize);
+            frame.vertexCount = static_cast<uint32_t>(batchedRayVertices.size());
+        }
+    }
+
+    // Update index buffer with all batched rays
+    if (frame.indexBuffer && frame.indexBuffer->mappedData) {
+        size_t dataSize = batchedRayIndices.size() * sizeof(uint32_t);
+        if (dataSize <= frame.indexBuffer->size) {
+            memcpy(frame.indexBuffer->mappedData, batchedRayIndices.data(), dataSize);
+            frame.indexCount = static_cast<uint32_t>(batchedRayIndices.size());
+        }
+    }
+
+    // Bind solid pipeline for filled mesh rendering
+    solidPipeline->bind(commandBuffer);
+
+    // Use BaseRenderer's bindGlobalDescriptors helper
+    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    bindGlobalDescriptors(commandBuffer, solidPipeline->getPipelineLayout(), globalSet, 0);
+
+    // Bind buffers
+    vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
+    vk::DeviceSize offsets[] = { 0 };
+    commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+    commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
+
+    // Use BaseRenderer's pushModelMatrix helper
+    pushModelMatrix(commandBuffer, solidPipeline->getPipelineLayout(), glm::mat4(1.0f));
+
+    // Draw all batched rays in one call
+    commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
+}
+
+void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
+                                        entt::registry& world, const ForwardRenderer& renderer) {
+    if (!enabled || selectedEntity == entt::null || !wireframePipeline) {
+        return;
+    }
+
+    // Get entity components
+    auto* meshComp = world.try_get<MeshComponent>(selectedEntity);
+    auto* transformComp = world.try_get<TransformComponent>(selectedEntity);
+
+    if (!meshComp || !meshComp->mesh || !transformComp) {
+        return;
+    }
+
+    const Mesh* mesh = meshComp->mesh.get();
+
+    // Bind wireframe pipeline (configured for triangle list wireframe rendering)
+    wireframePipeline->bind(commandBuffer);
+
+    // Use BaseRenderer's bindGlobalDescriptors helper
+    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    bindGlobalDescriptors(commandBuffer, wireframePipeline->getPipelineLayout(), globalSet, 0);
+
+    // Use BaseRenderer's bindVertexIndexBuffers helper
+    bindVertexIndexBuffers(commandBuffer, mesh);
+
+    if (mesh->getVertexBuffer().getBuffer() && mesh->getIndexBuffer().getBuffer()) {
+        // Use BaseRenderer's pushModelMatrix helper
+        pushModelMatrix(commandBuffer, wireframePipeline->getPipelineLayout(), transformComp->world.getMatrix());
+
+        // Render all submeshes as wireframe
+        for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
+            const SubMesh& subMesh = mesh->getSubMesh(i);
+            commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+        }
+
     }
 }
 

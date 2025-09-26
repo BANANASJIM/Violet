@@ -16,11 +16,11 @@ class VulkanContext;
 class Texture;
 class Material;
 class MaterialInstance;
-class Renderer;
+class ForwardRenderer;
 
 struct GLTFLoadContext {
     VulkanContext* vulkanContext;
-    Renderer* renderer;
+    ForwardRenderer* renderer;
     eastl::vector<Texture*> textures;  // Raw pointers - Renderer owns the textures
     eastl::vector<MaterialInstance*> materials;
     eastl::vector<uint32_t> materialIds;  // Unique material IDs for global indexing
@@ -30,7 +30,7 @@ struct GLTFLoadContext {
 class SceneLoader {
 public:
     static eastl::unique_ptr<Scene> loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
-                                                 entt::registry* world, Renderer* renderer, Texture* defaultTexture);
+                                                 entt::registry* world, ForwardRenderer* renderer, Texture* defaultTexture);
 
 private:
     static void loadNode(GLTFLoadContext& loadCtx, Scene* scene, void* nodePtr, const void* modelPtr, uint32_t parentId,

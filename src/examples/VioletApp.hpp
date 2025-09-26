@@ -2,7 +2,7 @@
 
 #include "core/App.hpp"
 #include "ecs/World.hpp"
-#include "renderer/Renderer.hpp"
+#include "renderer/ForwardRenderer.hpp"
 #include "renderer/Texture.hpp"
 #include "scene/Scene.hpp"
 #include "renderer/PerspectiveCamera.hpp"
@@ -37,7 +37,7 @@ private:
 
 private:
     World world;
-    Renderer renderer;
+    ForwardRenderer renderer;
 
     eastl::unique_ptr<Scene> currentScene;
     Texture defaultTexture;

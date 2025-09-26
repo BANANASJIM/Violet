@@ -8,7 +8,7 @@
 #include "core/Log.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
-#include "renderer/Renderer.hpp"
+#include "renderer/ForwardRenderer.hpp"
 #include "renderer/Texture.hpp"
 #include "renderer/Vertex.hpp"
 #include "renderer/VulkanContext.hpp"
@@ -18,7 +18,7 @@
 namespace violet {
 
 eastl::unique_ptr<Scene>
-SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath, entt::registry* world, Renderer* renderer, Texture* defaultTexture) {
+SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath, entt::registry* world, ForwardRenderer* renderer, Texture* defaultTexture) {
     auto scene = eastl::make_unique<Scene>();
 
     tinygltf::Model    gltfModel;
@@ -104,13 +104,6 @@ void SceneLoader::loadNode(
     Transform localTransform = extractTransform(nodePtr);
     world->emplace<TransformComponent>(entity, localTransform);
 
-    // Log node position
-    // Node position logged only in debug builds
-    VT_DEBUG("Node '{}' added at position: ({:.2f}, {:.2f}, {:.2f})",
-            node->name.c_str(),
-            localTransform.position.x,
-            localTransform.position.y,
-            localTransform.position.z);
 
     if (gltfNode->mesh > -1) {
         const tinygltf::Mesh& gltfMesh = gltfModel->meshes[gltfNode->mesh];
@@ -223,7 +216,6 @@ void SceneLoader::loadNode(
             // NOTE: World bounds will be updated after world transforms are computed
             // Don't update bounds here since world transform hasn't been calculated yet
 
-            VT_DEBUG("Created mesh component for node: {}", gltfNode->name.c_str());
 
             // Create material ID mapping for this mesh
             eastl::vector<uint32_t> meshMaterialIds;
@@ -287,11 +279,9 @@ void SceneLoader::loadTextures(GLTFLoadContext& loadCtx, const void* modelPtr) {
                     gltfImage.component,
                     true  // Default to sRGB, will be corrected later
                 );
-                VT_DEBUG("Loaded embedded texture {}: {}x{}, {} channels", i, gltfImage.width, gltfImage.height, gltfImage.component);
             } else if (!gltfImage.uri.empty()) {
                 // Load from external file
                 texture->loadFromFile(loadCtx.vulkanContext, eastl::string(gltfImage.uri.c_str()));
-                VT_DEBUG("Loaded external texture {}: {}", i, gltfImage.uri.c_str());
             }
 
             // Transfer ownership to Renderer for persistent storage
@@ -372,14 +362,12 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             int texIndex = gltfMaterial.values.at("baseColorTexture").TextureIndex();
             if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setBaseColorTexture(loadCtx.textures[texIndex]);
-                VT_DEBUG("Material {} assigned baseColor texture {}", i, texIndex);
             } else {
                 instance->setBaseColorTexture(loadCtx.defaultTexture);
                 VT_WARN("Material {} using default baseColor texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setBaseColorTexture(loadCtx.defaultTexture);
-            VT_DEBUG("Material {} using default baseColor texture", i);
         }
 
         // Metallic-roughness texture
@@ -387,14 +375,12 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             int texIndex = gltfMaterial.values.at("metallicRoughnessTexture").TextureIndex();
             if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setMetallicRoughnessTexture(loadCtx.textures[texIndex]);
-                VT_DEBUG("Material {} assigned metallicRoughness texture {}", i, texIndex);
             } else {
                 instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
                 VT_WARN("Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
-            VT_DEBUG("Material {} using default metallicRoughness texture", i);
         }
 
         // Normal texture
@@ -402,14 +388,12 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             int texIndex = gltfMaterial.normalTexture.index;
             if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setNormalTexture(loadCtx.textures[texIndex]);
-                VT_DEBUG("Material {} assigned normal texture {}", i, texIndex);
             } else {
                 instance->setNormalTexture(loadCtx.defaultTexture);
                 VT_WARN("Material {} using default normal texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setNormalTexture(loadCtx.defaultTexture);
-            VT_DEBUG("Material {} using default normal texture", i);
         }
 
         // Occlusion texture
@@ -465,7 +449,6 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
 
         loadCtx.materials[i] = instance;
         loadCtx.materialIds.push_back(materialId);
-        VT_DEBUG("Loaded material {}: {} (id={})", i, gltfMaterial.name.c_str(), materialId);
     }
 }
 
@@ -528,9 +511,6 @@ Transform SceneLoader::extractTransform(const void* nodePtr) {
                 originalScale, scaleFactor);
     }
 
-    VT_DEBUG("Final transform - Position: ({:.2f}, {:.2f}, {:.2f}), Scale: ({:.2f}, {:.2f}, {:.2f})",
-             transform.position.x, transform.position.y, transform.position.z,
-             transform.scale.x, transform.scale.y, transform.scale.z);
 
     return transform;
 }

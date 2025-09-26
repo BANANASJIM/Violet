@@ -127,8 +127,26 @@ void VulkanContext::createLogicalDevice() {
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
+    // Query available device features
+    vk::PhysicalDeviceFeatures availableFeatures = physicalDevice.getFeatures();
+
     vk::PhysicalDeviceFeatures deviceFeatures;
     deviceFeatures.samplerAnisotropy = VK_TRUE;
+
+    // Only enable features that are actually supported
+    if (availableFeatures.fillModeNonSolid) {
+        deviceFeatures.fillModeNonSolid = VK_TRUE;  // For wireframe rendering
+        VT_INFO("Enabled fillModeNonSolid feature");
+    } else {
+        VT_WARN("fillModeNonSolid not supported on this device");
+    }
+
+    if (availableFeatures.wideLines) {
+        deviceFeatures.wideLines = VK_TRUE;         // For line width > 1.0
+        VT_INFO("Enabled wideLines feature");
+    } else {
+        VT_WARN("wideLines not supported on this device");
+    }
     
     vk::PhysicalDeviceVulkan13Features features13;
     features13.dynamicRendering = VK_TRUE;
