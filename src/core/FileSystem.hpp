@@ -22,6 +22,10 @@ public:
     static eastl::string getDirectory(const eastl::string& path);
     
     static eastl::string join(const eastl::string& path1, const eastl::string& path2);
+
+    static eastl::string getExecutableDirectory();
+    static eastl::string getProjectRootDirectory();
+    static eastl::string resolveRelativePath(const eastl::string& relativePath);
 };
 
 }

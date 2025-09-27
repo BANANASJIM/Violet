@@ -7,7 +7,6 @@
 #include "scene/Scene.hpp"
 #include "renderer/PerspectiveCamera.hpp"
 #include "ui/AssetBrowserLayer.hpp"
-#include "ui/ViewportLayer.hpp"
 #include "ui/CompositeUILayer.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include <EASTL/vector.h>
@@ -33,6 +32,7 @@ private:
     void createTestResources();
     void initializeScene();
     void loadAsset(const eastl::string& path);
+    void loadAssetAtPosition(const eastl::string& path, const glm::vec3& position);
     void createTestCube();
 
 private:
@@ -43,7 +43,6 @@ private:
     Texture defaultTexture;
 
     eastl::unique_ptr<AssetBrowserLayer> assetBrowser;
-    eastl::unique_ptr<ViewportLayer> viewport;
     eastl::unique_ptr<SceneDebugLayer> sceneDebug;
     eastl::unique_ptr<CompositeUILayer> compositeUI;
 };

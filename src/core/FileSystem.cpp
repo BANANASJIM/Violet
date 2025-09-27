@@ -3,6 +3,15 @@
 #include <filesystem>
 #include <fstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace violet {
 
 namespace fs = std::filesystem;
@@ -118,6 +127,79 @@ eastl::string FileSystem::join(const eastl::string& path1, const eastl::string& 
     fs::path p1(path1.c_str());
     fs::path p2(path2.c_str());
     return (p1 / p2).string().c_str();
+}
+
+eastl::string FileSystem::getExecutableDirectory() {
+#ifdef _WIN32
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    fs::path exePath(buffer);
+    return exePath.parent_path().string().c_str();
+#elif defined(__APPLE__)
+    char buffer[1024];
+    uint32_t size = sizeof(buffer);
+    if (_NSGetExecutablePath(buffer, &size) == 0) {
+        char realPath[1024];
+        if (realpath(buffer, realPath)) {
+            fs::path exePath(realPath);
+            return exePath.parent_path().string().c_str();
+        }
+    }
+    return "";
+#else
+    char buffer[1024];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len != -1) {
+        buffer[len] = '\0';
+        fs::path exePath(buffer);
+        return exePath.parent_path().string().c_str();
+    }
+    return "";
+#endif
+}
+
+eastl::string FileSystem::getProjectRootDirectory() {
+    static eastl::string projectRoot;
+    if (!projectRoot.empty()) {
+        return projectRoot;
+    }
+
+    // 从可执行文件目录开始向上查找项目根目录
+    fs::path currentPath = fs::path(getExecutableDirectory().c_str());
+
+    // 查找包含 CMakeLists.txt 或 vcpkg.json 的目录作为项目根目录
+    while (!currentPath.empty() && currentPath != currentPath.root_path()) {
+        fs::path cmakeFile = currentPath / "CMakeLists.txt";
+        fs::path vcpkgFile = currentPath / "vcpkg.json";
+
+        if (fs::exists(cmakeFile) || fs::exists(vcpkgFile)) {
+            projectRoot = currentPath.string().c_str();
+            return projectRoot;
+        }
+
+        currentPath = currentPath.parent_path();
+    }
+
+    // 如果找不到项目根目录，使用可执行文件目录
+    projectRoot = getExecutableDirectory();
+    return projectRoot;
+}
+
+eastl::string FileSystem::resolveRelativePath(const eastl::string& relativePath) {
+    if (relativePath.empty()) {
+        return "";
+    }
+
+    // 如果已经是绝对路径，直接返回
+    fs::path path(relativePath.c_str());
+    if (path.is_absolute()) {
+        return relativePath;
+    }
+
+    // 相对于项目根目录解析路径
+    fs::path projectRoot(getProjectRootDirectory().c_str());
+    fs::path resolved = projectRoot / path;
+    return resolved.string().c_str();
 }
 
 }

@@ -8,6 +8,7 @@
 #include <chrono>
 
 #include "core/Log.hpp"
+#include "core/FileSystem.hpp"
 #include "examples/TestData.hpp"
 #include "examples/TestTexture.hpp"
 #include "renderer/Mesh.hpp"
@@ -16,18 +17,17 @@
 namespace violet {
 
 VioletApp::VioletApp() {
-    // assetBrowser = eastl::make_unique<AssetBrowserLayer>();
-    // viewport     = eastl::make_unique<ViewportLayer>();
+    assetBrowser = eastl::make_unique<AssetBrowserLayer>();
     sceneDebug   = eastl::make_unique<SceneDebugLayer>(&world, &renderer);
     compositeUI  = eastl::make_unique<CompositeUILayer>();
 
-    // viewport->setOnAssetDropped([this](const eastl::string& path) {
-    //     VT_INFO("Asset dropped: {}", path.c_str());
-    //     loadAsset(path);
-    // });
+    // Set up asset drop callback for scene overlay with position-based placement
+    sceneDebug->setOnAssetDroppedWithPosition([this](const eastl::string& path, const glm::vec3& position) {
+        VT_INFO("Asset dropped at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+        loadAssetAtPosition(path, position);
+    });
 
-    // compositeUI->addLayer(assetBrowser.get());
-    // compositeUI->addLayer(viewport.get());
+    compositeUI->addLayer(assetBrowser.get());
     compositeUI->addLayer(sceneDebug.get());
 
     setUILayer(compositeUI.get());
@@ -43,8 +43,7 @@ VioletApp::~VioletApp() {
     // Clear unique_ptrs in correct order
     compositeUI.reset();
     sceneDebug.reset();
-    // viewport.reset();
-    // assetBrowser.reset();
+    assetBrowser.reset();
 
     cleanup();
 }
@@ -56,7 +55,7 @@ void VioletApp::createResources() {
 
     initializeScene();
 
-    eastl::string scenePath = "assets/Models/Sponza/glTF/Sponza.gltf";
+    eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");
     try {
         VT_INFO("Loading default scene: {}", scenePath.c_str());
         currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, &defaultTexture);
@@ -173,18 +172,87 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
                 currentScene->updateWorldTransforms(world.getRegistry());
 
-                // viewport->setStatusMessage("Scene loaded successfully");
+                // Update world bounds for all MeshComponents after world transforms are computed
+                auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
+                for (auto [entity, transformComp, meshComp] : view.each()) {
+                    meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                }
+
+                // Give SceneDebugLayer access to the scene for proper hierarchy handling
+                sceneDebug->setScene(currentScene.get());
+
+                // Mark scene dirty for BVH rebuild
+                renderer.markSceneDirty();
+
                 VT_INFO("Scene loaded: {}", path.c_str());
             } catch (const std::exception& e) {
-                // viewport->setStatusMessage("Failed to load model");
+                // Failed to load model
                 VT_ERROR("Failed to load model {}: {}", path.c_str(), e.what());
             }
         } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
-            // viewport->setStatusMessage("Texture loading not implemented");
+            // Texture loading not implemented
         }
     }
 }
 
+void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& position) {
+    VT_INFO("Loading asset at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+
+    size_t dotPos = path.find_last_of('.');
+    if (dotPos != eastl::string::npos) {
+        eastl::string ext = path.substr(dotPos);
+
+        if (ext == ".gltf" || ext == ".glb") {
+            try {
+                // Load the glTF file into a temporary scene to get the entities
+                auto tempScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
+
+                if (tempScene) {
+                    // Update world transforms for the loaded entities
+                    tempScene->updateWorldTransforms(world.getRegistry());
+
+                    // Apply position offset to all root entities in the loaded scene
+                    auto& registry = world.getRegistry();
+                    const auto& rootNodeIds = tempScene->getRootNodes();
+                    for (uint32_t rootNodeId : rootNodeIds) {
+                        const Node* node = tempScene->getNode(rootNodeId);
+                        if (node && registry.valid(node->entity)) {
+                            auto* transformComp = registry.try_get<TransformComponent>(node->entity);
+                            if (transformComp) {
+                                // Apply position offset to the root transform
+                                transformComp->local.setPosition(transformComp->local.position + position);
+                                transformComp->dirty = true;
+                            }
+                        }
+                    }
+
+                    // Merge the temporary scene into the current scene if it exists
+                    if (currentScene) {
+                        // Update world transforms after position changes
+                        tempScene->updateWorldTransforms(world.getRegistry());
+
+                        // Update world bounds for all MeshComponents
+                        auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
+                        for (auto [entity, transformComp, meshComp] : view.each()) {
+                            meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                        }
+
+                        // Mark scene dirty for BVH rebuild
+                        renderer.markSceneDirty();
+                    } else {
+                        // If no current scene exists, make this the current scene
+                        currentScene = eastl::move(tempScene);
+                        sceneDebug->setScene(currentScene.get());
+                    }
+
+                    VT_INFO("Asset placed successfully at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+                }
+            } catch (const std::exception& e) {
+                VT_ERROR("Failed to load asset {}: {}", path.c_str(), e.what());
+            }
+        }
+    }
+}
 
 void VioletApp::onWindowResize(int width, int height) {
     if (width > 0 && height > 0) {
@@ -226,14 +294,14 @@ void VioletApp::createTestCube() {
     mesh->create(getContext(), vertices, indices, subMeshes);
     auto& meshComp = world.addComponent<MeshComponent>(cubeEntity, eastl::move(mesh));
 
-    eastl::string vertShaderPath = "build/shaders/pbr.vert.spv";
-    eastl::string fragShaderPath = "build/shaders/pbr.frag.spv";
+    eastl::string vertShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/pbr.vert.spv");
+    eastl::string fragShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/pbr.frag.spv");
 
     Material* material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::MaterialTextures);
 
     if (!material) {
-        vertShaderPath = "build/shaders/unlit.vert.spv";
-        fragShaderPath = "build/shaders/unlit.frag.spv";
+        vertShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/unlit.vert.spv");
+        fragShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/unlit.frag.spv");
         material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::UnlitMaterialTextures);
     }
 
