@@ -7,6 +7,7 @@ namespace violet {
 
 void AssetBrowserLayer::onAttach(VulkanContext* context, GLFWwindow* window) {
     UILayer::onAttach(context, window);
+    assetDirectory = violet::FileSystem::resolveRelativePath("assets/");
     scanAssetDirectory();
     initialized = true;
 }
@@ -40,9 +41,9 @@ void AssetBrowserLayer::scanAssetDirectory() {
     countAssets(rootNode);
 
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "Found %d assets", totalAssets);
+    snprintf(buffer, sizeof(buffer), "Found %d glTF files", totalAssets);
     statusMessage = buffer;
-    VT_INFO("Found {} assets in {}", totalAssets, assetDirectory.c_str());
+    VT_INFO("Found {} glTF files in {}", totalAssets, assetDirectory.c_str());
 }
 
 void AssetBrowserLayer::onImGuiRender() {
@@ -76,10 +77,9 @@ void AssetBrowserLayer::buildFileTree(const eastl::string& path, FileTreeNode& n
             buildFileTree(entry, childNode);
             node.children.push_back(childNode);
         } else {
-            // Only add supported file types
+            // Only add glTF files
             auto ext = FileSystem::getExtension(entry);
-            if (ext == ".gltf" || ext == ".glb" ||
-                ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
+            if (ext == ".gltf" || ext == ".glb") {
                 childNode.extension = ext;
                 node.children.push_back(childNode);
             }
@@ -89,8 +89,8 @@ void AssetBrowserLayer::buildFileTree(const eastl::string& path, FileTreeNode& n
 
 void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
     if (node.isDirectory) {
-        // Render directory as tree node with default open
-        bool nodeOpen = ImGui::TreeNodeEx(node.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+        // Render directory as tree node (collapsed by default)
+        bool nodeOpen = ImGui::TreeNodeEx(node.name.c_str(), 0);
 
         if (nodeOpen) {
             for (const auto& child : node.children) {
@@ -100,12 +100,8 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
         }
     } else {
         // Render file as selectable item
-        // Color code by type
-        if (node.extension == ".gltf" || node.extension == ".glb") {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.5f, 1.0f));
-        }
+        // Color code for glTF files (blue)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
 
         // Selectable item that can be dragged
         if (ImGui::Selectable(node.name.c_str())) {
@@ -114,6 +110,8 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
 
         // Drag source
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+            // Add debug logging
+            VT_INFO("AssetBrowser: Starting drag for {}", node.fullPath.c_str());
             ImGui::SetDragDropPayload("ASSET_PATH", node.fullPath.c_str(), node.fullPath.size() + 1);
             ImGui::Text("Drop to load: %s", node.name.c_str());
             ImGui::EndDragDropSource();

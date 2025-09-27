@@ -198,4 +198,64 @@ void Scene::removeFromParent(uint32_t nodeId) {
     }
 }
 
+void Scene::mergeScene(const Scene* sourceScene) {
+    if (!sourceScene || sourceScene->empty()) {
+        return;
+    }
+
+    eastl::hash_map<uint32_t, uint32_t> nodeIdMapping;
+    const auto& sourceRootNodes = sourceScene->getRootNodes();
+
+    for (uint32_t sourceRootId : sourceRootNodes) {
+        mergeNodeHierarchy(sourceScene, sourceRootId, 0, nodeIdMapping);
+    }
+}
+
+void Scene::mergeNodeHierarchy(const Scene* sourceScene, uint32_t sourceNodeId,
+                              uint32_t targetParentId, eastl::hash_map<uint32_t, uint32_t>& nodeIdMapping) {
+    const Node* sourceNode = sourceScene->getNode(sourceNodeId);
+    if (!sourceNode) return;
+
+    // Create new node in target scene
+    Node newNode = *sourceNode;  // Copy node data
+    newNode.id = 0;              // Reset ID so addNode() assigns unique ID
+    newNode.parentId = targetParentId;
+    newNode.childrenIds.clear(); // Will be populated as we add children
+
+    uint32_t newNodeId = addNode(newNode);
+    nodeIdMapping[sourceNodeId] = newNodeId;
+
+    // Recursively merge all children
+    for (uint32_t childSourceId : sourceNode->childrenIds) {
+        mergeNodeHierarchy(sourceScene, childSourceId, newNodeId, nodeIdMapping);
+    }
+}
+
+glm::mat4 Scene::getParentWorldMatrix(uint32_t nodeId, entt::registry& registry) const {
+    const Node* node = getNode(nodeId);
+    if (!node || node->parentId == 0) {
+        return glm::mat4(1.0f); // Root node's parent transform is identity matrix
+    }
+    return getWorldTransform(node->parentId, registry);
+}
+
+bool Scene::isRootNode(uint32_t nodeId) const {
+    const Node* node = getNode(nodeId);
+    return node && node->parentId == 0;
+}
+
+glm::mat4 Scene::convertWorldToLocal(uint32_t nodeId, const glm::mat4& worldMatrix, entt::registry& registry) const {
+    glm::mat4 parentWorldMatrix = getParentWorldMatrix(nodeId, registry);
+    return glm::inverse(parentWorldMatrix) * worldMatrix;
+}
+
+uint32_t Scene::findNodeIdForEntity(entt::entity entity) const {
+    for (const auto& [nodeId, node] : nodes) {
+        if (node.entity == entity) {
+            return nodeId;
+        }
+    }
+    return 0; // Return 0 if not found (invalid node ID)
+}
+
 }

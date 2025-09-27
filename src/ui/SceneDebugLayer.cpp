@@ -4,6 +4,8 @@
 #include <ImGuizmo.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 #include "renderer/ForwardRenderer.hpp"
 #include "ecs/Components.hpp"
 #include "math/Ray.hpp"
@@ -67,6 +69,9 @@ void SceneDebugLayer::shutdown() {
 }
 
 void SceneDebugLayer::onImGuiRender() {
+
+    // First render the main Scene Debug window
+    // This ensures proper Z-ordering
 
     ImGui::Begin("Scene Debug");
 
@@ -143,112 +148,7 @@ void SceneDebugLayer::onImGuiRender() {
     }
 
     if (ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (scene) {
-            // Show hierarchical tree view of scene nodes
-            ImGui::Text("Scene Nodes: %zu", scene->getNodeCount());
-            ImGui::Separator();
-
-            // Helper lambda to recursively render tree nodes
-            auto renderNodeTree = [&](uint32_t nodeId, auto& self) -> void {
-                const Node* node = scene->getNode(nodeId);
-                if (!node) return;
-
-                ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-                if (!node->hasChildren()) {
-                    nodeFlags |= ImGuiTreeNodeFlags_Leaf;
-                }
-                if (node->entity == selectedEntity) {
-                    nodeFlags |= ImGuiTreeNodeFlags_Selected;
-                }
-
-                eastl::string nodeLabel = node->name.empty() ? "Unnamed" : node->name;
-                nodeLabel += " (ID: ";
-                nodeLabel += std::to_string(nodeId).c_str();
-                nodeLabel += ")";
-
-                bool nodeOpen = ImGui::TreeNodeEx(nodeLabel.c_str(), nodeFlags);
-
-                // Handle node selection
-                if (ImGui::IsItemClicked() && node->entity != entt::null) {
-                    selectedEntity = node->entity;
-                    VT_INFO("Selected entity {} from hierarchy", static_cast<uint32_t>(selectedEntity));
-                }
-
-                // Show entity info if available
-                if (node->entity != entt::null) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(Entity: %u)", static_cast<uint32_t>(node->entity));
-
-                    if (auto* transform = world->getRegistry().try_get<TransformComponent>(node->entity)) {
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::BeginTooltip();
-                            ImGui::Text("Local Position: (%.2f, %.2f, %.2f)",
-                                transform->local.position.x, transform->local.position.y, transform->local.position.z);
-                            ImGui::Text("World Position: (%.2f, %.2f, %.2f)",
-                                transform->world.position.x, transform->world.position.y, transform->world.position.z);
-                            ImGui::EndTooltip();
-                        }
-                    }
-                }
-
-                if (nodeOpen) {
-                    for (uint32_t childId : node->childrenIds) {
-                        self(childId, self);
-                    }
-                    ImGui::TreePop();
-                }
-            };
-
-            // Render root nodes
-            for (uint32_t rootId : scene->getRootNodes()) {
-                renderNodeTree(rootId, renderNodeTree);
-            }
-        } else {
-            ImGui::Text("No scene loaded - showing flat entity list");
-            ImGui::Separator();
-
-            // Fallback to flat entity table
-            if (ImGui::BeginTable("EntityTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                ImGui::TableSetupColumn("ID");
-                ImGui::TableSetupColumn("World Position");
-                ImGui::TableSetupColumn("Local Position");
-                ImGui::TableSetupColumn("Scale");
-                ImGui::TableHeadersRow();
-
-                auto transformView = world->view<TransformComponent>();
-                for (auto entity : transformView) {
-                    auto& transform = transformView.get<TransformComponent>(entity);
-
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-
-                    // Highlight selected entity
-                    if (entity == selectedEntity) {
-                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(100, 150, 200, 100));
-                    }
-
-                    eastl::string entityLabel = std::to_string(static_cast<uint32_t>(entity)).c_str();
-                    if (ImGui::Selectable(entityLabel.c_str(),
-                                         entity == selectedEntity, ImGuiSelectableFlags_SpanAllColumns)) {
-                        selectedEntity = entity;
-                        VT_INFO("Selected entity {} from table", static_cast<uint32_t>(selectedEntity));
-                    }
-
-                    ImGui::TableNextColumn();
-                    glm::vec3 worldPos = transform.world.position;
-                    ImGui::Text("%.1f, %.1f, %.1f", worldPos.x, worldPos.y, worldPos.z);
-
-                    ImGui::TableNextColumn();
-                    glm::vec3 localPos = transform.local.position;
-                    ImGui::Text("%.1f, %.1f, %.1f", localPos.x, localPos.y, localPos.z);
-
-                    ImGui::TableNextColumn();
-                    glm::vec3 scale = transform.local.scale;
-                    ImGui::Text("%.1f, %.1f, %.1f", scale.x, scale.y, scale.z);
-                }
-                ImGui::EndTable();
-            }
-        }
+        renderSceneHierarchy();
     }
 
     if (ImGui::CollapsingHeader("Stats")) {
@@ -416,7 +316,6 @@ void SceneDebugLayer::onImGuiRender() {
 
             if (ImGui::Button("Deselect")) {
                 selectedEntity = entt::null;
-                VT_INFO("Entity deselected via button");
             }
         } else {
             ImGui::Text("No entity selected");
@@ -434,6 +333,10 @@ void SceneDebugLayer::onImGuiRender() {
     }
 
     ImGui::End();
+
+    // Now handle drag-drop overlay AFTER the main window
+    // This ensures it's rendered on top
+    handleAssetDragDrop();
 
     // Render selected entity outline using debug renderer
     renderSelectedEntityOutline();
@@ -469,15 +372,12 @@ bool SceneDebugLayer::onMousePressed(const MousePressedEvent& event) {
     }
 
     // Perform object picking
-    VT_INFO("Attempting object pick at mouse position: ({}, {})", event.position.x, event.position.y);
 
     entt::entity picked = pickObject(event.position.x, event.position.y);
     if (picked != entt::null) {
         selectedEntity = picked;
-        VT_INFO("Selected entity: {}", static_cast<uint32_t>(selectedEntity));
     } else {
         selectedEntity = entt::null;
-        VT_DEBUG("No entity picked");
     }
 
     // Ray generation for debugging - do this regardless of pick success
@@ -489,7 +389,6 @@ bool SceneDebugLayer::onMousePressed(const MousePressedEvent& event) {
 }
 
 bool SceneDebugLayer::onKeyPressed(const KeyPressedEvent& event) {
-    VT_DEBUG("SceneDebugLayer::onKeyPressed() called - key: {}", event.key);
 
     // Only handle gizmo hotkeys when gizmo is enabled and entity is selected
     bool shouldHandleGizmoKeys = enableGizmo && selectedEntity != entt::null;
@@ -499,36 +398,30 @@ bool SceneDebugLayer::onKeyPressed(const KeyPressedEvent& event) {
         case GLFW_KEY_T:
             if (shouldHandleGizmoKeys) {
                 gizmoOperation = ImGuizmo::TRANSLATE;
-                VT_INFO("Gizmo operation changed to TRANSLATE");
                 return true;
             }
             break;
         case GLFW_KEY_R:
             if (shouldHandleGizmoKeys) {
                 gizmoOperation = ImGuizmo::ROTATE;
-                VT_INFO("Gizmo operation changed to ROTATE");
                 return true;
             }
             break;
         case GLFW_KEY_E:
             if (shouldHandleGizmoKeys) {
                 gizmoOperation = ImGuizmo::SCALE;
-                VT_INFO("Gizmo operation changed to SCALE");
                 return true;
             }
             break;
         case GLFW_KEY_ESCAPE:
             selectedEntity = entt::null;
-            VT_INFO("Entity deselected");
             return true;
         case GLFW_KEY_TAB:
             gizmoMode = (gizmoMode == ImGuizmo::WORLD) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
-            VT_INFO("Gizmo coordinate system changed to {}", (gizmoMode == ImGuizmo::WORLD) ? "WORLD" : "LOCAL");
             return true;
         case GLFW_KEY_LEFT_CONTROL:
         case GLFW_KEY_RIGHT_CONTROL:
             enableSnap = !enableSnap;
-            VT_INFO("Gizmo snapping {}", enableSnap ? "enabled" : "disabled");
             return true;
         default:
             return false;  // Don't consume other keys
@@ -682,7 +575,7 @@ void SceneDebugLayer::renderGizmo() {
     // We need to call ImGuizmo functions after SetDrawlist, so we'll do a conditional setup
     static bool wasOverGizmo = false;
 
-    // Only allow mouse input if we were over gizmo in the previous frame
+    // Allow mouse input if we were over gizmo in the previous frame
     // This prevents the chicken-and-egg problem with ImGuizmo::IsOver()
     if (!wasOverGizmo) {
         gizmoWindowFlags |= ImGuiWindowFlags_NoMouseInputs;
@@ -700,20 +593,10 @@ void SceneDebugLayer::renderGizmo() {
 
     glm::mat4 view = activeCamera->getViewMatrix();
     glm::mat4 proj = activeCamera->getProjectionMatrix();
-
-    // Fix Vulkan coordinate system for ImGuizmo
-    // ImGuizmo expects standard projection matrix, so undo Vulkan Y-flip
     glm::mat4 gizmoProj = proj;
     gizmoProj[1][1] *= -1.0f;  // Undo the Vulkan Y-axis flip
 
-    // Get current transform matrix
     glm::mat4 matrix = transform->world.getMatrix();
-
-    // Log gizmo rendering attempt
-    VT_DEBUG("Rendering gizmo for entity {} at position ({:.2f}, {:.2f}, {:.2f})",
-        static_cast<uint32_t>(selectedEntity),
-        transform->world.position.x, transform->world.position.y, transform->world.position.z);
-    VT_DEBUG("Gizmo operation: {}, mode: {}", gizmoOperation, gizmoMode);
 
     // Prepare snap values if snapping is enabled
     float* snap = nullptr;
@@ -742,18 +625,28 @@ void SceneDebugLayer::renderGizmo() {
     // Update gizmo state for next frame's mouse input decision
     bool currentlyOverGizmo = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
     if (currentlyOverGizmo != wasOverGizmo) {
-        VT_DEBUG("Gizmo mouse state changed - IsOver: {}, IsUsing: {}, WillCaptureMouse: {}",
-                 ImGuizmo::IsOver(), ImGuizmo::IsUsing(), currentlyOverGizmo);
         wasOverGizmo = currentlyOverGizmo;
     }
 
     if (gizmoUsed) {
-        VT_DEBUG("Gizmo was manipulated for entity {}", static_cast<uint32_t>(selectedEntity));
+        // Find the node ID for the selected entity
+        uint32_t nodeId = 0;
+        if (scene) {
+            nodeId = scene->findNodeIdForEntity(selectedEntity);
+        }
 
-        // Decompose matrix back to transform components
+        glm::mat4 finalMatrix = matrix;
+
+        // Check if this is a child node and convert coordinates if needed
+        if (scene && nodeId != 0 && !scene->isRootNode(nodeId)) {
+            // For child nodes: convert world transform to local transform
+            finalMatrix = scene->convertWorldToLocal(nodeId, matrix, world->getRegistry());
+        }
+
+        // Decompose the final matrix back to transform components
         glm::vec3 translation, rotation, scale;
         ImGuizmo::DecomposeMatrixToComponents(
-            glm::value_ptr(matrix),
+            glm::value_ptr(finalMatrix),
             glm::value_ptr(translation),
             glm::value_ptr(rotation),
             glm::value_ptr(scale));
@@ -791,14 +684,6 @@ void SceneDebugLayer::renderGizmo() {
         // Mark the scene as dirty so the renderer rebuilds the BVH
         if (renderer) {
             renderer->markSceneDirty();
-            VT_DEBUG("Transform modified by gizmo - marked scene dirty for BVH rebuild");
-        }
-    } else {
-        // Check if gizmo is visible/active
-        static int frameCounter = 0;
-        if (++frameCounter % 60 == 0) {  // Log every 60 frames to avoid spam
-            VT_DEBUG("Gizmo not being manipulated - IsUsing: {}, IsOver: {}",
-                ImGuizmo::IsUsing(), ImGuizmo::IsOver());
         }
     }
 
@@ -955,6 +840,387 @@ void SceneDebugLayer::clearAllRays() {
     if (renderer) {
         renderer->getDebugRenderer().clearRayData();
     }
+}
+
+glm::vec3 SceneDebugLayer::calculatePlacementPosition(float mouseX, float mouseY) {
+    if (!renderer || !world) {
+        return glm::vec3(0.0f, 0.0f, 0.0f);
+    }
+
+    // Find active camera
+    auto cameraView = world->view<CameraComponent>();
+    Camera* activeCamera = nullptr;
+    for (auto entity : cameraView) {
+        auto& cameraComp = cameraView.get<CameraComponent>(entity);
+        if (cameraComp.isActive && cameraComp.camera) {
+            activeCamera = cameraComp.camera.get();
+            break;
+        }
+    }
+
+    if (!activeCamera) {
+        return glm::vec3(0.0f, 0.0f, 0.0f);
+    }
+
+    // Create ray from mouse position (reuse logic from addRayFromMouseClick)
+    const ImGuiIO& io = ImGui::GetIO();
+    float x = (2.0f * mouseX) / io.DisplaySize.x - 1.0f;
+    float y = (2.0f * mouseY) / io.DisplaySize.y - 1.0f;
+
+    glm::mat4 view = activeCamera->getViewMatrix();
+    glm::mat4 proj = activeCamera->getProjectionMatrix();
+    glm::mat4 invViewProj = glm::inverse(proj * view);
+
+    // Generate ray from camera through mouse position
+    glm::vec4 rayNear_NDC(x, y, 0.0f, 1.0f);  // Near plane
+    glm::vec4 rayFar_NDC(x, y, 1.0f, 1.0f);    // Far plane
+
+    glm::vec4 rayNear_world = invViewProj * rayNear_NDC;
+    glm::vec4 rayFar_world = invViewProj * rayFar_NDC;
+
+    // Perspective divide
+    if (rayNear_world.w != 0.0f) rayNear_world /= rayNear_world.w;
+    if (rayFar_world.w != 0.0f) rayFar_world /= rayFar_world.w;
+
+    // Use same ray calculation as pickObject
+    glm::vec3 rayOrigin = activeCamera->getPosition();
+    glm::vec3 targetPoint(rayNear_world);  // Use near plane point as target
+    glm::vec3 rayDirection = glm::normalize(targetPoint - rayOrigin);
+
+    Ray ray(rayOrigin, rayDirection);
+    float closestDistance = FLT_MAX;
+    bool foundIntersection = false;
+
+    auto& registry = world->getRegistry();
+    auto entityView = registry.view<TransformComponent, MeshComponent>();
+
+    for (auto entity : entityView) {
+        auto& meshComp = entityView.get<MeshComponent>(entity);
+        if (!meshComp.mesh) continue;
+
+        // Test intersection with each submesh AABB like pickObject
+        size_t subMeshCount = meshComp.getSubMeshCount();
+        for (size_t i = 0; i < subMeshCount; ++i) {
+            const AABB& bounds = meshComp.getSubMeshWorldBounds(i);
+
+            float tNear, tFar;
+            if (ray.intersectAABB(bounds, tNear, tFar)) {
+                float hitDistance = (tNear > 0.001f) ? tNear : tFar;
+                if (hitDistance > 0.001f && hitDistance < closestDistance) {
+                    closestDistance = hitDistance;
+                    foundIntersection = true;
+                }
+            }
+        }
+    }
+
+    if (foundIntersection) {
+        // Place at intersection point
+        return rayOrigin + rayDirection * closestDistance;
+    } else {
+        // No intersection found, place at origin
+        return glm::vec3(0.0f, 0.0f, 0.0f);
+    }
+}
+
+void SceneDebugLayer::handleAssetDragDrop() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Create full-screen invisible window for drop target
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.0f); // Fully transparent
+
+    // Check if currently dragging
+    const ImGuiPayload* payload = ImGui::GetDragDropPayload();
+    bool isDragging = payload && eastl::string(payload->DataType) == "ASSET_PATH";
+
+    // Log drag state for debugging
+    static bool wasDragging = false;
+    if (isDragging && !wasDragging) {
+        VT_INFO("Started dragging asset");
+        wasDragging = true;
+    } else if (!isDragging && wasDragging) {
+        VT_INFO("Stopped dragging asset");
+        wasDragging = false;
+    }
+
+    // Window flags - always allow mouse input to receive drops
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
+                            ImGuiWindowFlags_NoResize |
+                            ImGuiWindowFlags_NoMove |
+                            ImGuiWindowFlags_NoScrollbar |
+                            ImGuiWindowFlags_NoScrollWithMouse |
+                            ImGuiWindowFlags_NoCollapse |
+                            ImGuiWindowFlags_NoSavedSettings |
+                            ImGuiWindowFlags_NoFocusOnAppearing |
+                            ImGuiWindowFlags_NoBringToFrontOnFocus |
+                            ImGuiWindowFlags_NoBackground;
+
+    // Don't block mouse input when dragging
+    if (!isDragging) {
+        flags |= ImGuiWindowFlags_NoMouseInputs;
+    }
+
+    if (ImGui::Begin("##SceneDropTarget", nullptr, flags)) {
+        // Make entire window a drop target
+        ImGui::InvisibleButton("##DropZone", io.DisplaySize);
+
+        if (ImGui::BeginDragDropTarget()) {
+            VT_DEBUG("Drop target ready");
+
+            if (const ImGuiPayload* dropPayload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
+                const char* path = (const char*)dropPayload->Data;
+                VT_INFO("Asset dropped in scene: {}", path);
+
+                float mouseX = io.MousePos.x;
+                float mouseY = io.MousePos.y;
+
+                if (onAssetDroppedWithPosition) {
+                    glm::vec3 placementPos = calculatePlacementPosition(mouseX, mouseY);
+                    onAssetDroppedWithPosition(path, placementPos);
+                } else if (onAssetDropped) {
+                    onAssetDropped(path);
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+    }
+    ImGui::End();
+}
+
+void SceneDebugLayer::renderSceneHierarchy() {
+    if (!scene || scene->empty()) {
+        ImGui::Text("No scene loaded - showing flat entity list");
+        ImGui::Separator();
+
+        // Fallback to flat entity table
+        if (ImGui::BeginTable("EntityTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("ID");
+            ImGui::TableSetupColumn("World Position");
+            ImGui::TableSetupColumn("Local Position");
+            ImGui::TableSetupColumn("Scale");
+            ImGui::TableHeadersRow();
+
+            auto transformView = world->view<TransformComponent>();
+            for (auto entity : transformView) {
+                auto& transform = transformView.get<TransformComponent>(entity);
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+
+                // Highlight selected entity
+                if (entity == selectedEntity) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(100, 150, 200, 100));
+                }
+
+                eastl::string entityLabel = std::to_string(static_cast<uint32_t>(entity)).c_str();
+                if (ImGui::Selectable(entityLabel.c_str(),
+                                     entity == selectedEntity, ImGuiSelectableFlags_SpanAllColumns)) {
+                    selectedEntity = entity;
+                }
+
+                ImGui::TableNextColumn();
+                glm::vec3 worldPos = transform.world.position;
+                ImGui::Text("%.1f, %.1f, %.1f", worldPos.x, worldPos.y, worldPos.z);
+
+                ImGui::TableNextColumn();
+                glm::vec3 localPos = transform.local.position;
+                ImGui::Text("%.1f, %.1f, %.1f", localPos.x, localPos.y, localPos.z);
+
+                ImGui::TableNextColumn();
+                glm::vec3 scale = transform.local.scale;
+                ImGui::Text("%.1f, %.1f, %.1f", scale.x, scale.y, scale.z);
+            }
+            ImGui::EndTable();
+        }
+        return;
+    }
+
+    // Show hierarchical tree view of scene nodes
+    ImGui::Text("Scene Nodes: %zu", scene->getNodeCount());
+    ImGui::Separator();
+
+    // Render root nodes
+    for (uint32_t rootId : scene->getRootNodes()) {
+        renderSceneNode(rootId);
+    }
+}
+
+void SceneDebugLayer::renderSceneNode(uint32_t nodeId) {
+    const Node* node = scene->getNode(nodeId);
+    if (!node) return;
+
+    ImGuiTreeNodeFlags nodeFlags = getNodeFlags(node);
+
+    // Use unique node ID to prevent ImGui ID conflicts (方案1)
+    ImGui::PushID(nodeId);
+    bool nodeOpen = ImGui::TreeNodeEx("##node", nodeFlags, "%s (ID: %u)",
+                                      node->name.empty() ? "Unnamed" : node->name.c_str(), nodeId);
+
+    // Handle node selection
+    handleNodeSelection(node);
+
+    // Scene node drag source - enable dragging of this node
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+        ImGui::SetDragDropPayload("SCENE_NODE", &nodeId, sizeof(uint32_t));
+        ImGui::Text("Reparent: %s", node->name.empty() ? "Unnamed" : node->name.c_str());
+        ImGui::EndDragDropSource();
+    }
+
+    // Scene node drop target - allow dropping other nodes onto this one
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
+            uint32_t draggedNodeId = *(const uint32_t*)payload->Data;
+            handleNodeReparenting(draggedNodeId, nodeId);
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    // Show entity info if available
+    if (node->entity != entt::null) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(Entity: %u)", static_cast<uint32_t>(node->entity));
+
+        // Show tooltip with transform info
+        renderNodeTooltip(node);
+    }
+
+    if (nodeOpen) {
+        for (uint32_t childId : node->childrenIds) {
+            renderSceneNode(childId);
+        }
+        ImGui::TreePop();
+    }
+
+    ImGui::PopID();
+}
+
+void SceneDebugLayer::handleNodeSelection(const Node* node) {
+    if (ImGui::IsItemClicked() && node->entity != entt::null) {
+        selectedEntity = node->entity;
+    }
+}
+
+void SceneDebugLayer::renderNodeTooltip(const Node* node) {
+    if (ImGui::IsItemHovered() && node->entity != entt::null) {
+        if (auto* transform = world->getRegistry().try_get<TransformComponent>(node->entity)) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Local Position: (%.2f, %.2f, %.2f)",
+                transform->local.position.x, transform->local.position.y, transform->local.position.z);
+            ImGui::Text("World Position: (%.2f, %.2f, %.2f)",
+                transform->world.position.x, transform->world.position.y, transform->world.position.z);
+            ImGui::EndTooltip();
+        }
+    }
+}
+
+ImGuiTreeNodeFlags SceneDebugLayer::getNodeFlags(const Node* node) const {
+    ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
+
+    if (!node->hasChildren()) {
+        nodeFlags |= ImGuiTreeNodeFlags_Leaf;
+    }
+
+    if (node->entity == selectedEntity) {
+        nodeFlags |= ImGuiTreeNodeFlags_Selected;
+    }
+
+    return nodeFlags;
+}
+
+void SceneDebugLayer::handleNodeReparenting(uint32_t draggedNodeId, uint32_t newParentId) {
+    // Validate the reparenting operation
+    if (!canReparent(draggedNodeId, newParentId)) {
+        return;
+    }
+
+    const Node* draggedNode = scene->getNode(draggedNodeId);
+    if (!draggedNode) {
+        return;
+    }
+
+    // Preserve world position before reparenting
+    preserveWorldPosition(draggedNodeId, newParentId);
+
+    // Perform the reparenting
+    scene->setParent(draggedNodeId, newParentId);
+
+    // Update world transforms for the entire scene
+    scene->updateWorldTransforms(world->getRegistry());
+
+    // Mark scene as dirty for BVH rebuild
+    if (renderer) {
+        renderer->markSceneDirty();
+    }
+
+    VT_INFO("Reparented node {} '{}' to parent {}", draggedNodeId,
+            draggedNode->name.empty() ? "Unnamed" : draggedNode->name.c_str(), newParentId);
+}
+
+bool SceneDebugLayer::canReparent(uint32_t childId, uint32_t parentId) const {
+    // Can't reparent node to itself
+    if (childId == parentId) {
+        return false;
+    }
+
+    // Can't reparent to a non-existent node
+    if (parentId != 0 && !scene->getNode(parentId)) {
+        return false;
+    }
+
+    // Can't reparent node to its own descendant (would create a cycle)
+    const Node* currentNode = scene->getNode(parentId);
+    while (currentNode && currentNode->parentId != 0) {
+        if (currentNode->parentId == childId) {
+            return false; // Parent would become a descendant of child
+        }
+        currentNode = scene->getNode(currentNode->parentId);
+    }
+
+    return true;
+}
+
+void SceneDebugLayer::preserveWorldPosition(uint32_t nodeId, uint32_t newParentId) {
+    const Node* node = scene->getNode(nodeId);
+    if (!node || node->entity == entt::null) {
+        return;
+    }
+
+    auto* transformComp = world->getRegistry().try_get<TransformComponent>(node->entity);
+    if (!transformComp) {
+        return;
+    }
+
+    // Store current world transform
+    glm::vec3 worldPosition = transformComp->world.position;
+    glm::quat worldRotation = transformComp->world.rotation;
+    glm::vec3 worldScale = transformComp->world.scale;
+
+    // Calculate new parent's world transform
+    glm::mat4 newParentWorldMatrix = glm::mat4(1.0f);
+    if (newParentId != 0) {
+        newParentWorldMatrix = scene->getWorldTransform(newParentId, world->getRegistry());
+    }
+
+    // Calculate the inverse of new parent's world transform
+    glm::mat4 invParentMatrix = glm::inverse(newParentWorldMatrix);
+
+    // Calculate new local transform that will preserve world position
+    glm::mat4 currentWorldMatrix = transformComp->world.getMatrix();
+    glm::mat4 newLocalMatrix = invParentMatrix * currentWorldMatrix;
+
+    // Decompose the new local matrix back to transform components
+    glm::vec3 scale, translation, skew;
+    glm::vec4 perspective;
+    glm::quat orientation;
+    glm::decompose(newLocalMatrix, scale, orientation, translation, skew, perspective);
+
+    // Update local transform
+    transformComp->local.position = translation;
+    transformComp->local.rotation = orientation;
+    transformComp->local.scale = scale;
+    transformComp->dirty = true;
 }
 
 }

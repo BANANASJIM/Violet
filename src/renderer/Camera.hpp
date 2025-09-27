@@ -26,22 +26,19 @@ public:
     glm::vec3 getRight() const { return glm::normalize(glm::cross(getForward(), up)); }
 
     const Frustum& getFrustum() const {
-        // FORCE frustum to be dirty every frame for debugging
-        frustumDirty = true;
-
         if (frustumDirty) {
             // Correct order: projection * view (view-projection matrix)
             glm::mat4 viewProjMatrix = getProjectionMatrix() * getViewMatrix();
             frustum.extract(viewProjMatrix);
             frustumDirty = false;
 
-            // Debug: Log frustum updates occasionally
-            static int frustumUpdateCount = 0;
-            frustumUpdateCount++;
-            if (frustumUpdateCount % 60 == 0) {  // Log every ~1 second at 60fps
-                violet::Log::info("Camera", "Frustum FORCED update #{} for camera at ({:.1f}, {:.1f}, {:.1f}) target({:.1f}, {:.1f}, {:.1f})",
-                                frustumUpdateCount, position.x, position.y, position.z, target.x, target.y, target.z);
-            }
+            // Debug: Log frustum updates occasionally (commented out)
+            // static int frustumUpdateCount = 0;
+            // frustumUpdateCount++;
+            // if (frustumUpdateCount % 60 == 0) {  // Log every ~1 second at 60fps
+            //     violet::Log::info("Camera", "Frustum FORCED update #{} for camera at ({:.1f}, {:.1f}, {:.1f}) target({:.1f}, {:.1f}, {:.1f})",
+            //                     frustumUpdateCount, position.x, position.y, position.z, target.x, target.y, target.z);
+            // }
         }
         return frustum;
     }

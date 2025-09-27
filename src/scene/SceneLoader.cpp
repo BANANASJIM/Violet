@@ -6,6 +6,7 @@
 #include <EASTL/algorithm.h>
 
 #include "core/Log.hpp"
+#include "core/FileSystem.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
 #include "renderer/ForwardRenderer.hpp"
@@ -300,7 +301,9 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
         const tinygltf::Material& gltfMaterial = gltfModel->materials[i];
 
         // Create material and instance
-        Material* material = loadCtx.renderer->createMaterial("build/shaders/pbr.vert.spv", "build/shaders/pbr.frag.spv");
+        Material* material = loadCtx.renderer->createMaterial(
+            violet::FileSystem::resolveRelativePath("build/shaders/pbr.vert.spv"),
+            violet::FileSystem::resolveRelativePath("build/shaders/pbr.frag.spv"));
         PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(loadCtx.renderer->createPBRMaterialInstance(material));
 
         // Extract PBR material data

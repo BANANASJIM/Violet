@@ -32,6 +32,7 @@ find_package(Ktx CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(imguizmo CONFIG REQUIRED)
 
 # Enable ccache if available
 find_program(CCACHE_PROGRAM ccache)
@@ -70,11 +71,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     KTX::ktx
     EnTT::EnTT
     imgui::imgui
+    imguizmo::imguizmo
 )
 
 # Precompiled headers for faster compilation
 target_precompile_headers(${PROJECT_NAME} PRIVATE
     <vulkan/vulkan.hpp>
+    <vulkan/vulkan_raii.hpp>
+    <vk_mem_alloc.h>
     <spdlog/spdlog.h>
     <glm/glm.hpp>
     <algorithm>

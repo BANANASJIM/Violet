@@ -195,6 +195,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
     }
 }
 
+
 void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& position) {
     VT_INFO("Loading asset at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
 
@@ -228,8 +229,11 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
 
                     // Merge the temporary scene into the current scene if it exists
                     if (currentScene) {
-                        // Update world transforms after position changes
-                        tempScene->updateWorldTransforms(world.getRegistry());
+                        // Use Scene's built-in merge functionality
+                        currentScene->mergeScene(tempScene.get());
+
+                        // Update world transforms after merging
+                        currentScene->updateWorldTransforms(world.getRegistry());
 
                         // Update world bounds for all MeshComponents
                         auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
@@ -239,6 +243,9 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
 
                         // Mark scene dirty for BVH rebuild
                         renderer.markSceneDirty();
+
+                        // Update SceneDebug to reflect the merged scene
+                        sceneDebug->setScene(currentScene.get());
                     } else {
                         // If no current scene exists, make this the current scene
                         currentScene = eastl::move(tempScene);

@@ -8,22 +8,60 @@ TabWidth: 4
 UseTab: Never
 AccessModifierOffset: -4
 
+# Alignment settings for better readability
 PointerAlignment: Left
 ReferenceAlignment: Left
 AlignTrailingComments: true
-AlignConsecutiveAssignments: false
-AlignOperands: true
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignOperands: Align
+AlignAfterOpenBracket: BlockIndent
 
+# Function and parameter formatting
+BinPackParameters: false
+BinPackArguments: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine: false
+
+# Braces and short statements
 BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
 
+# Spacing improvements
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Indentation and continuation
 IndentCaseLabels: true
 IndentPPDirectives: BeforeHash
 NamespaceIndentation: None
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
 
+# Line breaking
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+MaxEmptyLinesToKeep: 2
+
+# Include formatting
 SortIncludes: true
 IncludeBlocks: Regroup
 IncludeCategories:

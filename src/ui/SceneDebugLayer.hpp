@@ -6,10 +6,14 @@
 #include "core/events/EventDispatcher.hpp"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <EASTL/functional.h>
+#include <EASTL/string.h>
+#include <imgui.h>
 
 namespace violet {
 
 class Scene;
+struct Node;
 
 class ForwardRenderer;
 
@@ -28,6 +32,17 @@ public:
     void onImGuiRender() override;
 
     void setScene(Scene* newScene) { scene = newScene; }
+
+    void setOnAssetDropped(eastl::function<void(const eastl::string&)> callback) {
+        onAssetDropped = callback;
+    }
+
+    void setOnAssetDroppedWithPosition(eastl::function<void(const eastl::string&, const glm::vec3&)> callback) {
+        onAssetDroppedWithPosition = callback;
+    }
+
+    // Raycast-based asset placement
+    glm::vec3 calculatePlacementPosition(float mouseX, float mouseY);
 
 private:
     World* world;
@@ -66,6 +81,19 @@ private:
     void addRayFromMouseClick(float mouseX, float mouseY);
     void clearAllRays();
     void renderGizmo();
+    void handleAssetDragDrop();
+
+    // Scene hierarchy rendering methods
+    void renderSceneHierarchy();
+    void renderSceneNode(uint32_t nodeId);
+    void handleNodeSelection(const Node* node);
+    void renderNodeTooltip(const Node* node);
+    ImGuiTreeNodeFlags getNodeFlags(const Node* node) const;
+
+    // Scene node reparenting methods
+    void handleNodeReparenting(uint32_t draggedNodeId, uint32_t newParentId);
+    bool canReparent(uint32_t childId, uint32_t parentId) const;
+    void preserveWorldPosition(uint32_t nodeId, uint32_t newParentId);
 
 public:
     // Ray access for renderer
@@ -80,6 +108,10 @@ private:
     // Event subscription tracking
     EventDispatcher::HandlerId mouseClickHandlerId = 0;
     EventDispatcher::HandlerId keyPressHandlerId = 0;
+
+    // Asset drop callbacks
+    eastl::function<void(const eastl::string&)> onAssetDropped;
+    eastl::function<void(const eastl::string&, const glm::vec3&)> onAssetDroppedWithPosition;
 };
 
 }

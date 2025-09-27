@@ -3,6 +3,7 @@
 #include <array>
 
 #include "core/Log.hpp"
+#include "core/FileSystem.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
 #include "renderer/VulkanContext.hpp"
@@ -63,7 +64,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 
     // Use global uniforms from the main renderer
     debugPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
-                       "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", config);
+                       violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
+                       violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), config);
 
     // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
     wireframePipeline = eastl::make_unique<Pipeline>();
@@ -78,7 +80,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     }
 
     wireframePipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
-                           "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", wireframeConfig);
+                           violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
+                           violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), wireframeConfig);
 
     // Create solid pipeline for filled triangle rendering
     solidPipeline = eastl::make_unique<Pipeline>();
@@ -88,7 +91,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects
 
     solidPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
-                       "build/shaders/debug.vert.spv", "build/shaders/debug.frag.spv", solidConfig);
+                       violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
+                       violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), solidConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);

@@ -178,15 +178,6 @@ void CameraController::updateCameraVectors() {
         camera->setTarget(position + front);
         camera->setUp(up);
 
-        // Debug: Log camera updates occasionally
-        static int updateCount = 0;
-        updateCount++;
-        if (updateCount % 60 == 0) {  // Log every ~1 second at 60fps
-            VT_INFO("Camera updated: pos({:.1f}, {:.1f}, {:.1f}) target({:.1f}, {:.1f}, {:.1f}) yaw={:.1f}° pitch={:.1f}°",
-                    position.x, position.y, position.z,
-                    (position + front).x, (position + front).y, (position + front).z,
-                    glm::degrees(yaw), glm::degrees(pitch));
-        }
     }
 }
 

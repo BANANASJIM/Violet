@@ -5,6 +5,7 @@
 #include <EASTL/functional.h>
 #include <EASTL/string.h>
 #include <EASTL/unordered_map.h>
+#include <EASTL/hash_map.h>
 #include <EASTL/vector.h>
 
 #include <entt/entt.hpp>
@@ -40,8 +41,19 @@ public:
     void updateWorldTransforms(entt::registry& world);
     glm::mat4 getWorldTransform(uint32_t nodeId, entt::registry& world) const;
 
+    // Coordinate space transformation methods
+    glm::mat4 getParentWorldMatrix(uint32_t nodeId, entt::registry& registry) const;
+    bool isRootNode(uint32_t nodeId) const;
+    glm::mat4 convertWorldToLocal(uint32_t nodeId, const glm::mat4& worldMatrix, entt::registry& registry) const;
+    uint32_t findNodeIdForEntity(entt::entity entity) const;
+
     void clear();
     bool empty() const { return nodes.empty(); }
+
+    // Scene merging functionality
+    void mergeScene(const Scene* sourceScene);
+    void mergeNodeHierarchy(const Scene* sourceScene, uint32_t sourceNodeId,
+                           uint32_t targetParentId, eastl::hash_map<uint32_t, uint32_t>& nodeIdMapping);
 
 private:
     eastl::unordered_map<uint32_t, Node> nodes;

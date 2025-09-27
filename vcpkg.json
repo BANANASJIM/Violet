@@ -14,6 +14,7 @@
     "ktx",
     "stb",
     "entt",
+    "imguizmo",
     {
       "name": "imgui",
       "features": ["vulkan-binding", "glfw-binding"]

@@ -37,7 +37,7 @@ private:
     };
 
     FileTreeNode rootNode;
-    eastl::string assetDirectory{"assets/"};
+    eastl::string assetDirectory;
     eastl::string statusMessage = "Ready";
 
     void buildFileTree(const eastl::string& path, FileTreeNode& node);

@@ -9,7 +9,6 @@ CompileFlags:
     - -Wno-missing-field-initializers
     - -Wno-unused-parameter
     - -fcoroutines
-    - -fconcepts-diagnostics-depth=3
   Remove: 
     - -W*
     
