@@ -1108,6 +1108,7 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
     registry.emplace<TransformComponent>(entity, createInitializedTransform(position));
 
     // Add light component based on type
+    eastl::string lightName;
     if (type == LightType::Directional) {
         auto light = LightComponent::createDirectionalLight(
             glm::vec3(-0.3f, -1.0f, -0.3f),
@@ -1115,6 +1116,7 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
             1.0f
         );
         registry.emplace<LightComponent>(entity, light);
+        lightName = "Directional Light";
     } else {
         auto light = LightComponent::createPointLight(
             glm::vec3(1.0f, 1.0f, 1.0f),
@@ -1122,6 +1124,24 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
             300.0f
         );
         registry.emplace<LightComponent>(entity, light);
+        lightName = "Point Light";
+    }
+
+    // Add light to scene hierarchy if scene exists
+    if (scene) {
+        // Create a scene node for the light
+        Node lightNode;
+        lightNode.name = lightName;
+        lightNode.entity = entity;
+        lightNode.parentId = 0;  // Make it a root node
+
+        // Add node to scene (will automatically be added as root since parentId = 0)
+        uint32_t nodeId = scene->addNode(lightNode);
+
+        // Update world transforms to ensure the light's position is properly set
+        scene->updateWorldTransforms(world->getRegistry());
+
+        VT_INFO("Added light entity {} to scene hierarchy as node {}", static_cast<uint32_t>(entity), nodeId);
     }
 
     selectedEntity = entity;
