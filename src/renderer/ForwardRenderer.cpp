@@ -14,7 +14,7 @@
 #include "renderer/DescriptorSet.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
-#include "renderer/Pipeline.hpp"
+#include "renderer/GraphicsPipeline.hpp"
 #include "renderer/RenderPass.hpp"
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/VulkanContext.hpp"
@@ -370,7 +370,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     }
 
     // 创建pipeline，使用global和material的descriptor set layout
-    auto pipeline = new Pipeline();
+    auto pipeline = new GraphicsPipeline();
     try {
         pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
         // Pipeline initialized

@@ -7,7 +7,7 @@
 #include "renderer/Material.hpp"
 #include "renderer/Mesh.hpp"
 #include "renderer/VulkanContext.hpp"
-#include "renderer/Pipeline.hpp"
+#include "renderer/GraphicsPipeline.hpp"
 #include "renderer/RenderPass.hpp"
 #include "renderer/ResourceFactory.hpp"
 #include "renderer/UniformBuffer.hpp"
@@ -41,7 +41,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     debugMaterial->create(context, DescriptorSetType::UnlitMaterialTextures);
 
     // Create debug pipeline with line topology
-    debugPipeline = eastl::make_unique<Pipeline>();
+    debugPipeline = eastl::make_unique<GraphicsPipeline>();
     PipelineConfig config;
     config.topology = vk::PrimitiveTopology::eLineList;
     config.cullMode = vk::CullModeFlagBits::eNone;
@@ -68,7 +68,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
                        violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), config);
 
     // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
-    wireframePipeline = eastl::make_unique<Pipeline>();
+    wireframePipeline = eastl::make_unique<GraphicsPipeline>();
     PipelineConfig wireframeConfig = config;  // Copy base config
     wireframeConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
 
@@ -84,7 +84,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
                            violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), wireframeConfig);
 
     // Create solid pipeline for filled triangle rendering
-    solidPipeline = eastl::make_unique<Pipeline>();
+    solidPipeline = eastl::make_unique<GraphicsPipeline>();
     PipelineConfig solidConfig = config;  // Copy base config
     solidConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
     solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles

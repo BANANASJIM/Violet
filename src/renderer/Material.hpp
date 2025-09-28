@@ -9,7 +9,7 @@
 namespace violet {
 
 class VulkanContext;
-class Pipeline;
+class GraphicsPipeline;
 class Texture;
 class UniformBuffer;
 class DescriptorSet;
@@ -29,7 +29,7 @@ public:
     void create(VulkanContext* context, DescriptorSetType materialType);
     void cleanup();
 
-    Pipeline* getPipeline() const { return pipeline; }
+    GraphicsPipeline* getPipeline() const { return pipeline; }
     vk::PipelineLayout getPipelineLayout() const;
 
     // Material管理自己的descriptor set layout
@@ -49,7 +49,7 @@ public:
     bool isDoubleSided() const { return doubleSided; }
     void setDoubleSided(bool value) { doubleSided = value; }
 
-    Pipeline* pipeline = nullptr;
+    GraphicsPipeline* pipeline = nullptr;
 
 private:
     VulkanContext* context = nullptr;

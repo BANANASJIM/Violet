@@ -1,6 +1,6 @@
 #include "Material.hpp"
 #include "renderer/VulkanContext.hpp"
-#include "renderer/Pipeline.hpp"
+#include "renderer/GraphicsPipeline.hpp"
 #include "renderer/DescriptorSet.hpp"
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/Texture.hpp"

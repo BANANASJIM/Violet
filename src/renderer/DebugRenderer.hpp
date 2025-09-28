@@ -9,7 +9,7 @@
 #include "BaseRenderer.hpp"
 #include "renderer/Vertex.hpp"
 #include "renderer/GPUResource.hpp"
-#include "renderer/Pipeline.hpp"
+#include "renderer/GraphicsPipeline.hpp"
 #include "math/AABB.hpp"
 #include "math/Frustum.hpp"
 #include <entt/entt.hpp>
@@ -19,7 +19,7 @@ namespace violet {
 class Material;
 class MaterialInstance;
 class Mesh;
-class Pipeline;
+class GraphicsPipeline;
 class DescriptorSet;
 class UniformBuffer;
 class GlobalUniforms;
@@ -113,11 +113,11 @@ private:
     eastl::vector<FrameData> frameData;
 
     // Debug pipeline
-    eastl::unique_ptr<Pipeline> debugPipeline;
+    eastl::unique_ptr<GraphicsPipeline> debugPipeline;
     // Wireframe pipeline for mesh rendering
-    eastl::unique_ptr<Pipeline> wireframePipeline;
+    eastl::unique_ptr<GraphicsPipeline> wireframePipeline;
     // Solid pipeline for filled mesh rendering
-    eastl::unique_ptr<Pipeline> solidPipeline;
+    eastl::unique_ptr<GraphicsPipeline> solidPipeline;
 
     // Batched ray rendering data
     eastl::vector<Vertex> batchedRayVertices;

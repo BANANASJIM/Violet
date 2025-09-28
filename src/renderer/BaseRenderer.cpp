@@ -1,6 +1,5 @@
 #include "BaseRenderer.hpp"
 #include "Mesh.hpp"
-#include "Pipeline.hpp"
 #include "VulkanContext.hpp"
 
 namespace violet {
