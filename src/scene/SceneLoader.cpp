@@ -57,16 +57,33 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
     loadCtx.renderer = renderer;
     loadCtx.defaultTexture = defaultTexture;
 
-    // Load textures first
     loadTextures(loadCtx, &gltfModel);
-
-    // Load materials
     loadMaterials(loadCtx, &gltfModel, filePath);
 
     const tinygltf::Scene& gltfScene = gltfModel.scenes[gltfModel.defaultScene > -1 ? gltfModel.defaultScene : 0];
 
+    size_t lastSlash = filePath.find_last_of("/\\");
+    size_t lastDot = filePath.find_last_of(".");
+    eastl::string modelName = filePath.substr(
+        lastSlash != eastl::string::npos ? lastSlash + 1 : 0,
+        lastDot != eastl::string::npos ? lastDot - (lastSlash != eastl::string::npos ? lastSlash + 1 : 0) : eastl::string::npos
+    );
+
+    // Create a parent node for the entire imported model
+    uint32_t parentNodeId = 0;
+    if (gltfScene.nodes.size() > 1 || !modelName.empty()) {
+        // Create parent node only if there are multiple root nodes or we want to group the model
+        Node parentNode;
+        parentNode.name = modelName.empty() ? "Imported Model" : modelName;
+        parentNode.parentId = 0;  // Root level node
+        parentNode.entity = entt::null;  // Parent node has no entity/mesh
+        parentNodeId = scene->addNode(parentNode);
+
+        VT_INFO("Created parent node '{}' for imported model", parentNode.name.c_str());
+    }
+
     for (size_t i = 0; i < gltfScene.nodes.size(); i++) {
-        loadNode(loadCtx, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, 0, world);
+        loadNode(loadCtx, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, parentNodeId, world);
     }
 
     VT_INFO("Scene loaded successfully: {} nodes", scene->getNodeCount());

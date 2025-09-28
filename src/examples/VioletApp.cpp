@@ -230,17 +230,48 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                     // Update world transforms for the loaded entities
                     tempScene->updateWorldTransforms(world.getRegistry());
 
-                    // Apply position offset to all root entities in the loaded scene
+                    // Apply position offset to the parent node (which groups the entire model)
                     auto& registry = world.getRegistry();
                     const auto& rootNodeIds = tempScene->getRootNodes();
-                    for (uint32_t rootNodeId : rootNodeIds) {
+
+                    // For imported models with a parent node, we only need to move the parent
+                    if (rootNodeIds.size() == 1) {
+                        uint32_t rootNodeId = rootNodeIds[0];
                         const Node* node = tempScene->getNode(rootNodeId);
-                        if (node && registry.valid(node->entity)) {
-                            auto* transformComp = registry.try_get<TransformComponent>(node->entity);
-                            if (transformComp) {
-                                // Apply position offset to the root transform
-                                transformComp->local.setPosition(transformComp->local.position + position);
-                                transformComp->dirty = true;
+
+                        // Check if this is a parent node (no entity) or a mesh node
+                        if (node) {
+                            if (node->entity == entt::null) {
+                                // This is a parent grouping node - create a transform entity for it
+                                entt::entity parentEntity = world.createEntity();
+                                TransformComponent parentTransform;
+                                parentTransform.local.setPosition(position);
+                                parentTransform.dirty = true;
+                                world.addComponent<TransformComponent>(parentEntity, parentTransform);
+
+                                // Update the node to reference this entity
+                                const_cast<Node*>(node)->entity = parentEntity;
+
+                                VT_INFO("Applied position to parent node '{}'", node->name.c_str());
+                            } else if (registry.valid(node->entity)) {
+                                // Single mesh node - apply position directly
+                                auto* transformComp = registry.try_get<TransformComponent>(node->entity);
+                                if (transformComp) {
+                                    transformComp->local.setPosition(transformComp->local.position + position);
+                                    transformComp->dirty = true;
+                                }
+                            }
+                        }
+                    } else {
+                        // Multiple root nodes - apply to each (legacy behavior)
+                        for (uint32_t rootNodeId : rootNodeIds) {
+                            const Node* node = tempScene->getNode(rootNodeId);
+                            if (node && registry.valid(node->entity)) {
+                                auto* transformComp = registry.try_get<TransformComponent>(node->entity);
+                                if (transformComp) {
+                                    transformComp->local.setPosition(transformComp->local.position + position);
+                                    transformComp->dirty = true;
+                                }
                             }
                         }
                     }

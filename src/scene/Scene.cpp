@@ -216,16 +216,15 @@ void Scene::mergeNodeHierarchy(const Scene* sourceScene, uint32_t sourceNodeId,
     const Node* sourceNode = sourceScene->getNode(sourceNodeId);
     if (!sourceNode) return;
 
-    // Create new node in target scene
-    Node newNode = *sourceNode;  // Copy node data
-    newNode.id = 0;              // Reset ID so addNode() assigns unique ID
+    Node newNode = *sourceNode;
+    newNode.id = 0;
     newNode.parentId = targetParentId;
-    newNode.childrenIds.clear(); // Will be populated as we add children
+    newNode.childrenIds.clear();
 
     uint32_t newNodeId = addNode(newNode);
     nodeIdMapping[sourceNodeId] = newNodeId;
 
-    // Recursively merge all children
+    //  merge all children
     for (uint32_t childSourceId : sourceNode->childrenIds) {
         mergeNodeHierarchy(sourceScene, childSourceId, newNodeId, nodeIdMapping);
     }
