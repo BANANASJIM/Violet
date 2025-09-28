@@ -4,6 +4,9 @@
 
 #include <EASTL/unique_ptr.h>
 
+#include "renderer/ResourceFactory.hpp"
+#include "renderer/Buffer.hpp"
+
 #include "core/Log.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
@@ -28,6 +31,7 @@ void ForwardRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesIn
     maxFramesInFlight = framesInFlight;
     globalUniforms.init(context, maxFramesInFlight);
     debugRenderer.init(context, renderPass, &globalUniforms, maxFramesInFlight);
+    createDefaultPBRTextures();
 }
 
 void ForwardRenderer::cleanup() {
@@ -405,6 +409,14 @@ MaterialInstance* ForwardRenderer::createPBRMaterialInstance(Material* material)
     // MaterialInstance创建自己的descriptor set
     instance->createDescriptorSet(maxFramesInFlight);
 
+    // Set default PBR textures if available
+    if (defaultMetallicRoughnessTexture) {
+        instance->setMetallicRoughnessTexture(defaultMetallicRoughnessTexture);
+    }
+    if (defaultNormalTexture) {
+        instance->setNormalTexture(defaultNormalTexture);
+    }
+
     MaterialInstance* ptr = instance.get();
     materialInstances.push_back(eastl::move(instance));
 
@@ -511,11 +523,109 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex) {
     cachedUBO.proj      = activeCamera->getProjectionMatrix();
     cachedUBO.cameraPos = activeCamera->getPosition();
 
+    // Collect lights from the scene
+    cachedUBO.numLights = 0;
+
+    // Process lights with frustum culling for point lights
+    const Frustum& frustum = activeCamera->getFrustum();
+
+    auto lightView = world.view<LightComponent, TransformComponent>();
+    for (auto entity : lightView) {
+        if (cachedUBO.numLights >= MAX_LIGHTS) {
+            break;  // Maximum lights reached
+        }
+
+        const auto& light = lightView.get<LightComponent>(entity);
+        const auto& transform = lightView.get<TransformComponent>(entity);
+
+        if (!light.enabled) {
+            continue;
+        }
+
+        // For point lights, check if within frustum
+        if (light.type == LightType::Point) {
+            AABB lightBounds = light.getBoundingSphere(transform.world.position);
+            if (!frustum.testAABB(lightBounds)) {
+                continue;  // Skip lights outside frustum
+            }
+        }
+
+        uint32_t lightIndex = cachedUBO.numLights;
+
+        // Set light position/direction based on type
+        if (light.type == LightType::Directional) {
+            // Store direction (not position) for directional lights
+            cachedUBO.lightPositions[lightIndex] = glm::vec4(light.direction, 0.0f);  // w=0 for directional
+        } else {
+            // Store position for point lights
+            cachedUBO.lightPositions[lightIndex] = glm::vec4(transform.world.position, 1.0f);  // w=1 for point
+        }
+
+        // Store color with intensity and radius
+        glm::vec3 finalColor = light.color * light.intensity;
+        cachedUBO.lightColors[lightIndex] = glm::vec4(finalColor, light.radius);
+
+        // Store attenuation parameters
+        cachedUBO.lightParams[lightIndex] = glm::vec4(
+            light.linearAttenuation,
+            light.quadraticAttenuation,
+            0.0f, 0.0f  // Reserved for future use
+        );
+
+        cachedUBO.numLights++;
+    }
+
+    // Set ambient light (can be made configurable later)
+    cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);  // Subtle blue-ish ambient
 
     uniformBuffers[frameIndex]->update(&cachedUBO, sizeof(cachedUBO));
     // REMOVED: descriptorSet->updateBuffer() - This was causing the UBO data to be lost!
     // The descriptor set is already bound to the buffer during initialization,
     // we only need to update the buffer contents, not rebind the descriptor set.
+}
+
+void ForwardRenderer::createDefaultPBRTextures() {
+    // Create basic white and black textures
+    defaultWhiteTexture = addTexture(ResourceFactory::createWhiteTexture(context));
+    defaultBlackTexture = addTexture(ResourceFactory::createBlackTexture(context));
+
+    // Create default metallic-roughness texture (G=roughness=0.8, B=metallic=0.0)
+    {
+        auto metallicRoughnessTexture = eastl::make_unique<Texture>();
+        constexpr uint32_t width = 4;
+        constexpr uint32_t height = 4;
+        constexpr uint32_t channels = 4;
+        eastl::vector<uint8_t> pixels(width * height * channels);
+
+        for (uint32_t i = 0; i < width * height; ++i) {
+            pixels[i * 4 + 0] = 255;  // R: unused
+            pixels[i * 4 + 1] = 204;  // G: roughness = 0.8 (204/255)
+            pixels[i * 4 + 2] = 0;    // B: metallic = 0.0
+            pixels[i * 4 + 3] = 255;  // A: alpha = 1.0
+        }
+
+        metallicRoughnessTexture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
+        defaultMetallicRoughnessTexture = addTexture(eastl::move(metallicRoughnessTexture));
+    }
+
+    // Create default normal texture (flat normal: 128,128,255)
+    {
+        auto normalTexture = eastl::make_unique<Texture>();
+        constexpr uint32_t width = 4;
+        constexpr uint32_t height = 4;
+        constexpr uint32_t channels = 4;
+        eastl::vector<uint8_t> pixels(width * height * channels);
+
+        for (uint32_t i = 0; i < width * height; ++i) {
+            pixels[i * 4 + 0] = 128;  // R: normal.x = 0
+            pixels[i * 4 + 1] = 128;  // G: normal.y = 0
+            pixels[i * 4 + 2] = 255;  // B: normal.z = 1
+            pixels[i * 4 + 3] = 255;  // A: alpha = 1.0
+        }
+
+        normalTexture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
+        defaultNormalTexture = addTexture(eastl::move(normalTexture));
+    }
 }
 
 } // namespace violet

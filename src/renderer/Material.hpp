@@ -63,7 +63,7 @@ private:
 struct PBRMaterialData {
     glm::vec4 baseColorFactor{1.0f};
     float metallicFactor{0.0f}; // Default to non-metallic for better visibility
-    float roughnessFactor{0.5f}; // Mid-range roughness
+    float roughnessFactor{0.8f}; // Higher roughness for more visible PBR effect
     float normalScale{1.0f};
     float occlusionStrength{1.0f};
     glm::vec3 emissiveFactor{0.0f};

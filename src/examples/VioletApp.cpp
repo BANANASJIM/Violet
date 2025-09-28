@@ -181,6 +181,24 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 // Give SceneDebugLayer access to the scene for proper hierarchy handling
                 sceneDebug->setScene(currentScene.get());
 
+                // Add default directional light to the scene
+                auto lightEntity = world.getRegistry().create();
+
+                // Properly initialize TransformComponent with world transform
+                TransformComponent lightTransform;
+                lightTransform.local.position = glm::vec3(0.0f, 100.0f, 0.0f);
+                lightTransform.world = lightTransform.local;  // Initialize world transform
+                lightTransform.dirty = false;
+                world.getRegistry().emplace<TransformComponent>(lightEntity, lightTransform);
+
+                auto light = LightComponent::createDirectionalLight(
+                    glm::vec3(-0.3f, -1.0f, -0.3f),  // Direction (from sun)
+                    glm::vec3(1.0f, 0.95f, 0.8f),     // Warm white color
+                    3.0f                              // Intensity
+                );
+                world.getRegistry().emplace<LightComponent>(lightEntity, light);
+                VT_INFO("Added default directional light to scene");
+
                 // Mark scene dirty for BVH rebuild
                 renderer.markSceneDirty();
 
@@ -307,49 +325,30 @@ void VioletApp::createTestCube() {
     Material* material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::MaterialTextures);
 
     if (!material) {
-        vertShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/unlit.vert.spv");
-        fragShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/unlit.frag.spv");
-        material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::UnlitMaterialTextures);
-    }
-
-    if (!material) {
-        VT_ERROR("Failed to create material");
+        VT_ERROR("Failed to create PBR material");
         return;
     }
 
-    MaterialInstance* materialInstance = nullptr;
-    if (vertShaderPath.find("pbr") != eastl::string::npos) {
-        materialInstance = renderer.createPBRMaterialInstance(material);
-        if (materialInstance) {
-            auto* pbrInstance = static_cast<PBRMaterialInstance*>(materialInstance);
-            auto& materialData = pbrInstance->getData();
-            materialData.baseColorFactor = glm::vec4(0.8f, 0.6f, 0.4f, 1.0f);
-            materialData.metallicFactor = 0.1f;
-            materialData.roughnessFactor = 0.4f;
-            materialData.normalScale = 1.0f;
-            materialData.occlusionStrength = 1.0f;
-            materialData.emissiveFactor = glm::vec3(0.0f);
-            materialData.alphaCutoff = 0.5f;
+    // Always create PBR material instance
+    MaterialInstance* materialInstance = renderer.createPBRMaterialInstance(material);
+    if (materialInstance) {
+        auto* pbrInstance = static_cast<PBRMaterialInstance*>(materialInstance);
+        auto& materialData = pbrInstance->getData();
+        materialData.baseColorFactor = glm::vec4(0.8f, 0.6f, 0.4f, 1.0f);
+        materialData.metallicFactor = 0.1f;
+        materialData.roughnessFactor = 0.4f;
+        materialData.normalScale = 1.0f;
+        materialData.occlusionStrength = 1.0f;
+        materialData.emissiveFactor = glm::vec3(0.0f);
+        materialData.alphaCutoff = 0.5f;
 
-            pbrInstance->setBaseColorTexture(&defaultTexture);
-            pbrInstance->setMetallicRoughnessTexture(&defaultTexture);
-            pbrInstance->setNormalTexture(&defaultTexture);
-            pbrInstance->setOcclusionTexture(&defaultTexture);
-            pbrInstance->setEmissiveTexture(&defaultTexture);
-        }
+        pbrInstance->setBaseColorTexture(&defaultTexture);
+        // Don't set default textures - let PBR instance use its own defaults
     }
 
     if (!materialInstance) {
-        materialInstance = renderer.createUnlitMaterialInstance(material);
-        if (!materialInstance) {
-            VT_ERROR("Failed to create material instance");
-            return;
-        }
-
-        auto* unlitInstance = static_cast<UnlitMaterialInstance*>(materialInstance);
-        auto& materialData = unlitInstance->getData();
-        materialData.baseColor = glm::vec4(1.0f, 0.5f, 0.3f, 1.0f);
-        unlitInstance->setBaseColorTexture(&defaultTexture);
+        VT_ERROR("Failed to create PBR material instance");
+        return;
     }
 
     for (uint32_t frame = 0; frame < 3; ++frame) {

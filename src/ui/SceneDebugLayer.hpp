@@ -90,6 +90,19 @@ private:
     void renderNodeTooltip(const Node* node);
     ImGuiTreeNodeFlags getNodeFlags(const Node* node) const;
 
+    // Light control window
+    void renderLightControlWindow();
+
+    // Helper functions
+    Camera* findActiveCamera();
+    TransformComponent createInitializedTransform(const glm::vec3& position = glm::vec3(0.0f, 100.0f, 0.0f));
+    entt::entity createLightEntity(LightType type, const glm::vec3& position = glm::vec3(0.0f, 100.0f, 0.0f));
+    const char* getLightTypeIcon(LightType type);
+    const char* getLightTypeString(LightType type);
+    void renderLightListItem(entt::entity entity, const LightComponent& light, int index);
+    void renderLightProperties(entt::entity entity, LightComponent* light);
+    void renderAttenuationPresets(LightComponent* light);
+
     // Scene node reparenting methods
     void handleNodeReparenting(uint32_t draggedNodeId, uint32_t newParentId);
     bool canReparent(uint32_t childId, uint32_t parentId) const;

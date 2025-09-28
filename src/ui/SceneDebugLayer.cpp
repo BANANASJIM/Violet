@@ -612,11 +612,14 @@ void SceneDebugLayer::renderGizmo() {
         snap = snapValues;
     }
 
+    // Don't restrict gizmo operations - let all entities use T/R/E normally
+    ImGuizmo::OPERATION currentGizmoOperation = static_cast<ImGuizmo::OPERATION>(gizmoOperation);
+
     // Manipulate transform using corrected projection matrix
     bool gizmoUsed = ImGuizmo::Manipulate(
         glm::value_ptr(view),
         glm::value_ptr(gizmoProj),
-        static_cast<ImGuizmo::OPERATION>(gizmoOperation),
+        currentGizmoOperation,
         static_cast<ImGuizmo::MODE>(gizmoMode),
         glm::value_ptr(matrix),
         nullptr, // deltaMatrix (not needed)
@@ -656,6 +659,16 @@ void SceneDebugLayer::renderGizmo() {
         transform->local.rotation = glm::quat(glm::radians(rotation));
         transform->local.scale = scale;
         transform->dirty = true;  // Mark for update
+
+        // Special handling for directional lights: only rotation affects direction
+        auto* light = registry.try_get<LightComponent>(selectedEntity);
+        if (light && light->type == LightType::Directional &&
+            currentGizmoOperation == ImGuizmo::ROTATE) {
+            // Extract direction from the rotated matrix
+            // Default direction is (0, -1, 0), apply rotation to get new direction
+            glm::mat3 rotationMatrix = glm::mat3(finalMatrix);
+            light->direction = glm::normalize(rotationMatrix * glm::vec3(0.0f, -1.0f, 0.0f));
+        }
 
         // Update world transforms through hierarchy if scene is available
         if (scene) {
@@ -987,6 +1000,253 @@ void SceneDebugLayer::handleAssetDragDrop() {
         }
     }
     ImGui::End();
+
+    // Render Light Control Window
+    renderLightControlWindow();
+}
+
+void SceneDebugLayer::renderLightControlWindow() {
+    ImGui::Begin("Light Control");
+
+    auto& registry = world->getRegistry();
+
+    // Add new lights section
+    if (ImGui::CollapsingHeader("Add New Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Add Directional Light")) {
+            createLightEntity(LightType::Directional);
+            VT_INFO("Created new directional light");
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Add Point Light")) {
+            // Place point light near camera if possible
+            Camera* activeCamera = findActiveCamera();
+            glm::vec3 position = glm::vec3(0.0f, 100.0f, 0.0f);
+            if (activeCamera) {
+                position = activeCamera->getPosition() + activeCamera->getForward() * 200.0f;
+            }
+            createLightEntity(LightType::Point, position);
+            VT_INFO("Created new point light");
+        }
+    }
+
+    ImGui::Separator();
+
+    // Light list section
+    if (ImGui::CollapsingHeader("Light List", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto lightView = registry.view<LightComponent, TransformComponent>();
+
+        // Count lights
+        size_t lightCount = 0;
+        for (auto entity : lightView) {
+            lightCount++;
+        }
+        ImGui::Text("Total Lights: %zu", lightCount);
+        ImGui::Separator();
+
+        // List all lights using helper function
+        int lightIndex = 0;
+        for (auto entity : lightView) {
+            auto& light = lightView.get<LightComponent>(entity);
+            renderLightListItem(entity, light, lightIndex++);
+        }
+    }
+
+    ImGui::Separator();
+
+    // Light properties editor
+    if (selectedEntity != entt::null) {
+        if (auto* light = registry.try_get<LightComponent>(selectedEntity)) {
+            if (ImGui::CollapsingHeader("Light Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+                renderLightProperties(selectedEntity, light);
+            }
+        } else {
+            // Selected entity is not a light - show info but don't reset selection
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                "Selected entity is not a light");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                "Select a light from the list above to edit properties");
+        }
+    } else {
+        ImGui::Text("No light selected");
+        ImGui::Text("Select a light from the list above");
+    }
+
+    ImGui::End();
+}
+
+// Helper function implementations
+Camera* SceneDebugLayer::findActiveCamera() {
+    if (!world) return nullptr;
+
+    auto cameraView = world->view<CameraComponent>();
+    for (auto entity : cameraView) {
+        auto& cameraComp = cameraView.get<CameraComponent>(entity);
+        if (cameraComp.isActive && cameraComp.camera) {
+            return cameraComp.camera.get();
+        }
+    }
+    return nullptr;
+}
+
+TransformComponent SceneDebugLayer::createInitializedTransform(const glm::vec3& position) {
+    TransformComponent transform;
+    transform.local.position = position;
+    transform.world = transform.local;
+    transform.dirty = false;
+    return transform;
+}
+
+entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3& position) {
+    if (!world) return entt::null;
+
+    auto& registry = world->getRegistry();
+    auto entity = registry.create();
+
+    // Add transform component
+    registry.emplace<TransformComponent>(entity, createInitializedTransform(position));
+
+    // Add light component based on type
+    if (type == LightType::Directional) {
+        auto light = LightComponent::createDirectionalLight(
+            glm::vec3(-0.3f, -1.0f, -0.3f),
+            glm::vec3(1.0f, 1.0f, 1.0f),
+            1.0f
+        );
+        registry.emplace<LightComponent>(entity, light);
+    } else {
+        auto light = LightComponent::createPointLight(
+            glm::vec3(1.0f, 1.0f, 1.0f),
+            10.0f,
+            300.0f
+        );
+        registry.emplace<LightComponent>(entity, light);
+    }
+
+    selectedEntity = entity;
+    return entity;
+}
+
+const char* SceneDebugLayer::getLightTypeIcon(LightType type) {
+    return (type == LightType::Directional) ? "[DIR]" : "[POINT]";
+}
+
+const char* SceneDebugLayer::getLightTypeString(LightType type) {
+    return (type == LightType::Directional) ? "Directional" : "Point";
+}
+
+void SceneDebugLayer::renderLightListItem(entt::entity entity, const LightComponent& light, int index) {
+    const char* typeIcon = getLightTypeIcon(light.type);
+    const char* enabledIcon = light.enabled ? "ON" : "OFF";
+    bool isSelected = (entity == selectedEntity);
+
+    ImGui::PushID(index);
+
+    // Make the entire row selectable
+    char label[256];
+    snprintf(label, sizeof(label), "%s Light %u [%s]", typeIcon, static_cast<uint32_t>(entity), enabledIcon);
+
+    if (ImGui::Selectable(label, isSelected)) {
+        selectedEntity = entity;
+    }
+
+    // Quick toggle enable/disable
+    ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+    ImGui::PushStyleColor(ImGuiCol_Button, light.enabled ? ImVec4(0.2f, 0.7f, 0.2f, 1.0f) : ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+    if (ImGui::SmallButton(light.enabled ? "ON" : "OFF")) {
+        // Note: This modifies a const reference, but it's safe in this context
+        const_cast<LightComponent&>(light).enabled = !light.enabled;
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::PopID();
+}
+
+void SceneDebugLayer::renderAttenuationPresets(LightComponent* light) {
+    if (ImGui::Button("Preset: Close Range")) {
+        light->linearAttenuation = 0.22f;
+        light->quadraticAttenuation = 0.20f;
+        light->radius = 50.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Preset: Medium Range")) {
+        light->linearAttenuation = 0.09f;
+        light->quadraticAttenuation = 0.032f;
+        light->radius = 200.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Preset: Long Range")) {
+        light->linearAttenuation = 0.045f;
+        light->quadraticAttenuation = 0.0075f;
+        light->radius = 600.0f;
+    }
+}
+
+void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent* light) {
+    if (!world || !light) return;
+
+    auto& registry = world->getRegistry();
+
+    ImGui::Text("Entity ID: %u", static_cast<uint32_t>(entity));
+    ImGui::Text("Type: %s", getLightTypeString(light->type));
+
+    // User guidance
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "💡 Controls:");
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+        "  • Click to select light  • T/R/E keys for gizmo  • Adjust properties below");
+
+    ImGui::Separator();
+
+    // Common properties
+    ImGui::ColorEdit3("Color", &light->color.x);
+    ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+
+    // Type-specific properties
+    if (light->type == LightType::Directional) {
+        if (ImGui::DragFloat3("Direction", &light->direction.x, 0.01f, -1.0f, 1.0f)) {
+            light->direction = glm::normalize(light->direction);
+        }
+        if (ImGui::Button("Reset Direction")) {
+            light->direction = glm::vec3(-0.3f, -1.0f, -0.3f);
+            light->direction = glm::normalize(light->direction);
+        }
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+            "Tip: Use gizmo rotation (R key) to adjust direction visually");
+    } else if (light->type == LightType::Point) {
+        // Show read-only position info and guidance
+        auto* transform = registry.try_get<TransformComponent>(entity);
+        if (transform) {
+            ImGui::Text("Position: (%.2f, %.2f, %.2f)",
+                transform->world.position.x,
+                transform->world.position.y,
+                transform->world.position.z);
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                "Use gizmo in viewport to adjust position (T key)");
+        }
+
+        ImGui::Separator();
+        ImGui::DragFloat("Radius", &light->radius, 1.0f, 1.0f, 1000.0f);
+
+        if (ImGui::TreeNode("Attenuation")) {
+            ImGui::DragFloat("Linear", &light->linearAttenuation, 0.001f, 0.0f, 1.0f, "%.4f");
+            ImGui::DragFloat("Quadratic", &light->quadraticAttenuation, 0.0001f, 0.0f, 1.0f, "%.6f");
+            renderAttenuationPresets(light);
+            ImGui::TreePop();
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::Checkbox("Enabled", &light->enabled);
+
+    // Delete button
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+    if (ImGui::Button("Delete Light")) {
+        registry.destroy(entity);
+        selectedEntity = entt::null;
+        VT_INFO("Deleted light entity");
+    }
+    ImGui::PopStyleColor();
 }
 
 void SceneDebugLayer::renderSceneHierarchy() {

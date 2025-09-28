@@ -5,6 +5,14 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 view;
     mat4 proj;
     vec3 cameraPos;
+    float padding0;
+
+    // Light data
+    vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
+    vec4 lightColors[8];     // xyz=color*intensity, w=radius (for point lights)
+    vec4 lightParams[8];     // x=linear, y=quadratic attenuation, zw=reserved
+    int numLights;
+    vec3 ambientLight;
 } global;
 
 // Material UBO
@@ -33,10 +41,6 @@ layout(location = 4) in vec3 fragBitangent;
 layout(location = 5) in vec3 fragViewPos;
 
 layout(location = 0) out vec4 outColor;
-
-const vec3 lightPos = vec3(5.0, 5.0, 5.0); // World space light position
-const vec3 lightColor = vec3(50.0, 45.0, 40.0); // Much brighter light for visibility
-const vec3 ambientColor = vec3(0.8); // Much brighter ambient for testing
 
 const float PI = 3.14159265359;
 
@@ -113,34 +117,67 @@ void main() {
     vec3 F0 = vec3(0.04);
     F0 = mix(F0, albedo, metallic);
 
-    // Reflectance equation
+    // Reflectance equation - accumulate lighting from all lights
     vec3 Lo = vec3(0.0);
 
-    // Calculate light contribution (use world space coordinates for light position)
-    vec3 L = normalize(lightPos - fragPos); // Light vector in world space
-    vec3 H = normalize(V + L);
-    float distance = length(lightPos - fragPos);
-    float attenuation = 1.0 / (distance * distance);
-    vec3 radiance = lightColor * attenuation;
+    // Process each light
+    for (int i = 0; i < global.numLights; i++) {
+        vec3 L;
+        vec3 radiance;
 
-    // Cook-Torrance BRDF
-    float NDF = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+        float lightType = global.lightPositions[i].w;
+        vec3 lightColor = global.lightColors[i].xyz;
 
-    vec3 kS = F;
-    vec3 kD = vec3(1.0) - kS;
-    kD *= 1.0 - metallic;
+        if (lightType < 0.5) {
+            // Directional light (type == 0)
+            L = -normalize(global.lightPositions[i].xyz); // Direction stored as negative light direction
+            radiance = lightColor; // No attenuation for directional lights
+        } else {
+            // Point light (type == 1)
+            vec3 lightPos = global.lightPositions[i].xyz;
+            L = normalize(lightPos - fragPos);
+            float distance = length(lightPos - fragPos);
 
-    vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-    vec3 specular = numerator / denominator;
+            // Check if within light radius
+            float radius = global.lightColors[i].w;
+            if (distance > radius) {
+                continue; // Skip this light if outside radius
+            }
 
-    float NdotL = max(dot(N, L), 0.0);
-    Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+            // Attenuation
+            float linear = global.lightParams[i].x;
+            float quadratic = global.lightParams[i].y;
+            float attenuation = 1.0 / (1.0 + linear * distance + quadratic * distance * distance);
+
+            // Soft cutoff at radius boundary
+            float falloff = clamp(1.0 - (distance / radius), 0.0, 1.0);
+            attenuation *= falloff;
+
+            radiance = lightColor * attenuation;
+        }
+
+        // Calculate light contribution
+        vec3 H = normalize(V + L);
+
+        // Cook-Torrance BRDF
+        float NDF = DistributionGGX(N, H, roughness);
+        float G = GeometrySmith(N, V, L, roughness);
+        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallic;
+
+        vec3 numerator = NDF * G * F;
+        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        vec3 specular = numerator / denominator;
+
+        float NdotL = max(dot(N, L), 0.0);
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+    }
 
     // Ambient with occlusion
-    vec3 ambient = ambientColor * albedo * mix(1.0, occlusion, material.occlusionStrength);
+    vec3 ambient = global.ambientLight * albedo * mix(1.0, occlusion, material.occlusionStrength);
 
     vec3 color = ambient + Lo + emissive;
 

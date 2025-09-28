@@ -1,6 +1,7 @@
 #include "ResourceFactory.hpp"
 #include "VulkanContext.hpp"
 #include "Buffer.hpp"
+#include "Texture.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
@@ -203,6 +204,40 @@ VmaAllocationCreateFlags ResourceFactory::getVmaFlags(MemoryUsage usage) {
     default:
         return 0;
     }
+}
+
+eastl::unique_ptr<Texture> ResourceFactory::createWhiteTexture(VulkanContext* context) {
+    auto texture = eastl::make_unique<Texture>();
+
+    // Create 4x4 white texture
+    constexpr uint32_t width = 4;
+    constexpr uint32_t height = 4;
+    constexpr uint32_t channels = 4;
+    eastl::vector<uint8_t> pixels(width * height * channels, 255);
+
+    texture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
+    return texture;
+}
+
+eastl::unique_ptr<Texture> ResourceFactory::createBlackTexture(VulkanContext* context) {
+    auto texture = eastl::make_unique<Texture>();
+
+    // Create 4x4 black texture
+    constexpr uint32_t width = 4;
+    constexpr uint32_t height = 4;
+    constexpr uint32_t channels = 4;
+    eastl::vector<uint8_t> pixels(width * height * channels);
+
+    // Fill with black (RGB=0) but alpha=255
+    for (uint32_t i = 0; i < width * height; ++i) {
+        pixels[i * 4 + 0] = 0;   // R
+        pixels[i * 4 + 1] = 0;   // G
+        pixels[i * 4 + 2] = 0;   // B
+        pixels[i * 4 + 3] = 255; // A
+    }
+
+    texture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
+    return texture;
 }
 
 } // namespace violet

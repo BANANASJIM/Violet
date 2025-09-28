@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <cfloat>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -148,6 +149,64 @@ struct CameraControllerComponent {
 
     CameraControllerComponent(const CameraControllerComponent&)            = delete;
     CameraControllerComponent& operator=(const CameraControllerComponent&) = delete;
+};
+
+enum class LightType : uint32_t {
+    Directional = 0,
+    Point = 1,
+    Spot = 2  // Reserved for future spotlight implementation
+};
+
+struct LightComponent {
+    LightType type = LightType::Directional;
+    glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
+    float intensity = 1.0f;
+
+    // For directional light (normalized direction vector)
+    glm::vec3 direction = glm::vec3(-0.3f, -1.0f, -0.3f);
+
+    // For point/spot light
+    float radius = 100.0f;      // Light influence radius (also used for culling)
+    float linearAttenuation = 0.09f;    // Linear attenuation factor
+    float quadraticAttenuation = 0.032f; // Quadratic attenuation factor
+
+    // For spot light (future)
+    float innerCutoff = 0.0f;
+    float outerCutoff = 0.0f;
+
+    bool enabled = true;
+
+    // Get bounding sphere for point light culling (world space)
+    AABB getBoundingSphere(const glm::vec3& worldPosition) const {
+        if (type == LightType::Point) {
+            // Create AABB from sphere centered at worldPosition with radius
+            glm::vec3 halfExtents(radius);
+            return AABB(worldPosition - halfExtents, worldPosition + halfExtents);
+        }
+        // Directional lights affect everything, no culling
+        return AABB(glm::vec3(-FLT_MAX), glm::vec3(FLT_MAX));
+    }
+
+    LightComponent() = default;
+
+    // Helper constructors
+    static LightComponent createDirectionalLight(const glm::vec3& dir, const glm::vec3& col = glm::vec3(1.0f), float intens = 1.0f) {
+        LightComponent light;
+        light.type = LightType::Directional;
+        light.direction = glm::normalize(dir);
+        light.color = col;
+        light.intensity = intens;
+        return light;
+    }
+
+    static LightComponent createPointLight(const glm::vec3& col = glm::vec3(1.0f), float intens = 1.0f, float rad = 100.0f) {
+        LightComponent light;
+        light.type = LightType::Point;
+        light.color = col;
+        light.intensity = intens;
+        light.radius = rad;
+        return light;
+    }
 };
 
 } // namespace violet

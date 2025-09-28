@@ -3,10 +3,12 @@
 #include <vulkan/vulkan.hpp>
 #include <vk_mem_alloc.h>
 #include <EASTL/string.h>
+#include <EASTL/unique_ptr.h>
 
 namespace violet {
 
 class VulkanContext;
+class Texture;
 
 enum class MemoryUsage {
     GPU_ONLY,       // Device local memory (textures, vertex/index buffers)
@@ -70,6 +72,10 @@ public:
     static vk::ImageView createImageView(VulkanContext* context, const ImageResource& image,
                                          vk::ImageViewType viewType = vk::ImageViewType::e2D,
                                          vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor);
+
+    // High-level texture creation methods
+    static eastl::unique_ptr<Texture> createWhiteTexture(VulkanContext* context);
+    static eastl::unique_ptr<Texture> createBlackTexture(VulkanContext* context);
 
 private:
     static VmaMemoryUsage toVmaUsage(MemoryUsage usage);

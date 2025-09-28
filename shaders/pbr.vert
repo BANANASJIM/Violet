@@ -4,6 +4,14 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 view;
     mat4 proj;
     vec3 cameraPos;
+    float padding0;
+
+    // Light data
+    vec4 lightPositions[8];
+    vec4 lightColors[8];
+    vec4 lightParams[8];
+    int numLights;
+    vec3 ambientLight;
 } global;
 
 layout(push_constant) uniform PushConstants {

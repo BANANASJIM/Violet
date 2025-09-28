@@ -57,10 +57,19 @@ private:
     VulkanContext*                                  context = nullptr;
     eastl::unique_ptr<DescriptorSet>                descriptorSet;
     eastl::vector<eastl::unique_ptr<UniformBuffer>> uniformBuffers;
+    static constexpr uint32_t MAX_LIGHTS = 8;
     struct GlobalUBO {
         alignas(16) glm::mat4 view;
         alignas(16) glm::mat4 proj;
         alignas(16) glm::vec3 cameraPos;
+        alignas(4) float padding0;
+
+        // Light data (support up to MAX_LIGHTS lights)
+        alignas(16) glm::vec4 lightPositions[MAX_LIGHTS];  // xyz=position/direction, w=type (0=dir, 1=point)
+        alignas(16) glm::vec4 lightColors[MAX_LIGHTS];     // xyz=color*intensity, w=radius (for point lights)
+        alignas(16) glm::vec4 lightParams[MAX_LIGHTS];     // x=linear, y=quadratic attenuation, zw=reserved
+        alignas(4) int numLights;
+        alignas(16) glm::vec3 ambientLight;  // Ambient light color
     } cachedUBO;
 };
 
@@ -102,6 +111,12 @@ public:
     // Texture management for scene loading
     Texture* addTexture(eastl::unique_ptr<Texture> texture);
 
+    // Default PBR texture access
+    Texture* getDefaultWhiteTexture() const { return defaultWhiteTexture; }
+    Texture* getDefaultBlackTexture() const { return defaultBlackTexture; }
+    Texture* getDefaultMetallicRoughnessTexture() const { return defaultMetallicRoughnessTexture; }
+    Texture* getDefaultNormalTexture() const { return defaultNormalTexture; }
+
     void                             clearRenderables() { renderables.clear(); }
     const eastl::vector<Renderable>& getRenderables() const { return renderables; }
 
@@ -119,6 +134,7 @@ public:
 
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
+    void createDefaultPBRTextures();
 
     GlobalUniforms globalUniforms;
 
@@ -144,6 +160,12 @@ private:
 
     // Debug rendering
     DebugRenderer debugRenderer;
+
+    // Default PBR textures
+    Texture* defaultWhiteTexture = nullptr;
+    Texture* defaultBlackTexture = nullptr;
+    Texture* defaultMetallicRoughnessTexture = nullptr;
+    Texture* defaultNormalTexture = nullptr;
 };
 
 } // namespace violet

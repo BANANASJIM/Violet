@@ -379,11 +379,11 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setMetallicRoughnessTexture(loadCtx.textures[texIndex]);
             } else {
-                instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
+                instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
                 VT_WARN("Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
             }
         } else {
-            instance->setMetallicRoughnessTexture(loadCtx.defaultTexture);
+            instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
         }
 
         // Normal texture
@@ -392,11 +392,11 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setNormalTexture(loadCtx.textures[texIndex]);
             } else {
-                instance->setNormalTexture(loadCtx.defaultTexture);
+                instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
                 VT_WARN("Material {} using default normal texture (invalid index {})", i, texIndex);
             }
         } else {
-            instance->setNormalTexture(loadCtx.defaultTexture);
+            instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
         }
 
         // Occlusion texture
