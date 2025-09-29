@@ -41,9 +41,9 @@ void AssetBrowserLayer::scanAssetDirectory() {
     countAssets(rootNode);
 
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "Found %d glTF files", totalAssets);
+    snprintf(buffer, sizeof(buffer), "Found %d assets", totalAssets);
     statusMessage = buffer;
-    VT_INFO("Found {} glTF files in {}", totalAssets, assetDirectory.c_str());
+    VT_INFO("Found {} assets in {}", totalAssets, assetDirectory.c_str());
 }
 
 void AssetBrowserLayer::onImGuiRender() {
@@ -77,9 +77,9 @@ void AssetBrowserLayer::buildFileTree(const eastl::string& path, FileTreeNode& n
             buildFileTree(entry, childNode);
             node.children.push_back(childNode);
         } else {
-            // Only add glTF files
+            // Add glTF files and HDR files
             auto ext = FileSystem::getExtension(entry);
-            if (ext == ".gltf" || ext == ".glb") {
+            if (ext == ".gltf" || ext == ".glb" || ext == ".hdr") {
                 childNode.extension = ext;
                 node.children.push_back(childNode);
             }
@@ -99,21 +99,52 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
             ImGui::TreePop();
         }
     } else {
-        // Render file as selectable item
-        // Color code for glTF files (blue)
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
+        // Render file as selectable item with file type-specific colors
+
+        // Check file extension for color coding
+        eastl::string ext = "";
+        size_t dotPos = node.name.find_last_of('.');
+        if (dotPos != eastl::string::npos) {
+            ext = node.name.substr(dotPos);
+        }
+
+        ImVec4 fileColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f); // Default white
+        eastl::string iconPrefix = "";
+
+        if (ext == ".gltf" || ext == ".glb") {
+            fileColor = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);  // Blue for 3D models
+            iconPrefix = "🎯 ";
+        } else if (ext == ".hdr") {
+            fileColor = ImVec4(1.0f, 0.7f, 0.2f, 1.0f);  // Orange for HDR files
+            iconPrefix = "🌅 ";
+        } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
+            fileColor = ImVec4(0.7f, 1.0f, 0.7f, 1.0f);  // Green for textures
+            iconPrefix = "🖼️ ";
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Text, fileColor);
+
+        // Display with icon prefix and color
+        eastl::string displayName = iconPrefix + node.name;
 
         // Selectable item that can be dragged
-        if (ImGui::Selectable(node.name.c_str())) {
+        if (ImGui::Selectable(displayName.c_str())) {
             VT_INFO("File selected: {}", node.fullPath.c_str());
         }
 
-        // Drag source
+        // Drag source with improved visual feedback
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-            // Add debug logging
             VT_INFO("AssetBrowser: Starting drag for {}", node.fullPath.c_str());
             ImGui::SetDragDropPayload("ASSET_PATH", node.fullPath.c_str(), node.fullPath.size() + 1);
-            ImGui::Text("Drop to load: %s", node.name.c_str());
+
+            // Different drop text based on file type
+            if (ext == ".hdr") {
+                ImGui::Text("🌅 Drop to load HDR environment: %s", node.name.c_str());
+            } else if (ext == ".gltf" || ext == ".glb") {
+                ImGui::Text("🎯 Drop to place model: %s", node.name.c_str());
+            } else {
+                ImGui::Text("Drop to load: %s", node.name.c_str());
+            }
             ImGui::EndDragDropSource();
         }
 

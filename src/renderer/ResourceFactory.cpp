@@ -56,6 +56,7 @@ ImageResource ResourceFactory::createImage(VulkanContext* context, const ImageIn
 
 
     vk::ImageCreateInfo imageCreateInfo;
+    imageCreateInfo.flags = info.flags;
     imageCreateInfo.imageType = info.imageType;
     imageCreateInfo.extent = vk::Extent3D{info.width, info.height, info.depth};
     imageCreateInfo.mipLevels = info.mipLevels;
@@ -237,6 +238,24 @@ eastl::unique_ptr<Texture> ResourceFactory::createBlackTexture(VulkanContext* co
     }
 
     texture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
+    return texture;
+}
+
+eastl::unique_ptr<Texture> ResourceFactory::createCubemapTexture(VulkanContext* context, const eastl::array<eastl::string, 6>& facePaths) {
+    auto texture = eastl::make_unique<Texture>();
+    texture->loadCubemap(context, facePaths);
+    return texture;
+}
+
+eastl::unique_ptr<Texture> ResourceFactory::createHDRTexture(VulkanContext* context, const eastl::string& hdrPath) {
+    auto texture = eastl::make_unique<Texture>();
+    texture->loadHDR(context, hdrPath);
+    return texture;
+}
+
+eastl::unique_ptr<Texture> ResourceFactory::createHDRCubemap(VulkanContext* context, const eastl::string& hdrPath) {
+    auto texture = eastl::make_unique<Texture>();
+    texture->loadEquirectangularToCubemap(context, hdrPath);
     return texture;
 }
 

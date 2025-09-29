@@ -111,10 +111,13 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* g
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    vk::DescriptorSetLayout setLayouts[] = {
-        globalDescriptorSet->getLayout(),
-        material->getDescriptorSetLayout()
-    };
+    eastl::vector<vk::DescriptorSetLayout> setLayouts;
+    setLayouts.push_back(globalDescriptorSet->getLayout());
+
+    // 只有当材质有有效的descriptor set layout时才添加
+    if (material->getDescriptorSetLayout()) {
+        setLayouts.push_back(material->getDescriptorSetLayout());
+    }
 
     vk::PushConstantRange pushConstantRange;
     pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
@@ -122,8 +125,8 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* g
     pushConstantRange.size = sizeof(glm::mat4);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setLayoutCount = 2;
-    pipelineLayoutInfo.pSetLayouts = setLayouts;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = setLayouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 

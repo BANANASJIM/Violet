@@ -12,7 +12,8 @@ class Texture;
 enum class DescriptorSetType {
     GlobalUniforms,       // 全局uniform buffer (相机等)
     MaterialTextures,     // PBR材质纹理采样器
-    UnlitMaterialTextures // Unlit材质纹理采样器 (简化版)
+    UnlitMaterialTextures, // Unlit材质纹理采样器 (简化版)
+    None                  // 不创建任何descriptor set (仅使用全局set)
 };
 
 class DescriptorSet {

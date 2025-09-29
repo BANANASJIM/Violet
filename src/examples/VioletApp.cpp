@@ -306,6 +306,15 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
             } catch (const std::exception& e) {
                 VT_ERROR("Failed to load asset {}: {}", path.c_str(), e.what());
             }
+        } else if (ext == ".hdr") {
+            try {
+                // Load HDR file as environment map (skybox)
+                VT_INFO("Loading HDR environment map: {}", path.c_str());
+                renderer.getEnvironmentMap().loadHDR(path);
+                VT_INFO("HDR environment map loaded successfully: {}", path.c_str());
+            } catch (const std::exception& e) {
+                VT_ERROR("Failed to load HDR environment map {}: {}", path.c_str(), e.what());
+            }
         }
     }
 }

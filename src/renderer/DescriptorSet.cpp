@@ -25,16 +25,27 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, Descr
 
     if (type == DescriptorSetType::GlobalUniforms) {
         // Global uniform buffer layout
-        bindings.resize(1);
+        bindings.resize(2);
+
+        // Binding 0: Global UBO
         bindings[0].binding            = 0; // CAMERA_UBO_BINDING
         bindings[0].descriptorCount    = 1;
         bindings[0].descriptorType     = vk::DescriptorType::eUniformBuffer;
         bindings[0].pImmutableSamplers = nullptr;
         bindings[0].stageFlags         = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
 
-        poolSizes.resize(1);
+        // Binding 1: Environment map (skybox cubemap)
+        bindings[1].binding            = 1;
+        bindings[1].descriptorCount    = 1;
+        bindings[1].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
+        bindings[1].pImmutableSamplers = nullptr;
+        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eFragment;
+
+        poolSizes.resize(2);
         poolSizes[0].type            = vk::DescriptorType::eUniformBuffer;
         poolSizes[0].descriptorCount = maxFramesInFlight;
+        poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
+        poolSizes[1].descriptorCount = maxFramesInFlight;
     } else if (type == DescriptorSetType::MaterialTextures) {
         // Material descriptor layout: 1 UBO + 5 texture samplers
         bindings.resize(6);
@@ -83,6 +94,9 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, Descr
         poolSizes[0].descriptorCount = maxFramesInFlight;
         poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
         poolSizes[1].descriptorCount = maxFramesInFlight;
+    } else if (type == DescriptorSetType::None) {
+        // 不创建任何descriptor set - 仅使用全局descriptor set
+        return;
     }
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo;
@@ -198,6 +212,17 @@ void DescriptorSet::updateTexture(uint32_t frameIndex, Texture* texture, uint32_
             "Texture is null for binding {} frameIndex {} - cannot update descriptor",
             binding,
             frameIndex
+        );
+        return;
+    }
+
+    // Validate descriptor set before updating
+    if (!descriptorSets[frameIndex]) {
+        violet::Log::error(
+            "Renderer",
+            "Descriptor set is null for frameIndex {} binding {} - cannot update",
+            frameIndex,
+            binding
         );
         return;
     }

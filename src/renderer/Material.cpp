@@ -71,6 +71,10 @@ void Material::createDescriptorSetLayout(DescriptorSetType materialType) {
         textureBinding.pImmutableSamplers = nullptr;
         textureBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
         bindings.push_back(textureBinding);
+    } else if (materialType == DescriptorSetType::None) {
+        // 不创建任何descriptor set layout - 仅使用全局set
+        materialDescriptorSetLayout = nullptr;
+        return;
     }
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo;

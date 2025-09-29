@@ -11,6 +11,8 @@
 #include "math/Ray.hpp"
 #include "scene/Scene.hpp"
 #include "scene/Node.hpp"
+#include "core/FileSystem.hpp"
+#include <EASTL/sort.h>
 
 namespace violet {
 
@@ -1073,6 +1075,11 @@ void SceneDebugLayer::renderLightControlWindow() {
         ImGui::Text("Select a light from the list above");
     }
 
+    ImGui::Separator();
+
+    // Environment panel
+    renderEnvironmentPanel();
+
     ImGui::End();
 }
 
@@ -1501,6 +1508,138 @@ void SceneDebugLayer::preserveWorldPosition(uint32_t nodeId, uint32_t newParentI
     transformComp->local.rotation = orientation;
     transformComp->local.scale = scale;
     transformComp->dirty = true;
+}
+
+void SceneDebugLayer::renderEnvironmentPanel() {
+    if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (!renderer) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Renderer not available");
+            return;
+        }
+
+        EnvironmentMap& environmentMap = renderer->getEnvironmentMap();
+
+        // Environment map enable/disable
+        bool enabled = environmentMap.isEnabled();
+        if (ImGui::Checkbox("Enable Environment Map", &enabled)) {
+            environmentMap.setEnabled(enabled);
+        }
+
+        ImGui::Separator();
+
+        // Environment map parameters
+        float exposure = environmentMap.getExposure();
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
+            environmentMap.setExposure(exposure);
+        }
+
+        float rotation = environmentMap.getRotation();
+        if (ImGui::SliderFloat("Rotation", &rotation, 0.0f, 6.28318f, "%.2f rad")) {
+            environmentMap.setRotation(rotation);
+        }
+
+        float intensity = environmentMap.getIntensity();
+        if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 3.0f, "%.2f")) {
+            environmentMap.setIntensity(intensity);
+        }
+
+        ImGui::Separator();
+
+        // HDR file selector with improved functionality
+        if (ImGui::Button("Load HDR...")) {
+            ImGui::OpenPopup("HDR File Selector");
+        }
+
+        // Use the new HDR file selector
+        renderHDRFileSelector(environmentMap);
+
+        ImGui::Text("Current texture: %s",
+                   environmentMap.getEnvironmentTexture() ?
+                   (environmentMap.getEnvironmentTexture()->isHDR() ? "HDR Loaded" : "LDR Loaded") :
+                   "None");
+
+        if (environmentMap.getEnvironmentTexture()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Clear")) {
+                environmentMap.setTexture(nullptr);
+            }
+        }
+
+        // Usage instructions
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "💡 Instructions:");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+            "  • Enable skybox to see environment");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+            "  • Adjust exposure for brightness");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+            "  • Rotate skybox around Y-axis");
+    }
+}
+
+void SceneDebugLayer::scanHDRFiles() {
+    availableHDRFiles.clear();
+
+    // Scan assets directory recursively for HDR files
+    const eastl::string assetsPath = FileSystem::resolveRelativePath("assets");
+
+    eastl::vector<eastl::string> hdrFiles = FileSystem::listFiles(assetsPath, ".hdr", true);
+
+    for (const auto& filePath : hdrFiles) {
+        availableHDRFiles.push_back(filePath);
+    }
+
+    // Sort HDR files alphabetically for consistent display
+    eastl::sort(availableHDRFiles.begin(), availableHDRFiles.end());
+
+    VT_INFO("Found {} HDR files in assets directory", availableHDRFiles.size());
+}
+
+void SceneDebugLayer::renderHDRFileSelector(EnvironmentMap& environmentMap) {
+    if (ImGui::BeginPopup("HDR File Selector")) {
+        ImGui::Text("Select HDR Environment Map:");
+        ImGui::Separator();
+
+        // Scan for HDR files if list is empty
+        if (availableHDRFiles.empty()) {
+            scanHDRFiles();
+        }
+
+        // Display all found HDR files
+        for (const auto& hdrPath : availableHDRFiles) {
+            // Extract just the filename for display
+            size_t lastSlash = hdrPath.find_last_of('/');
+            eastl::string displayName = (lastSlash != eastl::string::npos) ?
+                                       hdrPath.substr(lastSlash + 1) : hdrPath;
+
+            if (ImGui::Selectable(displayName.c_str())) {
+                VT_INFO("Loading HDR file: {}", hdrPath.c_str());
+                environmentMap.loadHDR(hdrPath);
+                ImGui::CloseCurrentPopup();
+            }
+
+            // Show full path on hover
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", hdrPath.c_str());
+            }
+        }
+
+        ImGui::Separator();
+
+        // Add placeholder option
+        if (ImGui::Selectable("Reset to Placeholder")) {
+            eastl::array<eastl::string, 6> placeholderFaces;
+            environmentMap.loadCubemap(placeholderFaces);
+            ImGui::CloseCurrentPopup();
+        }
+
+        // Refresh button
+        if (ImGui::Button("Refresh List")) {
+            scanHDRFiles();
+        }
+
+        ImGui::EndPopup();
+    }
 }
 
 }

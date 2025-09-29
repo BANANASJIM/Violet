@@ -18,6 +18,7 @@
 #include "renderer/Texture.hpp"
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/DebugRenderer.hpp"
+#include "renderer/EnvironmentMap.hpp"
 #include "acceleration/BVH.hpp"
 
 namespace violet {
@@ -48,9 +49,10 @@ public:
     ~GlobalUniforms();
     void           init(VulkanContext* context, uint32_t maxFramesInFlight);
     void           cleanup();
-    void           update(entt::registry& world, uint32_t frameIndex);
+    void           update(entt::registry& world, uint32_t frameIndex, float skyboxExposure = 1.0f, float skyboxRotation = 0.0f, bool skyboxEnabled = false);
     DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
     Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
+    void setSkyboxTexture(Texture* texture);
 
 private:
 
@@ -70,6 +72,12 @@ private:
         alignas(16) glm::vec4 lightParams[MAX_LIGHTS];     // x=linear, y=quadratic attenuation, zw=reserved
         alignas(4) int numLights;
         alignas(16) glm::vec3 ambientLight;  // Ambient light color
+
+        // Skybox data
+        alignas(4) float skyboxExposure;
+        alignas(4) float skyboxRotation;
+        alignas(4) int skyboxEnabled;
+        alignas(4) float padding1;
     } cachedUBO;
 };
 
@@ -99,6 +107,12 @@ public:
         const eastl::string& vertexShader,
         const eastl::string& fragmentShader,
         DescriptorSetType    materialType
+    );
+    Material* createMaterial(
+        const eastl::string& vertexShader,
+        const eastl::string& fragmentShader,
+        DescriptorSetType    materialType,
+        const PipelineConfig& config
     );
     MaterialInstance* createMaterialInstance(Material* material);
     MaterialInstance* createPBRMaterialInstance(Material* material);
@@ -132,6 +146,10 @@ public:
     // Scene state management
     void markSceneDirty() { sceneDirty = true; }
 
+    // Skybox access
+    EnvironmentMap& getEnvironmentMap() { return environmentMap; }
+    GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
+
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
     void createDefaultPBRTextures();
@@ -160,6 +178,9 @@ private:
 
     // Debug rendering
     DebugRenderer debugRenderer;
+
+    // Skybox rendering
+    EnvironmentMap environmentMap;
 
     // Default PBR textures
     Texture* defaultWhiteTexture = nullptr;

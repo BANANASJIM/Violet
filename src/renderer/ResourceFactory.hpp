@@ -4,6 +4,7 @@
 #include <vk_mem_alloc.h>
 #include <EASTL/string.h>
 #include <EASTL/unique_ptr.h>
+#include <EASTL/array.h>
 
 namespace violet {
 
@@ -34,6 +35,7 @@ struct ImageInfo {
     vk::ImageType imageType = vk::ImageType::e2D;
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
     vk::ImageUsageFlags usage;
+    vk::ImageCreateFlags flags = {};
     vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
     MemoryUsage memoryUsage = MemoryUsage::GPU_ONLY;
     eastl::string debugName;
@@ -76,6 +78,11 @@ public:
     // High-level texture creation methods
     static eastl::unique_ptr<Texture> createWhiteTexture(VulkanContext* context);
     static eastl::unique_ptr<Texture> createBlackTexture(VulkanContext* context);
+    static eastl::unique_ptr<Texture> createCubemapTexture(VulkanContext* context, const eastl::array<eastl::string, 6>& facePaths);
+
+    // HDR texture support
+    static eastl::unique_ptr<Texture> createHDRTexture(VulkanContext* context, const eastl::string& hdrPath);
+    static eastl::unique_ptr<Texture> createHDRCubemap(VulkanContext* context, const eastl::string& hdrPath);
 
 private:
     static VmaMemoryUsage toVmaUsage(MemoryUsage usage);

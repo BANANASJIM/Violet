@@ -31,12 +31,24 @@ void ForwardRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesIn
     maxFramesInFlight = framesInFlight;
     globalUniforms.init(context, maxFramesInFlight);
     debugRenderer.init(context, renderPass, &globalUniforms, maxFramesInFlight);
+    environmentMap.init(context, renderPass, this);
+
+    // Load HDR environment map
+    environmentMap.loadHDR("assets/textures/skybox.hdr");
+
+    // Set the environment texture in the global uniforms
+    if (environmentMap.getEnvironmentTexture()) {
+        globalUniforms.setSkyboxTexture(environmentMap.getEnvironmentTexture());
+        environmentMap.setEnabled(true);
+    }
+
     createDefaultPBRTextures();
 }
 
 void ForwardRenderer::cleanup() {
     debugRenderer.cleanup();
     globalUniforms.cleanup();
+    environmentMap.cleanup();
     materialInstances.clear();
     materials.clear();
     textures.clear();
@@ -63,7 +75,7 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 }
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
-    globalUniforms.update(world, frameIndex);
+    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {
@@ -184,6 +196,15 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     frameCount++;
     bool shouldLog = (frameCount % 300 == 0);  // Log every ~5 seconds at 60fps
 
+    // Render environment map as skybox background
+    if (environmentMap.isEnabled()) {
+        vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
+        // Use the environment map material's own pipeline layout
+        Material* envMaterial = environmentMap.getMaterial();
+        if (envMaterial) {
+            environmentMap.renderSkybox(commandBuffer, frameIndex, envMaterial->getPipelineLayout(), globalSet);
+        }
+    }
 
     visibleIndices.clear();
 
@@ -397,6 +418,48 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     return ptr;
 }
 
+Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType, const PipelineConfig& config) {
+    // Creating material with specified shaders, type, and pipeline config
+
+    auto material = eastl::make_unique<Material>();
+
+    try {
+        // Material creates its descriptor set layout based on type
+        material->create(context, materialType);
+        // Material descriptor set layout created
+    } catch (const std::exception& e) {
+        violet::Log::error("ForwardRenderer", "Failed to create material with descriptor set type {}: {}", static_cast<int>(materialType), e.what());
+        return nullptr;
+    }
+
+    // Create pipeline with custom config
+    auto pipeline = new GraphicsPipeline();
+    try {
+        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
+        // Pipeline initialized with custom config
+    } catch (const std::exception& e) {
+        violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with custom config for shaders: '{}', '{}' - Error: {}",
+            vertexShader.c_str(), fragmentShader.c_str(), e.what());
+        delete pipeline;
+        return nullptr;
+    }
+
+    // Validate that the pipeline was created properly
+    if (!pipeline->getPipeline()) {
+        violet::Log::error("ForwardRenderer", "Pipeline creation failed - null pipeline object");
+        delete pipeline;
+        return nullptr;
+    }
+
+    material->pipeline = pipeline;
+
+    Material* ptr = material.get();
+    materials.push_back(eastl::move(material));
+
+    // Material created successfully with custom config
+    return ptr;
+}
+
 MaterialInstance* ForwardRenderer::createMaterialInstance(Material* material) {
     // 默认创建PBR材质实例
     return createPBRMaterialInstance(material);
@@ -512,7 +575,7 @@ Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
     return nullptr;
 }
 
-void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex) {
+void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float skyboxExposure, float skyboxRotation, bool skyboxEnabled) {
     Camera* activeCamera = findActiveCamera(world);
     if (!activeCamera) {
         VT_WARN("No active camera found!");
@@ -578,10 +641,40 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex) {
     // Set ambient light (can be made configurable later)
     cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);  // Subtle blue-ish ambient
 
+    // Set skybox parameters (will be configurable via UI)
+    cachedUBO.skyboxExposure = skyboxExposure;
+    cachedUBO.skyboxRotation = skyboxRotation;
+    cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
+
     uniformBuffers[frameIndex]->update(&cachedUBO, sizeof(cachedUBO));
     // REMOVED: descriptorSet->updateBuffer() - This was causing the UBO data to be lost!
     // The descriptor set is already bound to the buffer during initialization,
     // we only need to update the buffer contents, not rebind the descriptor set.
+}
+
+void GlobalUniforms::setSkyboxTexture(Texture* texture) {
+    if (!descriptorSet) {
+        violet::Log::error("Renderer", "Cannot set skybox texture - descriptor set not initialized");
+        return;
+    }
+
+    if (!texture) {
+        violet::Log::warn("Renderer", "Setting null skybox texture");
+        return;
+    }
+
+    // Validate texture is properly initialized
+    if (!texture->getImageView() || !texture->getSampler()) {
+        violet::Log::error("Renderer", "Cannot set skybox texture - texture not fully initialized");
+        return;
+    }
+
+    violet::Log::info("Renderer", "Setting skybox texture for {} frames", uniformBuffers.size());
+
+    // Update all frames in flight with the same skybox texture
+    for (uint32_t i = 0; i < uniformBuffers.size(); ++i) {
+        descriptorSet->updateTexture(i, texture, 1); // Binding 1 for skybox texture
+    }
 }
 
 void ForwardRenderer::createDefaultPBRTextures() {

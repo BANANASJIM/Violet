@@ -16,6 +16,7 @@ class Scene;
 struct Node;
 
 class ForwardRenderer;
+class EnvironmentMap;
 
 class SceneDebugLayer : public UILayer {
 public:
@@ -92,6 +93,7 @@ private:
 
     // Light control window
     void renderLightControlWindow();
+    void renderEnvironmentPanel();
 
     // Helper functions
     Camera* findActiveCamera();
@@ -125,6 +127,11 @@ private:
     // Asset drop callbacks
     eastl::function<void(const eastl::string&)> onAssetDropped;
     eastl::function<void(const eastl::string&, const glm::vec3&)> onAssetDroppedWithPosition;
+
+    // HDR file management
+    eastl::vector<eastl::string> availableHDRFiles;
+    void scanHDRFiles();
+    void renderHDRFileSelector(EnvironmentMap& environmentMap);
 };
 
 }
