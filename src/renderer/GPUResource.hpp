@@ -9,7 +9,7 @@ class VulkanContext;
 
 class GPUResource {
 public:
-    GPUResource() = default;
+GPUResource() = default;
     virtual ~GPUResource() = default;
 
     GPUResource(const GPUResource&) = delete;

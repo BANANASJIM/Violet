@@ -61,6 +61,9 @@ void VioletApp::createResources() {
     this->App::debugRenderer = &debugRenderer;
     this->App::world = &this->world.getRegistry();
 
+    // Create swapchain framebuffers using final pass RenderPass
+    getSwapchain()->createFramebuffers(renderer.getFinalPassRenderPass());
+
     initializeScene();
 
     eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");

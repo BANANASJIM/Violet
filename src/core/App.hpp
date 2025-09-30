@@ -43,7 +43,6 @@ protected:
 
     VulkanContext* getContext() { return &context; }
     Swapchain* getSwapchain() { return &swapchain; }
-    RenderPass* getRenderPass() { return &renderPass; }
     uint32_t getCurrentFrame() const { return currentFrame; }
     GLFWwindow* getWindow() { return window.getHandle(); }
 
@@ -67,7 +66,6 @@ private:
     Window window;
     VulkanContext context;
     Swapchain swapchain;
-    RenderPass renderPass;
 
     eastl::vector<vk::Semaphore> imageAvailableSemaphores;
     eastl::vector<vk::Semaphore> renderFinishedSemaphores;

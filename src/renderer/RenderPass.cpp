@@ -1,76 +1,70 @@
 #include "RenderPass.hpp"
-#include "RenderPassBuilder.hpp"
 #include "VulkanContext.hpp"
+#include "Texture.hpp"
+#include "ResourceFactory.hpp"
 #include <EASTL/array.h>
 
 namespace violet {
 
-void RenderPass::init(VulkanContext* ctx, vk::Format colorFormat) {
-    context = ctx;
-
-    eastl::vector<vk::AttachmentDescription> attachments(2);
-
-    // Color attachment
-    attachments[0].format = colorFormat;
-    attachments[0].samples = vk::SampleCountFlagBits::e1;
-    attachments[0].loadOp = vk::AttachmentLoadOp::eClear;
-    attachments[0].storeOp = vk::AttachmentStoreOp::eStore;
-    attachments[0].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    attachments[0].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    attachments[0].initialLayout = vk::ImageLayout::eUndefined;
-    attachments[0].finalLayout = vk::ImageLayout::ePresentSrcKHR;
-
-    // Depth attachment
-    attachments[1].format = ctx->findDepthFormat();
-    attachments[1].samples = vk::SampleCountFlagBits::e1;
-    attachments[1].loadOp = vk::AttachmentLoadOp::eClear;
-    attachments[1].storeOp = vk::AttachmentStoreOp::eDontCare;
-    attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    attachments[1].initialLayout = vk::ImageLayout::eUndefined;
-    attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-
-    vk::AttachmentReference colorAttachmentRef;
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
-
-    vk::AttachmentReference depthAttachmentRef;
-    depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-
-    vk::SubpassDescription subpass;
-    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = &depthAttachmentRef;
-
-    vk::SubpassDependency dependency;
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.srcAccessMask = {};
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-
-    vk::RenderPassCreateInfo renderPassInfo;
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    renderPassInfo.pAttachments = attachments.data();
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
-
-    renderPass = context->getDevice().createRenderPass(renderPassInfo);
+// AttachmentDesc factory methods
+AttachmentDesc AttachmentDesc::color(vk::Format fmt, vk::AttachmentLoadOp load) {
+    AttachmentDesc desc;
+    desc.format = fmt;
+    desc.loadOp = load;
+    desc.storeOp = vk::AttachmentStoreOp::eStore;
+    desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
+        vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eUndefined;
+    desc.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    return desc;
 }
 
-void RenderPass::init(VulkanContext* ctx, RenderPassBuilder& builder) {
-    context = ctx;
-    renderPass = builder.build(context);
+AttachmentDesc AttachmentDesc::depth(vk::Format fmt, vk::AttachmentLoadOp load) {
+    AttachmentDesc desc;
+    desc.format = fmt;
+    desc.loadOp = load;
+    desc.storeOp = vk::AttachmentStoreOp::eDontCare;
+    desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
+        vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined;
+    desc.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    return desc;
 }
 
-void RenderPass::init(VulkanContext* ctx, const PassConfig& cfg) {
+AttachmentDesc AttachmentDesc::swapchainColor(vk::Format fmt, vk::AttachmentLoadOp load) {
+    AttachmentDesc desc;
+    desc.format = fmt;
+    desc.loadOp = load;
+    desc.storeOp = vk::AttachmentStoreOp::eStore;
+    desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
+        vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eUndefined;
+    desc.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    return desc;
+}
+
+vk::AttachmentDescription AttachmentDesc::toVulkan() const {
+    vk::AttachmentDescription vulkanDesc;
+    vulkanDesc.format = format;
+    vulkanDesc.samples = samples;
+    vulkanDesc.loadOp = loadOp;
+    vulkanDesc.storeOp = storeOp;
+    vulkanDesc.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    vulkanDesc.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    vulkanDesc.initialLayout = initialLayout;
+    vulkanDesc.finalLayout = finalLayout;
+    return vulkanDesc;
+}
+
+void RenderPass::init(VulkanContext* ctx, const RenderPassConfig& cfg) {
     context = ctx;
     config = cfg;
+
+    // Convert AttachmentDesc to Vulkan attachments
+    eastl::vector<vk::AttachmentDescription> attachments;
+    for (const auto& colorAttach : config.colorAttachments) {
+        attachments.push_back(colorAttach.toVulkan());
+    }
+    if (config.hasDepth) {
+        attachments.push_back(config.depthAttachment.toVulkan());
+    }
 
     // Build attachment references
     eastl::vector<vk::AttachmentReference> colorRefs;
@@ -102,12 +96,6 @@ void RenderPass::init(VulkanContext* ctx, const PassConfig& cfg) {
     dependency.dstStageMask = config.dstStage | (config.hasDepth ? vk::PipelineStageFlagBits::eEarlyFragmentTests : vk::PipelineStageFlags{});
     dependency.srcAccessMask = config.srcAccess;
     dependency.dstAccessMask = config.dstAccess | (config.hasDepth ? vk::AccessFlagBits::eDepthStencilAttachmentWrite : vk::AccessFlags{});
-
-    // Combine attachments
-    eastl::vector<vk::AttachmentDescription> attachments = config.colorAttachments;
-    if (config.hasDepth) {
-        attachments.push_back(config.depthAttachment);
-    }
 
     // Create render pass
     vk::RenderPassCreateInfo renderPassInfo;
@@ -144,34 +132,14 @@ void RenderPass::end(vk::CommandBuffer cmd) {
 }
 
 void RenderPass::cleanup() {
+    cleanupFramebuffers();
+
     if (renderPass) {
         context->getDevice().destroyRenderPass(renderPass);
         renderPass = nullptr;
     }
 }
 
-void RenderPass::init(VulkanContext* context, const RenderPassDesc& desc) {
-    this->context = context;
-
-    // Convert RenderPassDesc to PassConfig for compatibility
-    config.name = desc.name;
-    config.colorAttachments = desc.colorAttachments;
-    config.hasDepth = desc.hasDepth;
-    config.depthAttachment = desc.depthAttachment;
-    config.clearValues = desc.clearValues;
-    config.execute = desc.execute;
-
-    // Update final layouts based on desc hints
-    if (!config.colorAttachments.empty()) {
-        config.colorAttachments.back().finalLayout = desc.finalColorLayout;
-    }
-    if (config.hasDepth) {
-        config.depthAttachment.finalLayout = desc.finalDepthLayout;
-    }
-
-    // Use existing init logic
-    init(context, config);
-}
 
 void RenderPass::insertImageBarrier(
     vk::CommandBuffer cmd,
@@ -231,6 +199,154 @@ void RenderPass::insertMemoryBarrier(
     barrier.dstAccessMask = dstAccess;
 
     cmd.pipelineBarrier(srcStage, dstStage, {}, barrier, {}, {});
+}
+
+void RenderPass::setExternalFramebuffer(vk::Framebuffer framebuffer) {
+    externalFramebuffer = framebuffer;
+}
+
+void RenderPass::begin(vk::CommandBuffer cmd, vk::Extent2D extent) {
+    // Use external framebuffer if configured for swapchain
+    if (config.isSwapchainPass && externalFramebuffer != VK_NULL_HANDLE) {
+        begin(cmd, externalFramebuffer, extent);
+    }
+    // Use own framebuffer
+    else if (config.createOwnFramebuffer && !framebuffers.empty()) {
+        begin(cmd, framebuffers[0], currentExtent);
+    }
+}
+
+void RenderPass::onSwapchainRecreate(vk::Extent2D newSize) {
+    // If this pass creates its own framebuffers and follows swapchain size, recreate them
+    if (config.createOwnFramebuffer && config.followsSwapchainSize) {
+        recreateFramebuffers(newSize);
+    }
+}
+
+void RenderPass::createFramebuffers(vk::Extent2D extent) {
+    if (!config.createOwnFramebuffer) {
+        return; // This pass uses external framebuffers
+    }
+
+    currentExtent = extent;
+
+    // Determine actual extent
+    vk::Extent2D actualExtent = extent;
+    if (config.framebufferSize.width > 0 && config.framebufferSize.height > 0) {
+        actualExtent = config.framebufferSize;
+    }
+
+    // Create color images and views
+    colorImages.reserve(config.colorAttachments.size());
+    colorImageViews.reserve(config.colorAttachments.size());
+    for (size_t i = 0; i < config.colorAttachments.size(); ++i) {
+        const auto& colorAttach = config.colorAttachments[i];
+
+        // Create color image
+        ImageInfo imageInfo{};
+        imageInfo.width = actualExtent.width;
+        imageInfo.height = actualExtent.height;
+        imageInfo.format = colorAttach.format;
+        imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+        imageInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+        imageInfo.debugName = config.name + "_Color";
+
+        auto colorImage = ResourceFactory::createImage(context, imageInfo);
+        auto colorImageView = ResourceFactory::createImageView(context, colorImage, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eColor);
+
+        colorImages.push_back(colorImage);
+        colorImageViews.push_back(colorImageView);
+    }
+
+    // Create depth image if needed
+    if (config.hasDepth) {
+        ImageInfo depthImageInfo{};
+        depthImageInfo.width = actualExtent.width;
+        depthImageInfo.height = actualExtent.height;
+        depthImageInfo.format = config.depthAttachment.format;
+        depthImageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+        depthImageInfo.memoryUsage = MemoryUsage::GPU_ONLY;
+        depthImageInfo.debugName = config.name + "_Depth";
+
+        depthImage = ResourceFactory::createImage(context, depthImageInfo);
+        depthImageView = ResourceFactory::createImageView(context, depthImage, vk::ImageViewType::e2D, vk::ImageAspectFlagBits::eDepth);
+    }
+
+    // Create framebuffers (currently just one, can be extended for multiple frames)
+    framebuffers.resize(1);
+
+    eastl::vector<vk::ImageView> attachments;
+    for (const auto& colorImageView : colorImageViews) {
+        attachments.push_back(colorImageView);
+    }
+    if (depthImageView != VK_NULL_HANDLE) {
+        attachments.push_back(depthImageView);
+    }
+
+    vk::FramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.renderPass = renderPass;
+    framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    framebufferInfo.pAttachments = attachments.data();
+    framebufferInfo.width = actualExtent.width;
+    framebufferInfo.height = actualExtent.height;
+    framebufferInfo.layers = 1;
+
+    framebuffers[0] = context->getDevice().createFramebuffer(framebufferInfo);
+}
+
+void RenderPass::recreateFramebuffers(vk::Extent2D newExtent) {
+    if (!config.createOwnFramebuffer) {
+        return;
+    }
+
+    cleanupFramebuffers();
+    createFramebuffers(newExtent);
+}
+
+void RenderPass::cleanupFramebuffers() {
+    // Cleanup framebuffers
+    for (auto& framebuffer : framebuffers) {
+        if (framebuffer) {
+            context->getDevice().destroyFramebuffer(framebuffer);
+        }
+    }
+    framebuffers.clear();
+
+    // Cleanup image views
+    for (auto& imageView : colorImageViews) {
+        if (imageView) {
+            context->getDevice().destroyImageView(imageView);
+        }
+    }
+    colorImageViews.clear();
+
+    if (depthImageView != VK_NULL_HANDLE) {
+        context->getDevice().destroyImageView(depthImageView);
+        depthImageView = VK_NULL_HANDLE;
+    }
+
+    // Cleanup images
+    for (auto& image : colorImages) {
+        ResourceFactory::destroyImage(context, image);
+    }
+    colorImages.clear();
+
+    if (depthImage.image != VK_NULL_HANDLE) {
+        ResourceFactory::destroyImage(context, depthImage);
+        depthImage = {};
+    }
+
+    currentExtent.width = 0;
+    currentExtent.height = 0;
+}
+
+vk::Framebuffer RenderPass::getFramebuffer(uint32_t frameIndex) const {
+    if (!config.createOwnFramebuffer || framebuffers.empty()) {
+        return VK_NULL_HANDLE;
+    }
+
+    // For now, we only have one framebuffer, but this can be extended
+    return framebuffers[0];
 }
 
 }

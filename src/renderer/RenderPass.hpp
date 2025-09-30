@@ -3,68 +3,85 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
+#include <EASTL/unique_ptr.h>
 #include <functional>
+#include "ResourceFactory.hpp"
 
 namespace violet {
 
 class VulkanContext;
-class RenderPassBuilder;
 
-// Declarative render pass descriptor for easier configuration
-struct RenderPassDesc {
+// Attachment abstraction for reusability
+struct AttachmentDesc {
+    vk::Format format;
+    vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
+    vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eClear;
+    vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
+    vk::ImageLayout initialLayout = vk::ImageLayout::eUndefined;
+    vk::ImageLayout finalLayout;
+
+    // Factory methods for common attachment types
+    static AttachmentDesc color(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
+    static AttachmentDesc depth(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
+    static AttachmentDesc swapchainColor(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
+
+    // Convert to Vulkan attachment description
+    vk::AttachmentDescription toVulkan() const;
+};
+
+// Unified render pass configuration
+struct RenderPassConfig {
     eastl::string name;
 
-    // Attachment descriptions
-    eastl::vector<vk::AttachmentDescription> colorAttachments;
-    vk::AttachmentDescription depthAttachment{};
+    // Attachments using abstraction
+    eastl::vector<AttachmentDesc> colorAttachments;
+    AttachmentDesc depthAttachment{};
     bool hasDepth = false;
 
     // Clear values
     eastl::vector<vk::ClearValue> clearValues;
 
-    // Execution callback
-    eastl::function<void(vk::CommandBuffer, uint32_t)> execute;
-
-    // Layout hints for transitions between passes
-    vk::ImageLayout finalColorLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    vk::ImageLayout finalDepthLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-};
-
-// Pass configuration structure (legacy, for compatibility)
-struct PassConfig {
-    eastl::string name;
-
-    // Attachments
-    eastl::vector<vk::AttachmentDescription> colorAttachments;
-    eastl::vector<vk::ClearValue> clearValues;
-    bool hasDepth = false;
-    vk::AttachmentDescription depthAttachment{};
+    // Framebuffer management options
+    bool isSwapchainPass = false;        // Whether this uses external swapchain framebuffer
+    bool createOwnFramebuffer = true;    // Whether to create own framebuffer (default true)
+    vk::Extent2D framebufferSize = {0, 0}; // 0 means use swapchain size
+    bool followsSwapchainSize = true;    // Whether size depends on swapchain
 
     // Execution callback
     eastl::function<void(vk::CommandBuffer, uint32_t)> execute;
 
-    // Pipeline barriers (optional)
+    // Pipeline barriers for multi-pass synchronization
     vk::PipelineStageFlags srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::AccessFlags srcAccess = vk::AccessFlagBits::eColorAttachmentWrite;
-    vk::AccessFlags dstAccess = vk::AccessFlagBits::eColorAttachmentRead;
+    vk::AccessFlags srcAccess = {};
+    vk::AccessFlags dstAccess = {};
 };
 
 class RenderPass {
 public:
-    void init(VulkanContext* context, vk::Format colorFormat);
-    void init(VulkanContext* context, RenderPassBuilder& builder);
-    void init(VulkanContext* context, const PassConfig& config);
-    void init(VulkanContext* context, const RenderPassDesc& desc);
+    void init(VulkanContext* context, const RenderPassConfig& config);
     void cleanup();
+
+    // Framebuffer management
+    void createFramebuffers(vk::Extent2D extent);
+    void recreateFramebuffers(vk::Extent2D newExtent);
+    void cleanupFramebuffers();
 
     // Pass execution
     void begin(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent);
+    void begin(vk::CommandBuffer cmd, vk::Extent2D extent); // Use own framebuffer
     void execute(vk::CommandBuffer cmd, uint32_t frameIndex);
     void end(vk::CommandBuffer cmd);
 
+    // External framebuffer support (for swapchain passes)
+    void setExternalFramebuffer(vk::Framebuffer framebuffer);
+    void onSwapchainRecreate(vk::Extent2D newSize);
+
     vk::RenderPass getRenderPass() const { return renderPass; }
-    const PassConfig& getConfig() const { return config; }
+    const RenderPassConfig& getConfig() const { return config; }
+
+    // Access to own framebuffers
+    vk::Framebuffer getFramebuffer(uint32_t frameIndex = 0) const;
 
     // Static helper for explicit barrier insertion between passes
     static void insertImageBarrier(
@@ -89,7 +106,18 @@ public:
 private:
     VulkanContext* context = nullptr;
     vk::RenderPass renderPass;
-    PassConfig config;
+    RenderPassConfig config;
+
+    // External framebuffer support (for swapchain passes)
+    vk::Framebuffer externalFramebuffer = VK_NULL_HANDLE;
+
+    // Own framebuffer resources
+    eastl::vector<ImageResource> colorImages;
+    eastl::vector<vk::ImageView> colorImageViews;
+    ImageResource depthImage{};
+    vk::ImageView depthImageView = VK_NULL_HANDLE;
+    eastl::vector<vk::Framebuffer> framebuffers;  // Support for multiple frames in flight
+    vk::Extent2D currentExtent = {0, 0};
 };
 
 }

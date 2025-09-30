@@ -36,10 +36,6 @@ void App::initVulkan() {
 
     context.init(window.getHandle());
     swapchain.init(&context);
-    renderPass.init(&context, swapchain.getImageFormat());
-
-    // Initialize ImGui backend
-    imguiBackend.init(&context, window.getHandle(), renderPass.getRenderPass(), MAX_FRAMES_IN_FLIGHT);
 
     // Initialize UI layer if set
     if (uiLayer) {
@@ -48,7 +44,10 @@ void App::initVulkan() {
 
     createResources();
 
-    swapchain.createFramebuffers(renderPass.getRenderPass());
+    // Initialize ImGui backend after renderer is set up
+    if (forwardRenderer) {
+        imguiBackend.init(&context, window.getHandle(), forwardRenderer->getFinalPassRenderPass(), MAX_FRAMES_IN_FLIGHT);
+    }
     createCommandBuffers();
     createSyncObjects();
 }
@@ -147,7 +146,6 @@ void App::internalCleanup() {
         context.getDevice().destroyFence(inFlightFences[i]);
     }
 
-    renderPass.cleanup();
     swapchain.cleanup();
     context.cleanup();
 
@@ -159,14 +157,14 @@ void App::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t frame
     vk::Framebuffer framebuffer = swapchain.getFramebuffer(imageIndex);
     vk::Extent2D extent = swapchain.getExtent();
 
-    // Scene rendering
+    // Scene rendering - use shared framebuffer
     if (forwardRenderer && world) {
         forwardRenderer->beginFrame(*world, frameIndex);
         forwardRenderer->renderFrame(cmd, framebuffer, extent, frameIndex);
         forwardRenderer->endFrame();
     }
 
-    // Debug and UI rendering
+    // Debug and UI rendering - use same framebuffer
     if (debugRenderer) {
         debugRenderer->renderDebugAndUI(cmd, framebuffer, extent, frameIndex);
     }
@@ -212,7 +210,13 @@ void App::recreateSwapchain() {
 
     context.getDevice().waitIdle();
     swapchain.recreate();
-    swapchain.createFramebuffers(renderPass.getRenderPass());
+
+    // Recreate swapchain framebuffers
+    if (forwardRenderer) {
+        // Use final pass RenderPass for framebuffer creation
+        swapchain.createFramebuffers(forwardRenderer->getFinalPassRenderPass());
+    }
+
     onWindowResize(width, height);
 }
 

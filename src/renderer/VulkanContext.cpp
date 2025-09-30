@@ -18,8 +18,28 @@ void VulkanContext::init(GLFWwindow* win) {
 }
 
 void VulkanContext::cleanup() {
-    // Clean up VMA allocator first
+    // Wait for device to be idle before cleanup
+    if (*device) {
+        device.waitIdle();
+    }
+
+    // Clean up VMA allocator before destroying the device
     if (allocator != VK_NULL_HANDLE) {
+#ifdef _DEBUG
+        // Check for memory leaks before destroying allocator
+        VmaTotalStatistics stats;
+        vmaCalculateStatistics(allocator, &stats);
+        if (stats.total.statistics.allocationCount > 0) {
+            violet::Log::error("VMA", "Memory leak detected: {} allocations still active", stats.total.statistics.allocationCount);
+            // Dump detailed stats only when leaks are detected
+            char* statsString = nullptr;
+            vmaBuildStatsString(allocator, &statsString, VK_TRUE);
+            if (statsString) {
+                violet::Log::error("VMA", "Allocator stats (leak detected):\n{}", statsString);
+                vmaFreeStatsString(allocator, statsString);
+            }
+        }
+#endif
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;
     }

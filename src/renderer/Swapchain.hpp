@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>
+#include "ResourceFactory.hpp"
 
 namespace violet {
 
@@ -24,9 +25,16 @@ public:
     vk::Framebuffer getFramebuffer(size_t index) const { return *framebuffers[index]; }
     size_t getFramebufferCount() const { return framebuffers.size(); }
 
+    // Getters for renderer to create its own framebuffers
+    const eastl::vector<vk::raii::ImageView>& getImageViews() const { return imageViews; }
+    vk::ImageView getImageView(size_t index) const { return *imageViews[index]; }
+    vk::ImageView getDepthImageView() const { return *depthImageView; }
+    size_t getImageCount() const { return images.size(); }
+
     void createDepthResources();
 
 private:
+    void createResources();
     void create();
     void createImageViews();
     
@@ -42,8 +50,7 @@ private:
     eastl::vector<vk::raii::ImageView> imageViews;
     eastl::vector<vk::raii::Framebuffer> framebuffers;
 
-    vk::raii::Image depthImage{nullptr};
-    vk::raii::DeviceMemory depthImageMemory{nullptr};
+    ImageResource depthImage{};
     vk::raii::ImageView depthImageView{nullptr};
 
     vk::Format imageFormat;

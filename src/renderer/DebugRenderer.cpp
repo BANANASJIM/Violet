@@ -319,9 +319,12 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     indices.reserve(aabbs.size() * 24);
 
     for (size_t i = 0; i < aabbs.size() && i < visibilityMask.size(); ++i) {
-        uint32_t baseVertex = static_cast<uint32_t>(vertices.size());
-        glm::vec3 color = visibilityMask[i] ? DebugColors::VISIBLE_AABB : DebugColors::CULLED_AABB;
-        generateAABBGeometry(aabbs[i], color, vertices, indices, baseVertex);
+        // Only generate geometry for visible AABBs to reduce overdraw
+        if (visibilityMask[i]) {
+            uint32_t baseVertex = static_cast<uint32_t>(vertices.size());
+            glm::vec3 color = DebugColors::VISIBLE_AABB;
+            generateAABBGeometry(aabbs[i], color, vertices, indices, baseVertex);
+        }
     }
 
     if (vertices.empty() || indices.empty()) {
@@ -682,21 +685,34 @@ void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32
 }
 
 void DebugRenderer::setupOverlayPass(vk::Format swapchainFormat) {
-    // Color attachment - preserve existing content
-    vk::AttachmentDescription colorAttachment;
-    colorAttachment.format = swapchainFormat;
-    colorAttachment.samples = vk::SampleCountFlagBits::e1;
-    colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;  // Don't clear, preserve previous content
-    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
-    colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    colorAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;
-    colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    // Create overlay attachment that transitions from ePresentSrcKHR to eColorAttachmentOptimal to ePresentSrcKHR
+    AttachmentDesc overlayAttachment;
+    overlayAttachment.format = swapchainFormat;
+    overlayAttachment.loadOp = vk::AttachmentLoadOp::eLoad;  // Don't clear, preserve previous content
+    overlayAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    overlayAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;  // Image comes from ForwardRenderer in this layout
+    overlayAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;    // Return to present layout for swapchain
 
-    PassConfig config;
+    // Clear values
+    vk::ClearValue colorClear;
+    colorClear.color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+    vk::ClearValue depthClear;
+    depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+
+    RenderPassConfig config;
     config.name = "OverlayPass";
-    config.colorAttachments.push_back(colorAttachment);
-    config.hasDepth = false;
+    config.colorAttachments.push_back(overlayAttachment);
+    // Add depth attachment to match swapchain framebuffer structure
+    config.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eLoad);
+    config.hasDepth = true;
+    config.clearValues = {colorClear, depthClear};
+    config.isSwapchainPass = true;  // Uses swapchain framebuffer
+    config.createOwnFramebuffer = false;  // Uses external swapchain framebuffer
+    // Match ForwardRenderer main pass dependency configuration exactly
+    config.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    config.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    config.srcAccess = {};  // Empty srcAccess to match ForwardRenderer
+    config.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
     config.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
         // Render debug information
         if (enabled) {

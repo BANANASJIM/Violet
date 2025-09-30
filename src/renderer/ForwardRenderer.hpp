@@ -106,6 +106,9 @@ public:
     void init(VulkanContext* context, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
     void cleanup() override;
 
+    // Get final pass RenderPass for swapchain framebuffer creation
+    vk::RenderPass getFinalPassRenderPass() const;
+
     // Pass system interface
     void beginFrame(entt::registry& world, uint32_t frameIndex);
     void renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
@@ -175,8 +178,6 @@ private:
     void createDefaultPBRTextures();
 
     // Declarative pass helpers
-    vk::AttachmentDescription createColorAttachment(vk::Format format, vk::AttachmentLoadOp loadOp);
-    vk::AttachmentDescription createDepthAttachment(vk::AttachmentLoadOp loadOp);
     void insertPassTransition(vk::CommandBuffer cmd, size_t passIndex);
 
     GlobalUniforms globalUniforms;
@@ -214,10 +215,11 @@ private:
     Texture* defaultNormalTexture = nullptr;
 
     // Multi-pass system data
-    eastl::vector<RenderPassDesc> passDescriptors;  // Declarative pass descriptions
+    eastl::vector<RenderPassConfig> passConfigs;    // Unified pass configurations
     eastl::vector<RenderPass> renderPasses;         // Actual RenderPass objects
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
+
 };
 
 } // namespace violet

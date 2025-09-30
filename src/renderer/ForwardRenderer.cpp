@@ -35,6 +35,7 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     // Initialize subsystems - use first pass for components that need RenderPass
     globalUniforms.init(context, maxFramesInFlight);
     if (!renderPasses.empty()) {
+        // All rendering now happens in the unified Main pass (index 0)
         debugRenderer.init(context, &renderPasses[0], &globalUniforms, maxFramesInFlight);
         environmentMap.init(context, &renderPasses[0], this);
     }
@@ -84,7 +85,17 @@ void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebu
 
         // Execute pass
         auto& pass = renderPasses[i];
-        pass.begin(cmd, framebuffer, extent);
+
+        // Swapchain passes use external framebuffer
+        if (pass.getConfig().isSwapchainPass) {
+            // Set external framebuffer for swapchain pass
+            pass.setExternalFramebuffer(framebuffer);
+            pass.begin(cmd, extent); // Will use external framebuffer
+        } else {
+            // Passes with own framebuffers use them directly
+            pass.begin(cmd, extent); // Will use own framebuffer
+        }
+
         pass.execute(cmd, frameIndex);
         pass.end(cmd);
     }
@@ -94,8 +105,16 @@ void ForwardRenderer::endFrame() {
     currentWorld = nullptr;
 }
 
+vk::RenderPass ForwardRenderer::getFinalPassRenderPass() const {
+    if (renderPasses.empty()) {
+        violet::Log::error("Renderer", "No render passes available");
+        return VK_NULL_HANDLE;
+    }
+    return renderPasses.back().getRenderPass();
+}
+
 void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
-    passDescriptors.clear();
+    passConfigs.clear();
     renderPasses.clear();
 
     // Clear values
@@ -104,48 +123,48 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     vk::ClearValue depthClear;
     depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
-    // Skybox pass - declarative definition
-    passDescriptors.push_back({
-        .name = "Skybox",
-        .colorAttachments = {createColorAttachment(swapchainFormat, vk::AttachmentLoadOp::eClear)},
-        .depthAttachment = createDepthAttachment(vk::AttachmentLoadOp::eClear),
+    // Main pass - single unified pass for all rendering with depth testing
+    // This approach reuses the current pipeline architecture while maintaining multi-stage execution
+    passConfigs.push_back({
+        .name = "Main",
+        .colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)},
+        .depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear),
         .hasDepth = true,
         .clearValues = {colorClear, depthClear},
+        .isSwapchainPass = true,  // Uses swapchain framebuffer for final output
+        .createOwnFramebuffer = false,  // Uses external swapchain framebuffer with depth
+        .srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+        .dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
+        .srcAccess = {},
+        .dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
         .execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
             if (currentWorld) {
                 setViewport(cmd, currentExtent);
+
+                // First render skybox (depth testing disabled, renders to background)
                 Material* envMaterial = environmentMap.getMaterial();
                 if (envMaterial) {
                     environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
                                               globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
                 }
-            }
-        },
-        .finalColorLayout = vk::ImageLayout::eColorAttachmentOptimal,
-        .finalDepthLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
-    });
 
-    // Forward pass - declarative definition
-    passDescriptors.push_back({
-        .name = "Forward",
-        .colorAttachments = {createColorAttachment(swapchainFormat, vk::AttachmentLoadOp::eLoad)},
-        .depthAttachment = createDepthAttachment(vk::AttachmentLoadOp::eLoad),
-        .hasDepth = true,
-        .clearValues = {},  // No clear - load previous content
-        .execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-            if (currentWorld) {
-                setViewport(cmd, currentExtent);
+                // Then render scene geometry (depth testing enabled)
                 renderScene(cmd, frame, *currentWorld);
             }
-        },
-        .finalColorLayout = vk::ImageLayout::ePresentSrcKHR,
-        .finalDepthLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
+        }
     });
 
-    // Create actual RenderPass objects from descriptors
-    for (const auto& desc : passDescriptors) {
+    // Create actual RenderPass objects from configurations
+    for (size_t i = 0; i < passConfigs.size(); ++i) {
+        const auto& config = passConfigs[i];
         RenderPass pass;
-        pass.init(context, desc);
+        pass.init(context, config);
+
+        // Create framebuffers for passes that need them
+        if (config.createOwnFramebuffer) {
+            pass.createFramebuffers(currentExtent);
+        }
+
         renderPasses.push_back(eastl::move(pass));
     }
 }
@@ -278,20 +297,6 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     glm::mat4 projMatrix = activeCamera->getProjectionMatrix();
     glm::mat4 viewProjMatrix = projMatrix * viewMatrix;
 
-    // Log culling stats occasionally
-    static int frameCount = 0;
-    frameCount++;
-    bool shouldLog = (frameCount % 300 == 0);  // Log every ~5 seconds at 60fps
-
-    // Render environment map as skybox background
-    if (environmentMap.isEnabled()) {
-        vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
-        // Use the environment map material's own pipeline layout
-        Material* envMaterial = environmentMap.getMaterial();
-        if (envMaterial) {
-            environmentMap.renderSkybox(commandBuffer, frameIndex, envMaterial->getPipelineLayout(), globalSet);
-        }
-    }
 
     visibleIndices.clear();
 
@@ -477,7 +482,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
         return nullptr;
     }
 
-    // 创建pipeline，使用global和material的descriptor set layout
+    // Create pipeline using the final pass RenderPass
     auto pipeline = new GraphicsPipeline();
     try {
         pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
@@ -519,7 +524,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
         return nullptr;
     }
 
-    // Create pipeline with custom config
+    // Create pipeline with custom config using the final pass RenderPass
     auto pipeline = new GraphicsPipeline();
     try {
         pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
@@ -533,7 +538,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
 
     // Validate that the pipeline was created properly
     if (!pipeline->getPipeline()) {
-        violet::Log::error("ForwardRenderer", "Pipeline creation failed - null pipeline object");
+        violet::Log::error("ForwardRenderer", "Pipeline creation failed with custom config - null pipeline object");
         delete pipeline;
         return nullptr;
     }
@@ -808,33 +813,6 @@ void ForwardRenderer::createDefaultPBRTextures() {
     }
 }
 
-vk::AttachmentDescription ForwardRenderer::createColorAttachment(vk::Format format, vk::AttachmentLoadOp loadOp) {
-    vk::AttachmentDescription attachment{};
-    attachment.format = format;
-    attachment.samples = vk::SampleCountFlagBits::e1;
-    attachment.loadOp = loadOp;
-    attachment.storeOp = vk::AttachmentStoreOp::eStore;
-    attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    attachment.initialLayout = (loadOp == vk::AttachmentLoadOp::eClear) ?
-        vk::ImageLayout::eUndefined : vk::ImageLayout::eColorAttachmentOptimal;
-    attachment.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    return attachment;
-}
-
-vk::AttachmentDescription ForwardRenderer::createDepthAttachment(vk::AttachmentLoadOp loadOp) {
-    vk::AttachmentDescription attachment{};
-    attachment.format = context->findDepthFormat();
-    attachment.samples = vk::SampleCountFlagBits::e1;
-    attachment.loadOp = loadOp;
-    attachment.storeOp = vk::AttachmentStoreOp::eStore;
-    attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    attachment.initialLayout = (loadOp == vk::AttachmentLoadOp::eClear) ?
-        vk::ImageLayout::eUndefined : vk::ImageLayout::eDepthStencilAttachmentOptimal;
-    attachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-    return attachment;
-}
 
 void ForwardRenderer::insertPassTransition(vk::CommandBuffer cmd, size_t passIndex) {
     // Explicit pass-to-pass transitions can be added here if needed

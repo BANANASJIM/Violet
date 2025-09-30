@@ -20,6 +20,12 @@ BufferResource ResourceFactory::createBuffer(VulkanContext* context, const Buffe
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = toVmaUsage(info.memoryUsage);
     allocInfo.flags = getVmaFlags(info.memoryUsage);
+#ifdef _DEBUG
+    // Store debug name in pUserData for leak tracking
+    if (!info.debugName.empty()) {
+        allocInfo.pUserData = const_cast<char*>(info.debugName.c_str());
+    }
+#endif
 
     VkBuffer vkBuffer;
     VkBufferCreateInfo vkBufferCreateInfo = bufferCreateInfo;
@@ -72,6 +78,12 @@ ImageResource ResourceFactory::createImage(VulkanContext* context, const ImageIn
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = toVmaUsage(info.memoryUsage);
     allocInfo.flags = getVmaFlags(info.memoryUsage);
+#ifdef _DEBUG
+    // Store debug name in pUserData for leak tracking
+    if (!info.debugName.empty()) {
+        allocInfo.pUserData = const_cast<char*>(info.debugName.c_str());
+    }
+#endif
 
     VkImage vkImage;
     VkImageCreateInfo vkImageCreateInfo = imageCreateInfo;
