@@ -44,7 +44,7 @@ void main() {
     fragTangent = normalize(normalMatrix * inTangent.xyz);
     fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
 
-    fragTexCoord = inTexCoord;
+    fragTexCoord = vec2(inTexCoord.x, 1.0 - inTexCoord.y);
 
     gl_Position = global.proj * viewPos;
 }
