@@ -1,14 +1,14 @@
 #pragma once
 
 #include <glm/glm.hpp>
-#include <array>
+#include <EASTL/array.h>
 #include "math/AABB.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
 
 struct Frustum {
-    std::array<glm::vec4, 6> planes; // left, right, bottom, top, near, far
+    eastl::array<glm::vec4, 6> planes; // left, right, bottom, top, near, far
 
     void extract(const glm::mat4& viewProj) {
         // Extract frustum planes from view-projection matrix

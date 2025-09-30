@@ -30,7 +30,7 @@ void ComputePipeline::init(VulkanContext* ctx, const eastl::string& computePath,
 
     computePipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, computePipelineCreateInfo);
 
-    VT_INFO("Compute pipeline created successfully from: {}", computePath.c_str());
+    violet::Log::info("Renderer", "Compute pipeline created successfully from: {}", computePath.c_str());
 }
 
 void ComputePipeline::cleanup() {

@@ -1,12 +1,12 @@
 #include "Window.hpp"
 #include "input/InputManager.hpp"
-#include <stdexcept>
+#include "Exception.hpp"
 
 namespace violet {
 
-Window::Window(int width, int height, const std::string& title) {
+Window::Window(int width, int height, const eastl::string& title) {
     if (!glfwInit()) {
-        throw std::runtime_error("Failed to initialize GLFW");
+        throw RuntimeError("Failed to initialize GLFW");
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -14,7 +14,7 @@ Window::Window(int width, int height, const std::string& title) {
 
     if (!window) {
         glfwTerminate();
-        throw std::runtime_error("Failed to create window");
+        throw RuntimeError("Failed to create window");
     }
 
     glfwSetWindowUserPointer(window, this);

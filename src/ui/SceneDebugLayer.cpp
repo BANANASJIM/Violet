@@ -1,3 +1,5 @@
+#include "core/MathUtils.hpp"
+#include "core/Exception.hpp"
 #include "SceneDebugLayer.hpp"
 #include "input/InputManager.hpp"
 #include <imgui.h>
@@ -435,7 +437,7 @@ bool SceneDebugLayer::onKeyPressed(const KeyPressedEvent& event) {
 
 entt::entity SceneDebugLayer::pickObject(float mouseX, float mouseY) {
     if (!renderer || !world) {
-        VT_WARN("Renderer or world is null in pickObject");
+        violet::Log::warn("UI", "Renderer or world is null in pickObject");
         return entt::null;
     }
 
@@ -451,7 +453,7 @@ entt::entity SceneDebugLayer::pickObject(float mouseX, float mouseY) {
     }
 
     if (!activeCamera) {
-        VT_WARN("No active camera found for picking");
+        violet::Log::warn("UI", "No active camera found for picking");
         return entt::null;
     }
 
@@ -534,7 +536,7 @@ void SceneDebugLayer::renderGizmo() {
     auto& registry = world->getRegistry();
     auto* transform = registry.try_get<TransformComponent>(selectedEntity);
     if (!transform) {
-        VT_WARN("Selected entity {} has no TransformComponent", static_cast<uint32_t>(selectedEntity));
+        violet::Log::warn("UI", "Selected entity {} has no TransformComponent", static_cast<uint32_t>(selectedEntity));
         return;
     }
 
@@ -550,7 +552,7 @@ void SceneDebugLayer::renderGizmo() {
     }
 
     if (!activeCamera) {
-        VT_WARN("No active camera found for gizmo rendering");
+        violet::Log::warn("UI", "No active camera found for gizmo rendering");
         return;
     }
 
@@ -730,16 +732,16 @@ void SceneDebugLayer::renderRayVisualization() {
             // For now, just enable ray rendering with the first valid ray
             // The renderer will call back to get all rays during render
             const StoredRay& firstRay = storedRays[0];
-            if (std::isfinite(firstRay.origin.x) && std::isfinite(firstRay.origin.y) && std::isfinite(firstRay.origin.z) &&
-                std::isfinite(firstRay.direction.x) && std::isfinite(firstRay.direction.y) && std::isfinite(firstRay.direction.z) &&
-                std::isfinite(firstRay.length) && firstRay.length > 0.0f) {
+            if (violet::isfinite(firstRay.origin.x) && violet::isfinite(firstRay.origin.y) && violet::isfinite(firstRay.origin.z) &&
+                violet::isfinite(firstRay.direction.x) && violet::isfinite(firstRay.direction.y) && violet::isfinite(firstRay.direction.z) &&
+                violet::isfinite(firstRay.length) && firstRay.length > 0.0f) {
                 debugRenderer.setRayData(firstRay.origin, firstRay.direction, firstRay.length, true);
             }
         }
-    } catch (const std::exception& e) {
-        VT_ERROR("Exception in renderRayVisualization: {}", e.what());
+    } catch (const violet::Exception& e) {
+        violet::Log::error("UI", "Exception in renderRayVisualization: {}", e.what_c_str());
     } catch (...) {
-        VT_ERROR("Unknown exception in renderRayVisualization");
+        violet::Log::error("UI", "Unknown exception in renderRayVisualization");
     }
 }
 
@@ -833,10 +835,10 @@ void SceneDebugLayer::addRayFromMouseClick(float mouseX, float mouseY) {
     }
 
     // Validate ray data before storing
-    if (!std::isfinite(rayOrigin.x) || !std::isfinite(rayOrigin.y) || !std::isfinite(rayOrigin.z) ||
-        !std::isfinite(rayDirection.x) || !std::isfinite(rayDirection.y) || !std::isfinite(rayDirection.z) ||
-        !std::isfinite(calculatedRayLength) || calculatedRayLength <= 0.0f) {
-        VT_WARN("Invalid ray data generated from mouse click at ({}, {}), skipping storage", mouseX, mouseY);
+    if (!violet::isfinite(rayOrigin.x) || !violet::isfinite(rayOrigin.y) || !violet::isfinite(rayOrigin.z) ||
+        !violet::isfinite(rayDirection.x) || !violet::isfinite(rayDirection.y) || !violet::isfinite(rayDirection.z) ||
+        !violet::isfinite(calculatedRayLength) || calculatedRayLength <= 0.0f) {
+        violet::Log::warn("UI", "Invalid ray data generated from mouse click at ({}, {}), skipping storage", mouseX, mouseY);
         return;
     }
 
@@ -953,10 +955,10 @@ void SceneDebugLayer::handleAssetDragDrop() {
     // Log drag state for debugging
     static bool wasDragging = false;
     if (isDragging && !wasDragging) {
-        VT_INFO("Started dragging asset");
+        violet::Log::info("UI", "Started dragging asset");
         wasDragging = true;
     } else if (!isDragging && wasDragging) {
-        VT_INFO("Stopped dragging asset");
+        violet::Log::info("UI", "Stopped dragging asset");
         wasDragging = false;
     }
 
@@ -982,11 +984,11 @@ void SceneDebugLayer::handleAssetDragDrop() {
         ImGui::InvisibleButton("##DropZone", io.DisplaySize);
 
         if (ImGui::BeginDragDropTarget()) {
-            VT_DEBUG("Drop target ready");
+            violet::Log::debug("UI", "Drop target ready");
 
             if (const ImGuiPayload* dropPayload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
                 const char* path = (const char*)dropPayload->Data;
-                VT_INFO("Asset dropped in scene: {}", path);
+                violet::Log::info("UI", "Asset dropped in scene: {}", path);
 
                 float mouseX = io.MousePos.x;
                 float mouseY = io.MousePos.y;
@@ -1016,7 +1018,7 @@ void SceneDebugLayer::renderLightControlWindow() {
     if (ImGui::CollapsingHeader("Add New Light", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Button("Add Directional Light")) {
             createLightEntity(LightType::Directional);
-            VT_INFO("Created new directional light");
+            violet::Log::info("UI", "Created new directional light");
         }
 
         ImGui::SameLine();
@@ -1029,7 +1031,7 @@ void SceneDebugLayer::renderLightControlWindow() {
                 position = activeCamera->getPosition() + activeCamera->getForward() * 200.0f;
             }
             createLightEntity(LightType::Point, position);
-            VT_INFO("Created new point light");
+            violet::Log::info("UI", "Created new point light");
         }
     }
 
@@ -1148,7 +1150,7 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
         // Update world transforms to ensure the light's position is properly set
         scene->updateWorldTransforms(world->getRegistry());
 
-        VT_INFO("Added light entity {} to scene hierarchy as node {}", static_cast<uint32_t>(entity), nodeId);
+        violet::Log::info("UI", "Added light entity {} to scene hierarchy as node {}", static_cast<uint32_t>(entity), nodeId);
     }
 
     selectedEntity = entity;
@@ -1271,7 +1273,7 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
     if (ImGui::Button("Delete Light")) {
         registry.destroy(entity);
         selectedEntity = entt::null;
-        VT_INFO("Deleted light entity");
+        violet::Log::info("UI", "Deleted light entity");
     }
     ImGui::PopStyleColor();
 }
@@ -1301,7 +1303,9 @@ void SceneDebugLayer::renderSceneHierarchy() {
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(100, 150, 200, 100));
                 }
 
-                eastl::string entityLabel = std::to_string(static_cast<uint32_t>(entity)).c_str();
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%u", static_cast<uint32_t>(entity));
+                eastl::string entityLabel = buffer;
                 if (ImGui::Selectable(entityLabel.c_str(),
                                      entity == selectedEntity, ImGuiSelectableFlags_SpanAllColumns)) {
                     selectedEntity = entity;
@@ -1441,7 +1445,7 @@ void SceneDebugLayer::handleNodeReparenting(uint32_t draggedNodeId, uint32_t new
         renderer->markSceneDirty();
     }
 
-    VT_INFO("Reparented node {} '{}' to parent {}", draggedNodeId,
+    violet::Log::info("UI", "Reparented node {} '{}' to parent {}", draggedNodeId,
             draggedNode->name.empty() ? "Unnamed" : draggedNode->name.c_str(), newParentId);
 }
 
@@ -1592,7 +1596,7 @@ void SceneDebugLayer::scanHDRFiles() {
     // Sort HDR files alphabetically for consistent display
     eastl::sort(availableHDRFiles.begin(), availableHDRFiles.end());
 
-    VT_INFO("Found {} HDR files in assets directory", availableHDRFiles.size());
+    violet::Log::info("UI", "Found {} HDR files in assets directory", availableHDRFiles.size());
 }
 
 void SceneDebugLayer::renderHDRFileSelector(EnvironmentMap& environmentMap) {
@@ -1613,7 +1617,7 @@ void SceneDebugLayer::renderHDRFileSelector(EnvironmentMap& environmentMap) {
                                        hdrPath.substr(lastSlash + 1) : hdrPath;
 
             if (ImGui::Selectable(displayName.c_str())) {
-                VT_INFO("Loading HDR file: {}", hdrPath.c_str());
+                violet::Log::info("UI", "Loading HDR file: {}", hdrPath.c_str());
                 environmentMap.loadHDR(hdrPath);
                 ImGui::CloseCurrentPopup();
             }

@@ -21,10 +21,6 @@ bool Log::isModuleEnabled(const eastl::string& module) {
     return s_disabledModules.find(module) == s_disabledModules.end();
 }
 
-bool Log::isModuleEnabled(const std::string& module) {
-    return s_disabledModules.find(eastl::string(module.c_str())) == s_disabledModules.end();
-}
-
 void Log::loadConfigFromEnvironment() {
     const char* disabledModulesEnv = std::getenv("VIOLET_LOG_DISABLED_MODULES");
     if (disabledModulesEnv) {

@@ -4,7 +4,7 @@
 namespace violet {
 
 Mesh::~Mesh() {
-    VT_TRACE("Mesh destructor");
+    violet::Log::trace("Renderer", "Mesh destructor");
     cleanup();
 }
 
@@ -36,7 +36,7 @@ void Mesh::create(
         }
     }
     if (hasInvalidSubMesh) {
-        VT_WARN("Mesh contains one or more invalid submeshes");
+        violet::Log::warn("Renderer", "Mesh contains one or more invalid submeshes");
     }
 }
 
@@ -68,7 +68,7 @@ void Mesh::create(
         }
     }
     if (hasInvalidSubMesh) {
-        VT_WARN("Mesh contains one or more invalid submeshes");
+        violet::Log::warn("Renderer", "Mesh contains one or more invalid submeshes");
     }
 }
 

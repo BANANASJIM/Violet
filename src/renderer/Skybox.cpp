@@ -71,7 +71,7 @@ void Skybox::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* fwdRender
         FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
         DescriptorSetType::GlobalUniforms, skyboxConfig);
 
-    VT_INFO("Skybox initialized with material");
+    violet::Log::info("Renderer", "Skybox initialized with material");
 }
 
 void Skybox::cleanup() {
@@ -87,9 +87,9 @@ void Skybox::loadCubemap(VulkanContext* context, const eastl::array<eastl::strin
     enabled = (texture != nullptr);
 
     if (texture) {
-        VT_INFO("Skybox cubemap loaded successfully");
+        violet::Log::info("Renderer", "Skybox cubemap loaded successfully");
     } else {
-        VT_WARN("Failed to load skybox cubemap");
+        violet::Log::warn("Renderer", "Failed to load skybox cubemap");
     }
 }
 
@@ -106,13 +106,13 @@ void Skybox::render(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
 
     // Validate texture is fully initialized
     if (!texture->getImageView() || !texture->getSampler()) {
-        VT_WARN("Skipping skybox render - texture not fully initialized");
+        violet::Log::warn("Renderer", "Skipping skybox render - texture not fully initialized");
         return;
     }
 
     // Validate descriptor set
     if (!globalDescriptorSet) {
-        VT_WARN("Skipping skybox render - global descriptor set is invalid");
+        violet::Log::warn("Renderer", "Skipping skybox render - global descriptor set is invalid");
         return;
     }
 

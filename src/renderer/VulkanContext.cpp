@@ -1,3 +1,4 @@
+#include "core/Exception.hpp"
 #include "VulkanContext.hpp"
 #include "core/Log.hpp"
 #include <EASTL/set.h>
@@ -69,7 +70,7 @@ void VulkanContext::createInstance() {
     createInfo.ppEnabledExtensionNames = extensions.data();
 
     instance = vk::raii::Instance(context, createInfo);
-    VT_INFO("Vulkan instance created");
+    violet::Log::info("Renderer", "Vulkan instance created");
 }
 
 void VulkanContext::setupDebugMessenger() {
@@ -79,7 +80,7 @@ void VulkanContext::setupDebugMessenger() {
 void VulkanContext::createSurface(GLFWwindow* window) {
     VkSurfaceKHR rawSurface;
     if (glfwCreateWindowSurface(*instance, window, nullptr, &rawSurface) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create window surface");
+        throw RuntimeError("Failed to create window surface");
     }
     surface = vk::raii::SurfaceKHR(instance, rawSurface);
 }
@@ -95,11 +96,11 @@ void VulkanContext::pickPhysicalDevice() {
     }
 
     if (physicalDevice == VK_NULL_HANDLE) {
-        throw std::runtime_error("Failed to find a suitable GPU");
+        throw RuntimeError("Failed to find a suitable GPU");
     }
 
     auto properties = physicalDevice.getProperties();
-    VT_INFO("Selected GPU: {}", properties.deviceName.data());
+    violet::Log::info("Renderer", "Selected GPU: {}", properties.deviceName.data());
 }
 
 void VulkanContext::createLogicalDevice() {
@@ -136,16 +137,16 @@ void VulkanContext::createLogicalDevice() {
     // Only enable features that are actually supported
     if (availableFeatures.fillModeNonSolid) {
         deviceFeatures.fillModeNonSolid = VK_TRUE;  // For wireframe rendering
-        VT_INFO("Enabled fillModeNonSolid feature");
+        violet::Log::info("Renderer", "Enabled fillModeNonSolid feature");
     } else {
-        VT_WARN("fillModeNonSolid not supported on this device");
+        violet::Log::warn("Renderer", "fillModeNonSolid not supported on this device");
     }
 
     if (availableFeatures.wideLines) {
         deviceFeatures.wideLines = VK_TRUE;         // For line width > 1.0
-        VT_INFO("Enabled wideLines feature");
+        violet::Log::info("Renderer", "Enabled wideLines feature");
     } else {
-        VT_WARN("wideLines not supported on this device");
+        violet::Log::warn("Renderer", "wideLines not supported on this device");
     }
     
     vk::PhysicalDeviceVulkan13Features features13;
@@ -276,7 +277,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanContext::debugCallback(
     void* pUserData) {
     
     if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        VT_ERROR("Validation: {}", pCallbackData->pMessage);
+        violet::Log::error("Renderer", "Validation: {}", pCallbackData->pMessage);
     }
     
     return VK_FALSE;
@@ -310,7 +311,7 @@ vk::Format VulkanContext::findSupportedFormat(const eastl::vector<vk::Format>& c
         }
     }
 
-    throw std::runtime_error("Failed to find supported format!");
+    throw RuntimeError("Failed to find supported format!");
 }
 
 void VulkanContext::createAllocator() {
@@ -321,10 +322,10 @@ void VulkanContext::createAllocator() {
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
 
     if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create VMA allocator");
+        throw RuntimeError("Failed to create VMA allocator");
     }
 
-    VT_INFO("VMA allocator created");
+    violet::Log::info("Renderer", "VMA allocator created");
 }
 
 }

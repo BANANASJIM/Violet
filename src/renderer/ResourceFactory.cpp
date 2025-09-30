@@ -3,6 +3,7 @@
 #include "Buffer.hpp"
 #include "Texture.hpp"
 #include "core/Log.hpp"
+#include <cassert>
 
 namespace violet {
 
@@ -29,8 +30,8 @@ BufferResource ResourceFactory::createBuffer(VulkanContext* context, const Buffe
                                          &vkBuffer, &result.allocation, &vmaAllocInfo);
 
     if (vmaResult != VK_SUCCESS) {
-        VT_ERROR("Failed to create buffer with VMA: error code {}", static_cast<int>(vmaResult));
-        throw std::runtime_error("Failed to create buffer with VMA");
+        violet::Log::critical("Renderer", "Failed to create buffer with VMA: error code {}", static_cast<int>(vmaResult));
+        assert(false && "Failed to create buffer with VMA");
     }
 
     result.buffer = vkBuffer;
@@ -79,8 +80,8 @@ ImageResource ResourceFactory::createImage(VulkanContext* context, const ImageIn
                                         &vkImage, &result.allocation, nullptr);
 
     if (vmaResult != VK_SUCCESS) {
-        VT_ERROR("Failed to create image with VMA: error code {}", static_cast<int>(vmaResult));
-        throw std::runtime_error("Failed to create image with VMA");
+        violet::Log::critical("Renderer", "Failed to create image with VMA: error code {}", static_cast<int>(vmaResult));
+        assert(false && "Failed to create image with VMA");
     }
 
     result.image = vkImage;
@@ -123,18 +124,14 @@ void* ResourceFactory::mapBuffer(VulkanContext* context, BufferResource& buffer)
     }
 
     if (vmaMapMemory(context->getAllocator(), buffer.allocation, &buffer.mappedData) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to map buffer memory");
+        violet::Log::critical("Renderer", "Failed to map buffer memory");
+        assert(false && "Failed to map buffer memory");
+        return nullptr;
     }
 
     return buffer.mappedData;
 }
 
-void ResourceFactory::unmapBuffer(VulkanContext* context, BufferResource& buffer) {
-    // Note: This function should only be called for buffers that were manually mapped.
-    // Buffers created with VMA_ALLOCATION_CREATE_MAPPED_BIT should NOT be unmapped.
-    // For now, we'll just clear the pointer without unmapping.
-    buffer.mappedData = nullptr;
-}
 
 void ResourceFactory::copyBuffer(VulkanContext* context, BufferResource& src, BufferResource& dst, vk::DeviceSize size) {
     vk::CommandBuffer commandBuffer = beginSingleTimeCommands(context);

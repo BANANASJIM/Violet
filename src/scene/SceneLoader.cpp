@@ -2,7 +2,7 @@
 
 #include <tiny_gltf.h>
 
-#include <stdexcept>
+#include "core/Exception.hpp"
 #include <EASTL/algorithm.h>
 
 #include "core/Log.hpp"
@@ -30,19 +30,19 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
     bool ret = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filePath.c_str());
 
     if (!warn.empty()) {
-        VT_WARN("glTF warning: {}", warn);
+        violet::Log::warn("Scene", "glTF warning: {}", warn);
     }
 
     if (!err.empty()) {
-        VT_ERROR("glTF error: {}", err);
+        violet::Log::error("Scene", "glTF error: {}", err);
     }
 
     if (!ret) {
-        throw std::runtime_error("Failed to parse glTF");
+        throw RuntimeError("Failed to parse glTF");
     }
 
-    VT_INFO("Loading glTF scene: {}", filePath.c_str());
-    VT_INFO(
+    violet::Log::info("Scene", "Loading glTF scene: {}", filePath.c_str());
+    violet::Log::info("Scene",
         "Nodes: {}, Meshes: {}, Materials: {}, Textures: {}, Images: {}",
         gltfModel.nodes.size(),
         gltfModel.meshes.size(),
@@ -79,14 +79,14 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
         parentNode.entity = entt::null;  // Parent node has no entity/mesh
         parentNodeId = scene->addNode(parentNode);
 
-        VT_INFO("Created parent node '{}' for imported model", parentNode.name.c_str());
+        violet::Log::info("Scene", "Created parent node '{}' for imported model", parentNode.name.c_str());
     }
 
     for (size_t i = 0; i < gltfScene.nodes.size(); i++) {
         loadNode(loadCtx, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, parentNodeId, world);
     }
 
-    VT_INFO("Scene loaded successfully: {} nodes", scene->getNodeCount());
+    violet::Log::info("Scene", "Scene loaded successfully: {} nodes", scene->getNodeCount());
 
     // Build BVH for the loaded scene
     renderer->collectRenderables(*world);
@@ -110,7 +110,7 @@ void SceneLoader::loadNode(
     Node*    node   = scene->getNode(nodeId);
 
     if (!node) {
-        VT_ERROR("Failed to create node");
+        violet::Log::error("Scene", "Failed to create node");
         return;
     }
 
@@ -384,7 +384,7 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
                 instance->setBaseColorTexture(loadCtx.textures[texIndex]);
             } else {
                 instance->setBaseColorTexture(loadCtx.defaultTexture);
-                VT_WARN("Material {} using default baseColor texture (invalid index {})", i, texIndex);
+                violet::Log::warn("Scene", "Material {} using default baseColor texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setBaseColorTexture(loadCtx.defaultTexture);
@@ -397,7 +397,7 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
                 instance->setMetallicRoughnessTexture(loadCtx.textures[texIndex]);
             } else {
                 instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
-                VT_WARN("Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
+                violet::Log::warn("Scene", "Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
@@ -410,7 +410,7 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
                 instance->setNormalTexture(loadCtx.textures[texIndex]);
             } else {
                 instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
-                VT_WARN("Material {} using default normal texture (invalid index {})", i, texIndex);
+                violet::Log::warn("Scene", "Material {} using default normal texture (invalid index {})", i, texIndex);
             }
         } else {
             instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
@@ -527,7 +527,7 @@ Transform SceneLoader::extractTransform(const void* nodePtr) {
         float originalScale = transform.scale.x;
         float scaleFactor = 1.0f / originalScale;
         transform.scale = glm::vec3(1.0f);
-        VT_INFO("Normalized tiny scale ({:.3f}) to 1.0, vertices will appear {:.0f}x larger",
+        violet::Log::info("Scene", "Normalized tiny scale ({:.3f}) to 1.0, vertices will appear {:.0f}x larger",
                 originalScale, scaleFactor);
     }
 

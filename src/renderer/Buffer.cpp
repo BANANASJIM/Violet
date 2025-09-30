@@ -1,6 +1,7 @@
 #include "Buffer.hpp"
 #include "VulkanContext.hpp"
-#include <stdexcept>
+#include "core/Log.hpp"
+#include <cassert>
 
 namespace violet {
 
@@ -13,7 +14,9 @@ uint32_t findMemoryType(VulkanContext* context, uint32_t typeFilter, vk::MemoryP
         }
     }
 
-    throw std::runtime_error("Failed to find suitable memory type!");
+    violet::Log::critical("Renderer", "Failed to find suitable memory type!");
+    assert(false && "Failed to find suitable memory type!");
+    return 0;
 }
 
 void createBuffer(VulkanContext* context, vk::DeviceSize size, vk::BufferUsageFlags usage,

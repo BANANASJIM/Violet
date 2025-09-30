@@ -1,6 +1,5 @@
 #include "DebugRenderer.hpp"
 
-#include <array>
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
@@ -15,6 +14,7 @@
 #include "renderer/ForwardRenderer.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
+#include "ui/UILayer.hpp"
 
 namespace violet {
 
@@ -35,6 +35,9 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     renderPass = rp;
     maxFramesInFlight = framesInFlight;
     globalUniforms = globalUnif;
+
+    // Setup overlay pass for UI rendering
+    setupOverlayPass(vk::Format::eB8G8R8A8Srgb); // TODO: Get actual swapchain format
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -121,6 +124,9 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 }
 
 void DebugRenderer::cleanup() {
+    // Cleanup overlay pass
+    overlayPass.cleanup();
+
     // Explicitly clean up BufferResources before clearing frameData
     for (auto& frame : frameData) {
         if (frame.vertexBuffer) {
@@ -324,7 +330,7 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
 
     // Check buffer size limits
     if (vertices.size() > MAX_DEBUG_VERTICES || indices.size() > MAX_DEBUG_INDICES) {
-        VT_WARN("Debug geometry exceeds buffer limits: {} vertices, {} indices",
+        violet::Log::warn("Renderer", "Debug geometry exceeds buffer limits: {} vertices, {} indices",
                 vertices.size(), indices.size());
         return;
     }
@@ -371,7 +377,7 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
         for (bool vis : visibilityMask) {
             if (vis) visibleCount++;
         }
-        VT_INFO("Debug AABB rendering: {} AABBs ({} visible, {} culled), {} indices",
+        violet::Log::info("Renderer", "Debug AABB rendering: {} AABBs ({} visible, {} culled), {} indices",
                 aabbs.size(), visibleCount, aabbs.size() - visibleCount, frame.indexCount);
     }
 }
@@ -673,6 +679,45 @@ void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32
         }
 
     }
+}
+
+void DebugRenderer::setupOverlayPass(vk::Format swapchainFormat) {
+    // Color attachment - preserve existing content
+    vk::AttachmentDescription colorAttachment;
+    colorAttachment.format = swapchainFormat;
+    colorAttachment.samples = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;  // Don't clear, preserve previous content
+    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;
+    colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+    PassConfig config;
+    config.name = "OverlayPass";
+    config.colorAttachments.push_back(colorAttachment);
+    config.hasDepth = false;
+    config.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
+        // Render debug information
+        if (enabled) {
+            render(cmd, frame);
+        }
+
+        // Render UI
+        if (uiLayer) {
+            uiLayer->beginFrame();
+            uiLayer->onImGuiRender();
+            uiLayer->endFrame(cmd);
+        }
+    };
+
+    overlayPass.init(context, config);
+}
+
+void DebugRenderer::renderDebugAndUI(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
+    overlayPass.begin(cmd, framebuffer, extent);
+    overlayPass.execute(cmd, frameIndex);
+    overlayPass.end(cmd);
 }
 
 } // namespace violet

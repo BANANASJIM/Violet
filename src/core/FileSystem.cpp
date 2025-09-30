@@ -32,7 +32,7 @@ eastl::vector<uint8_t> FileSystem::readBinary(const eastl::string& path) {
     std::ifstream file(path.c_str(), std::ios::binary | std::ios::ate);
     
     if (!file.is_open()) {
-        VT_ERROR("Failed to open file: {}", path.c_str());
+        violet::Log::error("Core", "Failed to open file: {}", path.c_str());
         return {};
     }
     
@@ -50,7 +50,7 @@ eastl::string FileSystem::readText(const eastl::string& path) {
     std::ifstream file(path.c_str());
     
     if (!file.is_open()) {
-        VT_ERROR("Failed to open file: {}", path.c_str());
+        violet::Log::error("Core", "Failed to open file: {}", path.c_str());
         return "";
     }
     

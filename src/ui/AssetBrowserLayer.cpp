@@ -19,7 +19,7 @@ void AssetBrowserLayer::onDetach() {
 
 void AssetBrowserLayer::scanAssetDirectory() {
     if (!FileSystem::exists(assetDirectory)) {
-        VT_WARN("Asset directory not found: {}", assetDirectory.c_str());
+        violet::Log::warn("UI", "Asset directory not found: {}", assetDirectory.c_str());
         statusMessage = "Asset directory not found";
         return;
     }
@@ -32,7 +32,7 @@ void AssetBrowserLayer::scanAssetDirectory() {
     buildFileTree(assetDirectory, rootNode);
 
     int totalAssets = 0;
-    std::function<void(const FileTreeNode&)> countAssets = [&](const FileTreeNode& node) {
+    eastl::function<void(const FileTreeNode&)> countAssets = [&](const FileTreeNode& node) {
         if (!node.isDirectory) totalAssets++;
         for (const auto& child : node.children) {
             countAssets(child);
@@ -43,7 +43,7 @@ void AssetBrowserLayer::scanAssetDirectory() {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "Found %d assets", totalAssets);
     statusMessage = buffer;
-    VT_INFO("Found {} assets in {}", totalAssets, assetDirectory.c_str());
+    violet::Log::info("UI", "Found {} assets in {}", totalAssets, assetDirectory.c_str());
 }
 
 void AssetBrowserLayer::onImGuiRender() {
@@ -129,12 +129,12 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
 
         // Selectable item that can be dragged
         if (ImGui::Selectable(displayName.c_str())) {
-            VT_INFO("File selected: {}", node.fullPath.c_str());
+            violet::Log::info("UI", "File selected: {}", node.fullPath.c_str());
         }
 
         // Drag source with improved visual feedback
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-            VT_INFO("AssetBrowser: Starting drag for {}", node.fullPath.c_str());
+            violet::Log::info("UI", "AssetBrowser: Starting drag for {}", node.fullPath.c_str());
             ImGui::SetDragDropPayload("ASSET_PATH", node.fullPath.c_str(), node.fullPath.size() + 1);
 
             // Different drop text based on file type

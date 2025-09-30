@@ -1,5 +1,6 @@
 #include "examples/VioletApp.hpp"
 #include "core/Log.hpp"
+#include "core/Exception.hpp"
 #include <cstdlib>
 
 void* operator new[](size_t size, const char* pName, int flags, unsigned debugFlags, const char* file, int line) {
@@ -16,8 +17,8 @@ int main() {
     violet::VioletApp app;
     try {
         app.run();
-    } catch (const std::exception& e) {
-        VT_CRITICAL("Exception: {}", e.what());
+    } catch (const violet::Exception& e) {
+        violet::Log::critical("Core", "Exception: {}", e.what_c_str());
         return EXIT_FAILURE;
     }
 

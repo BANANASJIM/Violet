@@ -1,6 +1,7 @@
 #include "PipelineBase.hpp"
 #include "VulkanContext.hpp"
 #include "core/FileSystem.hpp"
+#include "core/Exception.hpp"
 #include "core/Log.hpp"
 #include <cstring>
 
@@ -13,8 +14,8 @@ void PipelineBase::cleanup() {
 eastl::vector<char> PipelineBase::readFile(const eastl::string& filename) {
     auto data = FileSystem::readBinary(filename);
     if (data.empty()) {
-        VT_ERROR("Failed to open file: {}", filename.c_str());
-        throw std::runtime_error("Failed to open shader file");
+        violet::Log::error("Renderer", "Failed to open file: {}", filename.c_str());
+        throw RuntimeError("Failed to open shader file");
     }
 
     eastl::vector<char> buffer(data.size());

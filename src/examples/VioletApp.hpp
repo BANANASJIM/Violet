@@ -3,6 +3,7 @@
 #include "core/App.hpp"
 #include "ecs/World.hpp"
 #include "renderer/ForwardRenderer.hpp"
+#include "renderer/DebugRenderer.hpp"
 #include "renderer/Texture.hpp"
 #include "scene/Scene.hpp"
 #include "renderer/PerspectiveCamera.hpp"
@@ -23,8 +24,6 @@ public:
 protected:
     void createResources() override;
     void update(float deltaTime) override;
-    void updateUniforms(uint32_t frameIndex) override;
-    void recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageIndex) override;
     void cleanup() override;
     void onWindowResize(int width, int height) override;
 
@@ -38,6 +37,7 @@ private:
 private:
     World world;
     ForwardRenderer renderer;
+    DebugRenderer debugRenderer;
 
     eastl::unique_ptr<Scene> currentScene;
     Texture defaultTexture;

@@ -25,13 +25,19 @@ ForwardRenderer::~ForwardRenderer() {
     cleanup();
 }
 
-void ForwardRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight) {
-    context           = ctx;
-    renderPass        = rp;
+void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint32_t framesInFlight) {
+    context = ctx;
     maxFramesInFlight = framesInFlight;
+
+    // Setup multi-pass system
+    setupPasses(swapchainFormat);
+
+    // Initialize subsystems - use first pass for components that need RenderPass
     globalUniforms.init(context, maxFramesInFlight);
-    debugRenderer.init(context, renderPass, &globalUniforms, maxFramesInFlight);
-    environmentMap.init(context, renderPass, this);
+    if (!renderPasses.empty()) {
+        debugRenderer.init(context, &renderPasses[0], &globalUniforms, maxFramesInFlight);
+        environmentMap.init(context, &renderPasses[0], this);
+    }
 
     // Load HDR environment map
     environmentMap.loadHDR("assets/textures/skybox.hdr");
@@ -46,6 +52,10 @@ void ForwardRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesIn
 }
 
 void ForwardRenderer::cleanup() {
+    for (auto& pass : renderPasses) {
+        pass.cleanup();
+    }
+    renderPasses.clear();
     debugRenderer.cleanup();
     globalUniforms.cleanup();
     environmentMap.cleanup();
@@ -56,11 +66,88 @@ void ForwardRenderer::cleanup() {
     renderableCache.clear();
 }
 
-void ForwardRenderer::render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
-    // The main rendering method - this will be called by the app
-    // For now, this is a placeholder that would typically call renderScene
-    // but we need to pass the world registry, so this will need to be updated
-    // when we refactor the app layer
+
+void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
+    currentWorld = &world;
+    updateGlobalUniforms(world, frameIndex);
+    collectRenderables(world);
+}
+
+void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
+    currentExtent = extent;
+
+    for (size_t i = 0; i < renderPasses.size(); ++i) {
+        // Insert explicit barrier between passes if needed
+        if (i > 0) {
+            insertPassTransition(cmd, i);
+        }
+
+        // Execute pass
+        auto& pass = renderPasses[i];
+        pass.begin(cmd, framebuffer, extent);
+        pass.execute(cmd, frameIndex);
+        pass.end(cmd);
+    }
+}
+
+void ForwardRenderer::endFrame() {
+    currentWorld = nullptr;
+}
+
+void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
+    passDescriptors.clear();
+    renderPasses.clear();
+
+    // Clear values
+    vk::ClearValue colorClear;
+    colorClear.color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+    vk::ClearValue depthClear;
+    depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+
+    // Skybox pass - declarative definition
+    passDescriptors.push_back({
+        .name = "Skybox",
+        .colorAttachments = {createColorAttachment(swapchainFormat, vk::AttachmentLoadOp::eClear)},
+        .depthAttachment = createDepthAttachment(vk::AttachmentLoadOp::eClear),
+        .hasDepth = true,
+        .clearValues = {colorClear, depthClear},
+        .execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
+            if (currentWorld) {
+                setViewport(cmd, currentExtent);
+                Material* envMaterial = environmentMap.getMaterial();
+                if (envMaterial) {
+                    environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
+                                              globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
+                }
+            }
+        },
+        .finalColorLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .finalDepthLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
+    });
+
+    // Forward pass - declarative definition
+    passDescriptors.push_back({
+        .name = "Forward",
+        .colorAttachments = {createColorAttachment(swapchainFormat, vk::AttachmentLoadOp::eLoad)},
+        .depthAttachment = createDepthAttachment(vk::AttachmentLoadOp::eLoad),
+        .hasDepth = true,
+        .clearValues = {},  // No clear - load previous content
+        .execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
+            if (currentWorld) {
+                setViewport(cmd, currentExtent);
+                renderScene(cmd, frame, *currentWorld);
+            }
+        },
+        .finalColorLayout = vk::ImageLayout::ePresentSrcKHR,
+        .finalDepthLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
+    });
+
+    // Create actual RenderPass objects from descriptors
+    for (const auto& desc : passDescriptors) {
+        RenderPass pass;
+        pass.init(context, desc);
+        renderPasses.push_back(eastl::move(pass));
+    }
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
@@ -102,7 +189,7 @@ void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& wor
     for (size_t i = 0; i < subMeshes.size(); ++i) {
         const SubMesh& subMesh = subMeshes[i];
         if (!subMesh.isValid()) {
-            VT_WARN("Entity {} submesh {} is invalid (indexCount={})",
+            violet::Log::warn("Renderer", "Entity {} submesh {} is invalid (indexCount={})",
                 static_cast<uint32_t>(entity), i, subMesh.indexCount);
             continue;
         }
@@ -153,13 +240,13 @@ void ForwardRenderer::buildSceneBVH(entt::registry& world) {
                     renderableBounds.push_back(meshComp->getSubMeshWorldBounds(subMeshIndex));
 
                 } else {
-                    VT_WARN("Invalid subMeshIndex {} for renderable {}", subMeshIndex, i);
+                    violet::Log::warn("Renderer", "Invalid subMeshIndex {} for renderable {}", subMeshIndex, i);
                     // Fallback to legacy bounds
                     renderableBounds.push_back(meshComp->worldBounds);
                 }
             } else {
                 // Fallback: transform local bounds - this shouldn't happen anymore
-                VT_WARN("No MeshComponent found for renderable {}", i);
+                violet::Log::warn("Renderer", "No MeshComponent found for renderable {}", i);
                 renderableBounds.push_back(renderable.mesh->getLocalBounds().transform(renderable.worldTransform));
             }
         }
@@ -167,7 +254,7 @@ void ForwardRenderer::buildSceneBVH(entt::registry& world) {
 
     // Build BVH once for the scene
     sceneBVH.build(renderableBounds);
-    VT_INFO("Scene BVH built with {} renderables", renderables.size());
+    violet::Log::info("Renderer", "Scene BVH built with {} renderables", renderables.size());
 
 }
 
@@ -222,7 +309,7 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
             // Rebuild bounds when scene is dirty
             if (sceneDirty) {
                 buildSceneBVH(world);
-                VT_INFO("Scene was dirty - rebuilt BVH with {} renderables", renderables.size());
+                violet::Log::info("Renderer", "Scene was dirty - rebuilt BVH with {} renderables", renderables.size());
             } else {
                 sceneBVH.build(renderableBounds);
             }
@@ -393,7 +480,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     // 创建pipeline，使用global和material的descriptor set layout
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
+        pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
         // Pipeline initialized
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with shaders: '{}', '{}' - Error: {}",
@@ -435,7 +522,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     // Create pipeline with custom config
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
+        pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
         // Pipeline initialized with custom config
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with custom config for shaders: '{}', '{}' - Error: {}",
@@ -578,7 +665,7 @@ Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
 void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float skyboxExposure, float skyboxRotation, bool skyboxEnabled) {
     Camera* activeCamera = findActiveCamera(world);
     if (!activeCamera) {
-        VT_WARN("No active camera found!");
+        violet::Log::warn("Renderer", "No active camera found!");
         return;
     }
 
@@ -719,6 +806,49 @@ void ForwardRenderer::createDefaultPBRTextures() {
         normalTexture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
         defaultNormalTexture = addTexture(eastl::move(normalTexture));
     }
+}
+
+vk::AttachmentDescription ForwardRenderer::createColorAttachment(vk::Format format, vk::AttachmentLoadOp loadOp) {
+    vk::AttachmentDescription attachment{};
+    attachment.format = format;
+    attachment.samples = vk::SampleCountFlagBits::e1;
+    attachment.loadOp = loadOp;
+    attachment.storeOp = vk::AttachmentStoreOp::eStore;
+    attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    attachment.initialLayout = (loadOp == vk::AttachmentLoadOp::eClear) ?
+        vk::ImageLayout::eUndefined : vk::ImageLayout::eColorAttachmentOptimal;
+    attachment.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    return attachment;
+}
+
+vk::AttachmentDescription ForwardRenderer::createDepthAttachment(vk::AttachmentLoadOp loadOp) {
+    vk::AttachmentDescription attachment{};
+    attachment.format = context->findDepthFormat();
+    attachment.samples = vk::SampleCountFlagBits::e1;
+    attachment.loadOp = loadOp;
+    attachment.storeOp = vk::AttachmentStoreOp::eStore;
+    attachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    attachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    attachment.initialLayout = (loadOp == vk::AttachmentLoadOp::eClear) ?
+        vk::ImageLayout::eUndefined : vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    attachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    return attachment;
+}
+
+void ForwardRenderer::insertPassTransition(vk::CommandBuffer cmd, size_t passIndex) {
+    // Explicit pass-to-pass transitions can be added here if needed
+    // For now, attachment layout transitions handle most cases
+    // Future use: shadow maps, intermediate textures, etc.
+
+    // Example for future shadow pass:
+    // if (passIndex == 1 && passDescriptors[0].name == "Shadow") {
+    //     RenderPass::insertMemoryBarrier(cmd,
+    //         vk::PipelineStageFlagBits::eColorAttachmentOutput,
+    //         vk::PipelineStageFlagBits::eFragmentShader,
+    //         vk::AccessFlagBits::eColorAttachmentWrite,
+    //         vk::AccessFlagBits::eShaderRead);
+    // }
 }
 
 } // namespace violet

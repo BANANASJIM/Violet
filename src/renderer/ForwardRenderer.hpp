@@ -19,9 +19,20 @@
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/DebugRenderer.hpp"
 #include "renderer/EnvironmentMap.hpp"
+#include "renderer/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 
 namespace violet {
+
+// Pass type enumeration for multi-pass rendering
+enum class PassType {
+    Shadow,      // Shadow mapping pass
+    GBuffer,     // Geometry buffer pass (for deferred rendering)
+    Forward,     // Forward rendering pass
+    Skybox,      // Skybox rendering pass
+    PostProcess, // Post-processing pass
+    UI           // UI rendering pass
+};
 
 // Descriptor Set and Binding 约定常量
 constexpr uint32_t GLOBAL_SET   = 0; // set = 0: 全局数据(相机、光照)
@@ -92,9 +103,13 @@ public:
     ForwardRenderer(ForwardRenderer&&)            = delete;
     ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
-    void init(VulkanContext* context, RenderPass* renderPass, uint32_t maxFramesInFlight) override;
+    void init(VulkanContext* context, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
     void cleanup() override;
-    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) override;
+
+    // Pass system interface
+    void beginFrame(entt::registry& world, uint32_t frameIndex);
+    void renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
+    void endFrame();
 
     void collectRenderables(entt::registry& world);
     void updateGlobalUniforms(entt::registry& world, uint32_t frameIndex);
@@ -146,6 +161,11 @@ public:
     // Scene state management
     void markSceneDirty() { sceneDirty = true; }
 
+    // Multi-pass system
+    void setupPasses(vk::Format swapchainFormat);
+    const eastl::vector<RenderPass>& getPasses() const { return renderPasses; }
+    RenderPass& getPass(size_t index) { return renderPasses[index]; }
+
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
@@ -153,6 +173,11 @@ public:
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
     void createDefaultPBRTextures();
+
+    // Declarative pass helpers
+    vk::AttachmentDescription createColorAttachment(vk::Format format, vk::AttachmentLoadOp loadOp);
+    vk::AttachmentDescription createDepthAttachment(vk::AttachmentLoadOp loadOp);
+    void insertPassTransition(vk::CommandBuffer cmd, size_t passIndex);
 
     GlobalUniforms globalUniforms;
 
@@ -187,6 +212,12 @@ private:
     Texture* defaultBlackTexture = nullptr;
     Texture* defaultMetallicRoughnessTexture = nullptr;
     Texture* defaultNormalTexture = nullptr;
+
+    // Multi-pass system data
+    eastl::vector<RenderPassDesc> passDescriptors;  // Declarative pass descriptions
+    eastl::vector<RenderPass> renderPasses;         // Actual RenderPass objects
+    entt::registry* currentWorld = nullptr;
+    vk::Extent2D currentExtent = {1280, 720};
 };
 
 } // namespace violet

@@ -20,7 +20,6 @@ void VertexBuffer::create(VulkanContext* ctx, const eastl::vector<Vertex>& verti
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create vertex buffer
     BufferInfo vertexInfo;
@@ -53,7 +52,6 @@ void VertexBuffer::create(VulkanContext* ctx, const eastl::vector<uint32_t>& ind
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create index buffer
     BufferInfo indexInfo;
@@ -91,7 +89,6 @@ void VertexBuffer::createWithDeduplication(VulkanContext* ctx, const eastl::vect
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, uniqueVertices.data(), static_cast<size_t>(vertexBufferSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create vertex buffer
     BufferInfo vertexInfo;

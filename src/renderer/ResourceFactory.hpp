@@ -65,7 +65,6 @@ public:
     static void destroyImage(VulkanContext* context, ImageResource& image);
 
     static void* mapBuffer(VulkanContext* context, BufferResource& buffer);
-    static void unmapBuffer(VulkanContext* context, BufferResource& buffer);
 
     static void copyBuffer(VulkanContext* context, BufferResource& src, BufferResource& dst, vk::DeviceSize size);
     static void copyBufferToImage(VulkanContext* context, BufferResource& buffer, ImageResource& image,

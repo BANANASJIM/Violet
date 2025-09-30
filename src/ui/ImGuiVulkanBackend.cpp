@@ -67,7 +67,7 @@ void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Render
     uploadFonts();
     
     initialized = true;
-    VT_INFO("ImGui Vulkan backend initialized");
+    violet::Log::info("UI", "ImGui Vulkan backend initialized");
 }
 
 void ImGuiVulkanBackend::cleanup() {

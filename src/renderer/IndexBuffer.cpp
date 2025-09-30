@@ -26,7 +26,6 @@ void IndexBuffer::create(VulkanContext* ctx, const eastl::vector<uint32_t>& indi
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create index buffer
     BufferInfo indexInfo;
@@ -64,7 +63,6 @@ void IndexBuffer::create(VulkanContext* ctx, const eastl::vector<uint16_t>& indi
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create index buffer
     BufferInfo indexInfo;

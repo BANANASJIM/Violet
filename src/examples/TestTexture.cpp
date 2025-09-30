@@ -37,7 +37,6 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
 
     void* data = ResourceFactory::mapBuffer(context, stagingBuffer);
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
-    ResourceFactory::unmapBuffer(context, stagingBuffer);
 
     texture.context = context;
 
@@ -80,7 +79,6 @@ void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
 
     void* data = ResourceFactory::mapBuffer(context, stagingBuffer);
     memcpy(data, pixels.data(), static_cast<size_t>(imageSize));
-    ResourceFactory::unmapBuffer(context, stagingBuffer);
 
     texture.context = context;
 

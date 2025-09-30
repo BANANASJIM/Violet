@@ -144,7 +144,7 @@ void PBRMaterialInstance::cleanup() {
 
 void PBRMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
     if (!descriptorSet) {
-        VT_ERROR("PBRMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
+        violet::Log::error("Renderer", "PBRMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
         return;
     }
 
@@ -159,7 +159,7 @@ void PBRMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
         uniformBuffer->update(&data, sizeof(PBRMaterialData));
         descriptorSet->updateUniformBuffer(frameIndex, uniformBuffer, 0);
     } else {
-        VT_ERROR("PBRMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
+        violet::Log::error("Renderer", "PBRMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
         return; // Cannot continue without uniform buffer
     }
 
@@ -214,7 +214,7 @@ void UnlitMaterialInstance::cleanup() {
 
 void UnlitMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
     if (!descriptorSet) {
-        VT_ERROR("UnlitMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
+        violet::Log::error("Renderer", "UnlitMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
         return;
     }
 
@@ -229,7 +229,7 @@ void UnlitMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
         uniformBuffer->update(&data, sizeof(UnlitMaterialData));
         descriptorSet->updateUniformBuffer(frameIndex, uniformBuffer, 0);
     } else {
-        VT_ERROR("UnlitMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
+        violet::Log::error("Renderer", "UnlitMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
         return;
     }
 

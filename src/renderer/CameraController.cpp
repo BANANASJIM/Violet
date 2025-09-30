@@ -156,7 +156,7 @@ bool CameraController::onScroll(const ScrollEvent& event) {
         float speedMultiplier = 1.0f + (event.offset.y * 0.2f);
         movementSpeed *= speedMultiplier;
         movementSpeed = glm::clamp(movementSpeed, 1.0f, 1000.0f);
-        VT_INFO("Movement speed adjusted to {:.1f}", movementSpeed);
+        violet::Log::info("Renderer", "Movement speed adjusted to {:.1f}", movementSpeed);
     }
 
     return false;

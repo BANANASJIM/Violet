@@ -1,3 +1,4 @@
+#include "core/Exception.hpp"
 #include "Texture.hpp"
 
 #include <glm/glm.hpp>
@@ -6,7 +7,7 @@
 #include <ktx.h>
 #include <stb_image.h>
 
-#include <stdexcept>
+#include "core/Exception.hpp"
 
 #include "Buffer.hpp"
 #include "VulkanContext.hpp"
@@ -24,7 +25,7 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
     vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
     if (!pixels) {
-        throw std::runtime_error("Failed to load texture image!");
+        throw RuntimeError("Failed to load texture image!");
     }
 
     // Create staging buffer using ResourceFactory
@@ -38,7 +39,6 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     stbi_image_free(pixels);
 
@@ -76,7 +76,7 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     result = ktxTexture2_CreateFromNamedFile(resolvedPath.c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &kTexture);
 
     if (result != KTX_SUCCESS) {
-        throw std::runtime_error("Failed to load KTX2 texture!");
+        throw RuntimeError("Failed to load KTX2 texture!");
     }
 
     vk::DeviceSize imageSize = kTexture->dataSize;
@@ -93,7 +93,6 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, kTexture->pData, static_cast<size_t>(imageSize));
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create image using ResourceFactory
     ImageInfo imageInfo;
@@ -163,7 +162,6 @@ void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size
         }
     }
 
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create image using ResourceFactory
     vk::Format format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
@@ -193,7 +191,7 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
     isCubemapTexture = true;
     format = vk::Format::eR8G8B8A8Srgb;  // Set default format for non-HDR cubemaps
 
-    VT_INFO("Loading cubemap with 6 faces");
+    violet::Log::info("Renderer", "Loading cubemap with 6 faces");
 
     // For now, create a simple placeholder cubemap texture
     // TODO: Implement proper cubemap loading from files
@@ -251,7 +249,6 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, cubemapData.data(), totalSize);
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create cubemap image
     ImageInfo imageInfo;
@@ -300,21 +297,21 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
     createCubemapImageView(ctx);
     createSampler(ctx);
 
-    VT_INFO("Cubemap texture loaded successfully");
+    violet::Log::info("Renderer", "Cubemap texture loaded successfully");
 }
 
 void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
     context = ctx;
 
     eastl::string resolvedPath = FileSystem::resolveRelativePath(hdrPath);
-    VT_INFO("Loading HDR texture from: {}", resolvedPath.c_str());
+    violet::Log::info("Renderer", "Loading HDR texture from: {}", resolvedPath.c_str());
 
     int width, height, channels;
     stbi_set_flip_vertically_on_load(true);
     float* pixels = stbi_loadf(resolvedPath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
 
     if (!pixels) {
-        VT_ERROR("Failed to load HDR file: {}", hdrPath.c_str());
+        violet::Log::error("Renderer", "Failed to load HDR file: {}", hdrPath.c_str());
         return;
     }
 
@@ -351,7 +348,6 @@ void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
         }
     }
 
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
     stbi_image_free(pixels);
 
     // Create image
@@ -374,7 +370,7 @@ void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
     createImageView(ctx, format);
     createSampler(ctx);
 
-    VT_INFO("HDR texture loaded successfully: {}x{}", width, height);
+    violet::Log::info("Renderer", "HDR texture loaded successfully: {}x{}", width, height);
 }
 
 void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::string& hdrPath) {
@@ -382,13 +378,13 @@ void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::stri
     isCubemapTexture = true;
 
     eastl::string resolvedPath = FileSystem::resolveRelativePath(hdrPath);
-    VT_INFO("Loading HDR equirectangular map and converting to cubemap: {}", resolvedPath.c_str());
+    violet::Log::info("Renderer", "Loading HDR equirectangular map and converting to cubemap: {}", resolvedPath.c_str());
     int width, height, channels;
     stbi_set_flip_vertically_on_load(true);
     float* pixels = stbi_loadf(resolvedPath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
 
     if (!pixels) {
-        VT_ERROR("Failed to load HDR file: {}", hdrPath.c_str());
+        violet::Log::error("Renderer", "Failed to load HDR file: {}", hdrPath.c_str());
         return;
     }
 
@@ -469,7 +465,6 @@ void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::stri
 
     void* data = ResourceFactory::mapBuffer(ctx, stagingBuffer);
     memcpy(data, cubemapData.data(), totalSize);
-    ResourceFactory::unmapBuffer(ctx, stagingBuffer);
 
     // Create cubemap image
     ImageInfo imageInfo;
@@ -518,7 +513,7 @@ void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::stri
     createCubemapImageView(ctx);
     createSampler(ctx);
 
-    VT_INFO("HDR equirectangular converted to cubemap successfully");
+    violet::Log::info("Renderer", "HDR equirectangular converted to cubemap successfully");
 }
 
 void Texture::cleanup() {

@@ -20,9 +20,7 @@ public:
     virtual ~BaseRenderer() = default;
 
     // Pure virtual functions that must be implemented by derived classes
-    virtual void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight) = 0;
     virtual void cleanup() = 0;
-    virtual void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) = 0;
 
     // Common public methods
     void setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& extent);

@@ -5,9 +5,9 @@
 #include <EASTL/array.h>
 #include <imgui.h>
 
-#include <chrono>
 
 #include "core/Log.hpp"
+#include "core/Exception.hpp"
 #include "core/FileSystem.hpp"
 #include "examples/TestData.hpp"
 #include "examples/TestTexture.hpp"
@@ -23,7 +23,7 @@ VioletApp::VioletApp() {
 
     // Set up asset drop callback for scene overlay with position-based placement
     sceneDebug->setOnAssetDroppedWithPosition([this](const eastl::string& path, const glm::vec3& position) {
-        VT_INFO("Asset dropped at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+        violet::Log::info("App", "Asset dropped at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
         loadAssetAtPosition(path, position);
     });
 
@@ -51,18 +51,26 @@ VioletApp::~VioletApp() {
 void VioletApp::createResources() {
     createTestResources();
 
-    renderer.init(getContext(), getRenderPass(), MAX_FRAMES_IN_FLIGHT);
+    // Initialize renderers with new Pass system
+    renderer.init(getContext(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.init(getContext(), &renderer.getPass(0), &renderer.getGlobalUniforms(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.setUILayer(compositeUI.get());
+
+    // Configure App base class
+    this->forwardRenderer = &renderer;
+    this->App::debugRenderer = &debugRenderer;
+    this->App::world = &this->world.getRegistry();
 
     initializeScene();
 
     eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");
     try {
-        VT_INFO("Loading default scene: {}", scenePath.c_str());
+        violet::Log::info("App", "Loading default scene: {}", scenePath.c_str());
         currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, &defaultTexture);
 
         if (currentScene) {
             currentScene->updateWorldTransforms(world.getRegistry());
-            VT_INFO("Scene loaded with {} nodes", currentScene->getNodeCount());
+            violet::Log::info("App", "Scene loaded with {} nodes", currentScene->getNodeCount());
 
             // Update world bounds for all MeshComponents after world transforms are computed
             auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
@@ -76,8 +84,8 @@ void VioletApp::createResources() {
             // Camera position and orientation are already set correctly in initializeScene()
             // Don't override them here
         }
-    } catch (const std::exception& e) {
-        VT_WARN("Failed to load scene: {}", e.what());
+    } catch (const violet::Exception& e) {
+        violet::Log::warn("App", "Failed to load scene: {}", e.what_c_str());
         createTestCube();
     }
 
@@ -120,9 +128,9 @@ void VioletApp::initializeScene() {
     controller->setYaw(yaw);
     controller->setPitch(pitch);
 
-    VT_INFO("Camera positioned at ({:.1f}, {:.1f}, {:.1f}) looking towards scene center",
+    violet::Log::info("App", "Camera positioned at ({:.1f}, {:.1f}, {:.1f}) looking towards scene center",
             camPos.x, camPos.y, camPos.z);
-    VT_INFO("Camera yaw: {:.1f}°, pitch: {:.1f}°", yaw, pitch);
+    violet::Log::info("App", "Camera yaw: {:.1f}°, pitch: {:.1f}°", yaw, pitch);
 
     auto& controllerComp = world.addComponent<CameraControllerComponent>(cameraEntity, eastl::move(controller));
 }
@@ -141,20 +149,10 @@ void VioletApp::update(float deltaTime) {
     }
 }
 
-void VioletApp::updateUniforms(uint32_t frameIndex) {
-    renderer.updateGlobalUniforms(world.getRegistry(), frameIndex);
-}
-
-void VioletApp::recordCommands(vk::CommandBuffer commandBuffer, uint32_t imageIndex) {
-    renderer.collectRenderables(world.getRegistry());
-
-    auto extent = getSwapchain()->getExtent();
-    renderer.setViewport(commandBuffer, extent);
-    renderer.renderScene(commandBuffer, getCurrentFrame(), world.getRegistry());
-}
+// Removed updateUniforms and recordCommands - now handled by Pass system
 
 void VioletApp::loadAsset(const eastl::string& path) {
-    VT_INFO("Loading asset: {}", path.c_str());
+    violet::Log::info("App", "Loading asset: {}", path.c_str());
 
     size_t dotPos = path.find_last_of('.');
     if (dotPos != eastl::string::npos) {
@@ -197,15 +195,15 @@ void VioletApp::loadAsset(const eastl::string& path) {
                     3.0f                              // Intensity
                 );
                 world.getRegistry().emplace<LightComponent>(lightEntity, light);
-                VT_INFO("Added default directional light to scene");
+                violet::Log::info("App", "Added default directional light to scene");
 
                 // Mark scene dirty for BVH rebuild
                 renderer.markSceneDirty();
 
-                VT_INFO("Scene loaded: {}", path.c_str());
-            } catch (const std::exception& e) {
+                violet::Log::info("App", "Scene loaded: {}", path.c_str());
+            } catch (const violet::Exception& e) {
                 // Failed to load model
-                VT_ERROR("Failed to load model {}: {}", path.c_str(), e.what());
+                violet::Log::error("App", "Failed to load model {}: {}", path.c_str(), e.what_c_str());
             }
         } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
             // Texture loading not implemented
@@ -215,7 +213,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
 
 
 void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& position) {
-    VT_INFO("Loading asset at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+    violet::Log::info("App", "Loading asset at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
 
     size_t dotPos = path.find_last_of('.');
     if (dotPos != eastl::string::npos) {
@@ -252,7 +250,7 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                                 // Update the node to reference this entity
                                 const_cast<Node*>(node)->entity = parentEntity;
 
-                                VT_INFO("Applied position to parent node '{}'", node->name.c_str());
+                                violet::Log::info("App", "Applied position to parent node '{}'", node->name.c_str());
                             } else if (registry.valid(node->entity)) {
                                 // Single mesh node - apply position directly
                                 auto* transformComp = registry.try_get<TransformComponent>(node->entity);
@@ -301,19 +299,19 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                         sceneDebug->setScene(currentScene.get());
                     }
 
-                    VT_INFO("Asset placed successfully at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+                    violet::Log::info("App", "Asset placed successfully at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
                 }
-            } catch (const std::exception& e) {
-                VT_ERROR("Failed to load asset {}: {}", path.c_str(), e.what());
+            } catch (const violet::Exception& e) {
+                violet::Log::error("App", "Failed to load asset {}: {}", path.c_str(), e.what_c_str());
             }
         } else if (ext == ".hdr") {
             try {
                 // Load HDR file as environment map (skybox)
-                VT_INFO("Loading HDR environment map: {}", path.c_str());
+                violet::Log::info("App", "Loading HDR environment map: {}", path.c_str());
                 renderer.getEnvironmentMap().loadHDR(path);
-                VT_INFO("HDR environment map loaded successfully: {}", path.c_str());
-            } catch (const std::exception& e) {
-                VT_ERROR("Failed to load HDR environment map {}: {}", path.c_str(), e.what());
+                violet::Log::info("App", "HDR environment map loaded successfully: {}", path.c_str());
+            } catch (const violet::Exception& e) {
+                violet::Log::error("App", "Failed to load HDR environment map {}: {}", path.c_str(), e.what_c_str());
             }
         }
     }
@@ -365,7 +363,7 @@ void VioletApp::createTestCube() {
     Material* material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::MaterialTextures);
 
     if (!material) {
-        VT_ERROR("Failed to create PBR material");
+        violet::Log::error("App", "Failed to create PBR material");
         return;
     }
 
@@ -387,7 +385,7 @@ void VioletApp::createTestCube() {
     }
 
     if (!materialInstance) {
-        VT_ERROR("Failed to create PBR material instance");
+        violet::Log::error("App", "Failed to create PBR material instance");
         return;
     }
 

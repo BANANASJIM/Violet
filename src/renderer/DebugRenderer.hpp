@@ -10,6 +10,7 @@
 #include "renderer/Vertex.hpp"
 #include "renderer/GPUResource.hpp"
 #include "renderer/GraphicsPipeline.hpp"
+#include "renderer/RenderPass.hpp"
 #include "math/AABB.hpp"
 #include "math/Frustum.hpp"
 #include <entt/entt.hpp>
@@ -42,10 +43,14 @@ public:
     DebugRenderer(const DebugRenderer&) = delete;
     DebugRenderer& operator=(const DebugRenderer&) = delete;
 
-    void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight) override;
+    void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight);
     void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms, uint32_t maxFramesInFlight);
+
+    // UI support
+    void setUILayer(class UILayer* layer) { uiLayer = layer; }
+    void renderDebugAndUI(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
     void cleanup() override;
-    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) override;
+    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
 
     void renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum);
     void renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible);
@@ -78,9 +83,18 @@ public:
     void setShowFrustum(bool show) { showFrustumDebug = show; }
 
     bool showAABBs() const { return showAABBDebug; }
+
+    bool showRays() const { return showRayDebug; }
+    void setShowRays(bool show) { showRayDebug = show; }
+
     void setShowAABBs(bool show) { showAABBDebug = show; }
 
 private:
+    // UI rendering
+    class UILayer* uiLayer = nullptr;
+    RenderPass overlayPass;
+
+    void setupOverlayPass(vk::Format swapchainFormat);
     void generateFrustumGeometry(const Frustum& frustum, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices);
     void generateAABBGeometry(const AABB& aabb, const glm::vec3& color, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices, uint32_t baseVertexIndex);
     void generateWireframeGeometry(const eastl::vector<Vertex>& meshVertices, const eastl::vector<uint32_t>& meshIndices,
@@ -93,6 +107,7 @@ private:
     bool enabled = false;
     bool showFrustumDebug = false;
     bool showAABBDebug = false;
+    bool showRayDebug = false;
 
     // Selected entity rendering
     entt::entity selectedEntity = entt::null;
