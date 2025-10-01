@@ -12,6 +12,8 @@ class RenderPass;
 class Material;
 class Texture;
 class ForwardRenderer;
+class ComputePipeline;
+class DescriptorSet;
 
 class EnvironmentMap {
 public:
@@ -20,7 +22,7 @@ public:
         Cubemap          // Cubemap format
     };
 
-    EnvironmentMap() = default;
+    EnvironmentMap();
     ~EnvironmentMap();
 
     // Delete copy operations
@@ -75,12 +77,20 @@ private:
 
     // Textures
     eastl::unique_ptr<Texture> environmentTexture;  // Main environment map (cubemap or 2D)
+    eastl::unique_ptr<Texture> equirectTexture;     // Temporary equirectangular texture (for compute shader input)
     eastl::unique_ptr<Texture> irradianceMap;      // Diffuse irradiance for IBL (future)
     eastl::unique_ptr<Texture> prefilteredMap;     // Specular prefiltered for IBL (future)
     eastl::unique_ptr<Texture> brdfLUT;            // BRDF lookup table (future)
 
     // Rendering
     Material* skyboxMaterial = nullptr;
+
+    // Compute pipeline for equirectangular to cubemap conversion
+    eastl::unique_ptr<ComputePipeline> equirectToCubemapPipeline;
+    eastl::unique_ptr<DescriptorSet> computeDescriptorSet;
+
+    // Helper method for GPU-based cubemap generation
+    void generateCubemapFromEquirect(Texture* equirectTexture, Texture* cubemapTexture, uint32_t cubemapSize);
 
     // Parameters
     struct Parameters {

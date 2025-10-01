@@ -175,6 +175,69 @@ void ResourceFactory::copyBufferToImage(VulkanContext* context, BufferResource& 
     endSingleTimeCommands(context, commandBuffer);
 }
 
+// New async methods for use with TransferPass
+void ResourceFactory::copyBufferAsync(VulkanContext* context, vk::CommandBuffer cmd,
+                                     BufferResource& src, BufferResource& dst, vk::DeviceSize size) {
+    vk::BufferCopy copyRegion;
+    copyRegion.size = size;
+    cmd.copyBuffer(src.buffer, dst.buffer, copyRegion);
+}
+
+void ResourceFactory::copyBufferToImageAsync(VulkanContext* context, vk::CommandBuffer cmd,
+                                            BufferResource& buffer, ImageResource& image,
+                                            uint32_t width, uint32_t height) {
+    vk::BufferImageCopy region;
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = vk::Offset3D{0, 0, 0};
+    region.imageExtent = vk::Extent3D{width, height, 1};
+
+    cmd.copyBufferToImage(buffer.buffer, image.image, vk::ImageLayout::eTransferDstOptimal, region);
+}
+
+void ResourceFactory::transitionImageLayout(VulkanContext* context, vk::CommandBuffer cmd,
+                                           ImageResource& image, vk::Format format,
+                                           vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+                                           uint32_t arrayLayers) {
+    vk::ImageMemoryBarrier barrier;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image.image;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = arrayLayers;
+
+    vk::PipelineStageFlags sourceStage;
+    vk::PipelineStageFlags destinationStage;
+
+    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        destinationStage = vk::PipelineStageFlagBits::eTransfer;
+    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
+               newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        sourceStage = vk::PipelineStageFlagBits::eTransfer;
+        destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+    } else {
+        violet::Log::error("Renderer", "Unsupported layout transition");
+        return;
+    }
+
+    cmd.pipelineBarrier(sourceStage, destinationStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+}
+
 vk::ImageView ResourceFactory::createImageView(VulkanContext* context, const ImageResource& image,
                                                vk::ImageViewType viewType, vk::ImageAspectFlags aspectFlags) {
     vk::ImageViewCreateInfo viewInfo;

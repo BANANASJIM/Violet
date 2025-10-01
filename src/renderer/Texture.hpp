@@ -59,6 +59,7 @@ public:
     void loadCubemap(VulkanContext* context, const eastl::array<eastl::string, 6>& facePaths);
     void loadCubemapFromMemory(VulkanContext* context, const eastl::array<const unsigned char*, 6>& faceData,
                                const eastl::array<size_t, 6>& faceSizes, int faceWidth, int faceHeight, int channels);
+    void createEmptyCubemap(VulkanContext* context, uint32_t size, vk::Format format, vk::ImageUsageFlags usage);
 
     void cleanup() override;
 

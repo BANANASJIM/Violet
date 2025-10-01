@@ -24,16 +24,6 @@
 
 namespace violet {
 
-// Pass type enumeration for multi-pass rendering
-enum class PassType {
-    Shadow,      // Shadow mapping pass
-    GBuffer,     // Geometry buffer pass (for deferred rendering)
-    Forward,     // Forward rendering pass
-    Skybox,      // Skybox rendering pass
-    PostProcess, // Post-processing pass
-    UI           // UI rendering pass
-};
-
 // Descriptor Set and Binding 约定常量
 constexpr uint32_t GLOBAL_SET   = 0; // set = 0: 全局数据(相机、光照)
 constexpr uint32_t MATERIAL_SET = 1; // set = 1: 材质数据(纹理、材质参数)
@@ -166,8 +156,9 @@ public:
 
     // Multi-pass system
     void setupPasses(vk::Format swapchainFormat);
-    const eastl::vector<RenderPass>& getPasses() const { return renderPasses; }
-    RenderPass& getPass(size_t index) { return renderPasses[index]; }
+    const eastl::vector<eastl::unique_ptr<Pass>>& getPasses() const { return passes; }
+    Pass* getPass(size_t index) { return passes[index].get(); }
+    RenderPass* getRenderPass(size_t index);  // Helper to get RenderPass specifically
 
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
@@ -215,8 +206,7 @@ private:
     Texture* defaultNormalTexture = nullptr;
 
     // Multi-pass system data
-    eastl::vector<RenderPassConfig> passConfigs;    // Unified pass configurations
-    eastl::vector<RenderPass> renderPasses;         // Actual RenderPass objects
+    eastl::vector<eastl::unique_ptr<Pass>> passes;  // Unified pass list (graphics + compute)
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
 

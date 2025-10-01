@@ -205,6 +205,18 @@ void RenderPass::setExternalFramebuffer(vk::Framebuffer framebuffer) {
     externalFramebuffer = framebuffer;
 }
 
+// Pass interface implementation
+void RenderPass::begin(vk::CommandBuffer cmd, uint32_t frameIndex) {
+    // Use external framebuffer if configured for swapchain
+    if (config.isSwapchainPass && externalFramebuffer != VK_NULL_HANDLE) {
+        begin(cmd, externalFramebuffer, currentExtent);
+    }
+    // Use own framebuffer
+    else if (config.createOwnFramebuffer && !framebuffers.empty()) {
+        begin(cmd, framebuffers[0], currentExtent);
+    }
+}
+
 void RenderPass::begin(vk::CommandBuffer cmd, vk::Extent2D extent) {
     // Use external framebuffer if configured for swapchain
     if (config.isSwapchainPass && externalFramebuffer != VK_NULL_HANDLE) {

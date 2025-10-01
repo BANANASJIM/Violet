@@ -300,6 +300,30 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
     violet::Log::info("Renderer", "Cubemap texture loaded successfully");
 }
 
+void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format fmt, vk::ImageUsageFlags usage) {
+    context = ctx;
+    format = fmt;
+    isCubemapTexture = true;
+
+    // Create empty cubemap image with specified usage
+    ImageInfo imageInfo;
+    imageInfo.width = size;
+    imageInfo.height = size;
+    imageInfo.format = format;
+    imageInfo.usage = usage;  // Caller specifies usage (e.g., storage + sampled)
+    imageInfo.arrayLayers = 6;
+    imageInfo.flags = vk::ImageCreateFlagBits::eCubeCompatible;
+    imageInfo.debugName = "Empty Cubemap";
+
+    imageResource = ResourceFactory::createImage(context, imageInfo);
+    allocation = imageResource.allocation;
+
+    createCubemapImageView(context);
+    createSampler(context);
+
+    violet::Log::info("Renderer", "Empty cubemap created: {}x{}", size, size);
+}
+
 void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
     context = ctx;
 

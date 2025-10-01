@@ -5,13 +5,17 @@
 #include "Texture.hpp"
 #include "ResourceFactory.hpp"
 #include "GraphicsPipeline.hpp"
+#include "ComputePipeline.hpp"
 #include "ForwardRenderer.hpp"
 #include "DescriptorSet.hpp"
+#include "Buffer.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include <stb_image.h>
 
 namespace violet {
+
+EnvironmentMap::EnvironmentMap() = default;
 
 EnvironmentMap::~EnvironmentMap() {
     cleanup();
@@ -77,7 +81,31 @@ void EnvironmentMap::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* f
         FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
         DescriptorSetType::GlobalUniforms, skyboxConfig);
 
-    violet::Log::info("Renderer", "EnvironmentMap initialized with skybox material");
+    // Create compute pipeline for equirectangular to cubemap conversion
+    equirectToCubemapPipeline = eastl::make_unique<ComputePipeline>();
+
+    // Create descriptor set for compute shader
+    computeDescriptorSet = eastl::make_unique<DescriptorSet>();
+    computeDescriptorSet->create(context, 1, DescriptorSetType::EquirectToCubemap);
+
+    // Setup compute pipeline with descriptor set layout
+    ComputePipelineConfig computeConfig;
+    computeConfig.descriptorSetLayouts.push_back(computeDescriptorSet->getLayout());
+
+    // Add push constant for cubemap size and current face
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
+    computeConfig.pushConstantRanges.push_back(pushConstant);
+
+    equirectToCubemapPipeline->init(
+        context,
+        FileSystem::resolveRelativePath("build/shaders/equirect_to_cubemap.comp.spv"),
+        computeConfig
+    );
+
+    violet::Log::info("Renderer", "EnvironmentMap initialized with skybox material and compute pipeline");
 }
 
 void EnvironmentMap::cleanup() {
@@ -101,75 +129,50 @@ void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
     eastl::string resolvedPath = FileSystem::resolveRelativePath(hdrPath);
     violet::Log::info("Renderer", "Loading HDR environment map from: {}", resolvedPath.c_str());
 
-    // Load HDR file using stb_image
-    int width, height, channels;
-    stbi_set_flip_vertically_on_load(true);
-    float* pixels = stbi_loadf(resolvedPath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    // Step 1: Load equirectangular HDR texture (2D)
+    // Keep it as member variable to prevent premature destruction
+    equirectTexture = eastl::make_unique<Texture>();
+    equirectTexture->loadHDR(context, resolvedPath);
 
-    if (!pixels) {
-        violet::Log::error("Renderer", "Failed to load HDR file: {}", resolvedPath.c_str());
+    if (!equirectTexture->getImageView() || !equirectTexture->getSampler()) {
+        violet::Log::error("Renderer", "Failed to load equirectangular HDR texture");
         return;
     }
 
-    // For now, create a simple equirectangular to cubemap conversion
-    // This will be enhanced later with proper conversion
-    // Temporarily create a 2D texture from HDR data
-
-    vk::DeviceSize imageSize = width * height * 4 * sizeof(float);
-
-    // Create staging buffer
-    BufferInfo stagingBufferInfo;
-    stagingBufferInfo.size = imageSize;
-    stagingBufferInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-    stagingBufferInfo.memoryUsage = MemoryUsage::CPU_TO_GPU;
-    stagingBufferInfo.debugName = "HDR staging buffer";
-
-    BufferResource stagingBuffer = ResourceFactory::createBuffer(context, stagingBufferInfo);
-
-    void* data = ResourceFactory::mapBuffer(context, stagingBuffer);
-    memcpy(data, pixels, static_cast<size_t>(imageSize));
-
-    stbi_image_free(pixels);
-
-    // Create cubemap texture (for now, we'll create a simple cubemap)
-    // In a full implementation, we'd convert equirectangular to cubemap
-    const uint32_t cubemapSize = 512; // Fixed size for now
-
-    ImageInfo imageInfo;
-    imageInfo.width = cubemapSize;
-    imageInfo.height = cubemapSize;
-    imageInfo.format = vk::Format::eR16G16B16A16Sfloat; // HDR format
-    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
-    imageInfo.arrayLayers = 6;
-    imageInfo.flags = vk::ImageCreateFlagBits::eCubeCompatible;
-    imageInfo.debugName = "Environment Cubemap";
-
-    // For now, create a placeholder cubemap
-    // Full implementation would convert equirectangular to cubemap faces
+    // Step 2: Create empty cubemap with storage + sampled usage
+    const uint32_t cubemapSize = 512;
     environmentTexture = eastl::make_unique<Texture>();
+    environmentTexture->createEmptyCubemap(
+        context,
+        cubemapSize,
+        vk::Format::eR16G16B16A16Sfloat,
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
+    );
 
-    // Use the existing loadCubemap with placeholder for now
-    // This will be replaced with proper HDR cubemap generation
-    eastl::array<eastl::string, 6> placeholderFaces;
-    environmentTexture->loadCubemap(context, placeholderFaces);
+    // Step 3: Generate cubemap from equirectangular using compute shader
+    generateCubemapFromEquirect(equirectTexture.get(), environmentTexture.get(), cubemapSize);
 
-    ResourceFactory::destroyBuffer(context, stagingBuffer);
+    // Step 4: IMPORTANT - Free equirect texture immediately after GPU work completes
+    // The compute shader has finished (endSingleTimeCommands waits for GPU),
+    // so we can safely free the equirect texture to prevent validation errors
+    // when loading a new HDR file later
+    equirectTexture.reset();
 
-    currentType = Type::Equirectangular;
+    currentType = Type::Cubemap;  // Output is cubemap
     params.enabled = true;
 
-    // Update the global descriptor set with the new environment texture
+    // Step 4: Update the global descriptor set with the new environment texture
     if (renderer && environmentTexture) {
         // Ensure texture is fully initialized before setting it
         if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
             renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
-            violet::Log::info("Renderer", "Successfully set HDR environment texture in global uniforms");
+            violet::Log::info("Renderer", "Successfully set HDR environment cubemap in global uniforms");
         } else {
-            violet::Log::error("Renderer", "HDR environment texture not fully initialized - cannot set in descriptor set");
+            violet::Log::error("Renderer", "HDR environment cubemap not fully initialized - cannot set in descriptor set");
         }
     }
 
-    violet::Log::info("Renderer", "HDR environment map loaded (placeholder cubemap for now)");
+    violet::Log::info("Renderer", "HDR environment map loaded and converted to cubemap via compute shader");
 }
 
 void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths) {
@@ -238,6 +241,130 @@ void EnvironmentMap::renderSkybox(vk::CommandBuffer commandBuffer, uint32_t fram
 
     // Draw full-screen triangle (no vertex buffer needed)
     commandBuffer.draw(3, 1, 0, 0);
+}
+
+void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Texture* cubemapTexture, uint32_t cubemapSize) {
+    if (!equirectTexture || !cubemapTexture || !equirectToCubemapPipeline || !computeDescriptorSet) {
+        violet::Log::error("Renderer", "Invalid parameters for generateCubemapFromEquirect");
+        return;
+    }
+
+    violet::Log::info("Renderer", "Generating cubemap from equirectangular texture using compute shader (size: {})", cubemapSize);
+
+    // Update descriptor set with input and output textures
+    computeDescriptorSet->updateTexture(0, equirectTexture, 0);  // Binding 0: input sampler2D
+    computeDescriptorSet->updateStorageImage(0, cubemapTexture, 1);  // Binding 1: output imageCube
+
+    // Create command buffer for compute operation
+    vk::CommandBuffer cmd = beginSingleTimeCommands(context);
+
+    // Transition cubemap to general layout for storage image writes
+    vk::ImageMemoryBarrier barrier;
+    barrier.srcAccessMask = {};
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+    barrier.oldLayout = vk::ImageLayout::eUndefined;
+    barrier.newLayout = vk::ImageLayout::eGeneral;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = cubemapTexture->getImage();
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 6;  // All 6 cubemap faces
+
+    cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eComputeShader,
+        {},
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    // Bind compute pipeline
+    equirectToCubemapPipeline->bind(cmd);
+
+    // Bind descriptor set
+    cmd.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute,
+        equirectToCubemapPipeline->getPipelineLayout(),
+        0,
+        computeDescriptorSet->getDescriptorSet(0),
+        {}
+    );
+
+    // Dispatch compute shader for each cubemap face
+    struct PushConstants {
+        uint32_t cubemapSize;
+        uint32_t currentFace;
+    } pushConstants;
+
+    pushConstants.cubemapSize = cubemapSize;
+
+    // Calculate workgroup count (16x16 local size in shader)
+    uint32_t workgroupCountX = (cubemapSize + 15) / 16;
+    uint32_t workgroupCountY = (cubemapSize + 15) / 16;
+
+    for (uint32_t face = 0; face < 6; ++face) {
+        pushConstants.currentFace = face;
+
+        // Push constants for current face
+        cmd.pushConstants(
+            equirectToCubemapPipeline->getPipelineLayout(),
+            vk::ShaderStageFlagBits::eCompute,
+            0,
+            sizeof(PushConstants),
+            &pushConstants
+        );
+
+        // Dispatch compute workgroups
+        equirectToCubemapPipeline->dispatch(cmd, workgroupCountX, workgroupCountY, 1);
+
+        // Insert barrier between faces to ensure proper ordering
+        if (face < 5) {
+            vk::MemoryBarrier memBarrier;
+            memBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+            memBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},
+                1, &memBarrier,
+                0, nullptr,
+                0, nullptr
+            );
+        }
+    }
+
+    // Transition cubemap to shader read-only optimal for rendering
+    vk::ImageMemoryBarrier finalBarrier;
+    finalBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+    finalBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    finalBarrier.oldLayout = vk::ImageLayout::eGeneral;
+    finalBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    finalBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalBarrier.image = cubemapTexture->getImage();
+    finalBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    finalBarrier.subresourceRange.baseMipLevel = 0;
+    finalBarrier.subresourceRange.levelCount = 1;
+    finalBarrier.subresourceRange.baseArrayLayer = 0;
+    finalBarrier.subresourceRange.layerCount = 6;
+
+    cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eFragmentShader,
+        {},
+        0, nullptr,
+        0, nullptr,
+        1, &finalBarrier
+    );
+
+    endSingleTimeCommands(context, cmd);
+
+    violet::Log::info("Renderer", "Cubemap generation complete");
 }
 
 } // namespace violet

@@ -53,7 +53,7 @@ void VioletApp::createResources() {
 
     // Initialize renderers with new Pass system
     renderer.init(getContext(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
-    debugRenderer.init(getContext(), &renderer.getPass(0), &renderer.getGlobalUniforms(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
 
     // Configure App base class

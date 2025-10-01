@@ -94,6 +94,29 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, Descr
         poolSizes[0].descriptorCount = maxFramesInFlight;
         poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
         poolSizes[1].descriptorCount = maxFramesInFlight;
+    } else if (type == DescriptorSetType::EquirectToCubemap) {
+        // Compute shader descriptor layout: input sampler2D + output imageCube
+        bindings.resize(2);
+
+        // Binding 0: Equirectangular input texture (sampler2D)
+        bindings[0].binding            = 0;
+        bindings[0].descriptorCount    = 1;
+        bindings[0].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
+        bindings[0].pImmutableSamplers = nullptr;
+        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eCompute;
+
+        // Binding 1: Cubemap output (storage image)
+        bindings[1].binding            = 1;
+        bindings[1].descriptorCount    = 1;
+        bindings[1].descriptorType     = vk::DescriptorType::eStorageImage;
+        bindings[1].pImmutableSamplers = nullptr;
+        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eCompute;
+
+        poolSizes.resize(2);
+        poolSizes[0].type            = vk::DescriptorType::eCombinedImageSampler;
+        poolSizes[0].descriptorCount = maxFramesInFlight;
+        poolSizes[1].type            = vk::DescriptorType::eStorageImage;
+        poolSizes[1].descriptorCount = maxFramesInFlight;
     } else if (type == DescriptorSetType::None) {
         // 不创建任何descriptor set - 仅使用全局descriptor set
         return;
@@ -250,6 +273,55 @@ void DescriptorSet::updateTexture(uint32_t frameIndex, Texture* texture, uint32_
     descriptorWrite.dstBinding      = binding;
     descriptorWrite.dstArrayElement = 0;
     descriptorWrite.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo      = &imageInfo;
+
+    context->getDevice().updateDescriptorSets(1, &descriptorWrite, 0, nullptr);
+}
+
+void DescriptorSet::updateStorageImage(uint32_t frameIndex, Texture* texture, uint32_t binding) {
+    if (frameIndex >= descriptorSets.size()) {
+        violet::Log::error(
+            "Renderer",
+            "Invalid frameIndex {} >= descriptorSets.size() {}",
+            frameIndex,
+            descriptorSets.size()
+        );
+        return;
+    }
+
+    if (!texture) {
+        violet::Log::error(
+            "Renderer",
+            "Texture is null for storage image binding {} frameIndex {} - cannot update descriptor",
+            binding,
+            frameIndex
+        );
+        return;
+    }
+
+    vk::ImageView imageView = texture->getImageView();
+
+    if (!imageView) {
+        violet::Log::error(
+            "Renderer",
+            "Texture has invalid imageView for storage image binding {} frameIndex {}",
+            binding,
+            frameIndex
+        );
+        return;
+    }
+
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eGeneral;  // Storage images use eGeneral layout
+    imageInfo.imageView   = imageView;
+    imageInfo.sampler     = nullptr;  // Storage images don't use samplers
+
+    vk::WriteDescriptorSet descriptorWrite;
+    descriptorWrite.dstSet          = descriptorSets[frameIndex];
+    descriptorWrite.dstBinding      = binding;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType  = vk::DescriptorType::eStorageImage;
     descriptorWrite.descriptorCount = 1;
     descriptorWrite.pImageInfo      = &imageInfo;
 

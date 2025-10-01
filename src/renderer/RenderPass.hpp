@@ -6,6 +6,7 @@
 #include <EASTL/unique_ptr.h>
 #include <functional>
 #include "ResourceFactory.hpp"
+#include "Pass.hpp"
 
 namespace violet {
 
@@ -30,8 +31,8 @@ struct AttachmentDesc {
 };
 
 // Unified render pass configuration
-struct RenderPassConfig {
-    eastl::string name;
+struct RenderPassConfig : public PassConfigBase {
+    // Note: name, type, srcStage, dstStage, srcAccess, dstAccess, execute are in PassConfigBase
 
     // Attachments using abstraction
     eastl::vector<AttachmentDesc> colorAttachments;
@@ -47,31 +48,41 @@ struct RenderPassConfig {
     vk::Extent2D framebufferSize = {0, 0}; // 0 means use swapchain size
     bool followsSwapchainSize = true;    // Whether size depends on swapchain
 
-    // Execution callback
-    eastl::function<void(vk::CommandBuffer, uint32_t)> execute;
-
-    // Pipeline barriers for multi-pass synchronization
-    vk::PipelineStageFlags srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::AccessFlags srcAccess = {};
-    vk::AccessFlags dstAccess = {};
+    // Default constructor
+    RenderPassConfig() {
+        type = PassType::Graphics;
+        srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    }
 };
 
-class RenderPass {
+class RenderPass : public Pass {
 public:
     void init(VulkanContext* context, const RenderPassConfig& config);
-    void cleanup();
+    void cleanup() override;
 
     // Framebuffer management
     void createFramebuffers(vk::Extent2D extent);
     void recreateFramebuffers(vk::Extent2D newExtent);
     void cleanupFramebuffers();
 
-    // Pass execution
+    // Pass interface implementation
+    void begin(vk::CommandBuffer cmd, uint32_t frameIndex) override;
+    void execute(vk::CommandBuffer cmd, uint32_t frameIndex) override;
+    void end(vk::CommandBuffer cmd) override;
+
+    PassType getType() const override { return PassType::Graphics; }
+    const eastl::string& getName() const override { return config.name; }
+
+    // Barrier configuration access
+    vk::PipelineStageFlags getSrcStage() const override { return config.srcStage; }
+    vk::PipelineStageFlags getDstStage() const override { return config.dstStage; }
+    vk::AccessFlags getSrcAccess() const override { return config.srcAccess; }
+    vk::AccessFlags getDstAccess() const override { return config.dstAccess; }
+
+    // Overloaded pass execution (for backwards compatibility and flexibility)
     void begin(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent);
     void begin(vk::CommandBuffer cmd, vk::Extent2D extent); // Use own framebuffer
-    void execute(vk::CommandBuffer cmd, uint32_t frameIndex);
-    void end(vk::CommandBuffer cmd);
 
     // External framebuffer support (for swapchain passes)
     void setExternalFramebuffer(vk::Framebuffer framebuffer);

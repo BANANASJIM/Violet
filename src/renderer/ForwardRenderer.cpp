@@ -32,12 +32,14 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     // Setup multi-pass system
     setupPasses(swapchainFormat);
 
-    // Initialize subsystems - use first pass for components that need RenderPass
+    // Initialize subsystems - use first graphics pass for components that need RenderPass
     globalUniforms.init(context, maxFramesInFlight);
-    if (!renderPasses.empty()) {
-        // All rendering now happens in the unified Main pass (index 0)
-        debugRenderer.init(context, &renderPasses[0], &globalUniforms, maxFramesInFlight);
-        environmentMap.init(context, &renderPasses[0], this);
+
+    // Find first graphics pass for initialization
+    RenderPass* firstRenderPass = getRenderPass(0);
+    if (firstRenderPass) {
+        debugRenderer.init(context, firstRenderPass, &globalUniforms, maxFramesInFlight);
+        environmentMap.init(context, firstRenderPass, this);
     }
 
     // Load HDR environment map
@@ -53,10 +55,12 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
 }
 
 void ForwardRenderer::cleanup() {
-    for (auto& pass : renderPasses) {
-        pass.cleanup();
+    for (auto& pass : passes) {
+        if (pass) {
+            pass->cleanup();
+        }
     }
-    renderPasses.clear();
+    passes.clear();
     debugRenderer.cleanup();
     globalUniforms.cleanup();
     environmentMap.cleanup();
@@ -77,27 +81,33 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
 void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
     currentExtent = extent;
 
-    for (size_t i = 0; i < renderPasses.size(); ++i) {
+    for (size_t i = 0; i < passes.size(); ++i) {
         // Insert explicit barrier between passes if needed
         if (i > 0) {
             insertPassTransition(cmd, i);
         }
 
         // Execute pass
-        auto& pass = renderPasses[i];
+        Pass* pass = passes[i].get();
 
-        // Swapchain passes use external framebuffer
-        if (pass.getConfig().isSwapchainPass) {
-            // Set external framebuffer for swapchain pass
-            pass.setExternalFramebuffer(framebuffer);
-            pass.begin(cmd, extent); // Will use external framebuffer
+        // Handle swapchain framebuffer for graphics passes
+        if (pass->getType() == PassType::Graphics) {
+            RenderPass* renderPass = static_cast<RenderPass*>(pass);
+            if (renderPass->getConfig().isSwapchainPass) {
+                // Set external framebuffer for swapchain pass
+                renderPass->setExternalFramebuffer(framebuffer);
+                renderPass->begin(cmd, extent); // Will use external framebuffer
+            } else {
+                // Passes with own framebuffers use them directly
+                renderPass->begin(cmd, extent); // Will use own framebuffer
+            }
         } else {
-            // Passes with own framebuffers use them directly
-            pass.begin(cmd, extent); // Will use own framebuffer
+            // Compute and other passes don't need framebuffer setup
+            pass->begin(cmd, frameIndex);
         }
 
-        pass.execute(cmd, frameIndex);
-        pass.end(cmd);
+        pass->execute(cmd, frameIndex);
+        pass->end(cmd);
     }
 }
 
@@ -106,16 +116,32 @@ void ForwardRenderer::endFrame() {
 }
 
 vk::RenderPass ForwardRenderer::getFinalPassRenderPass() const {
-    if (renderPasses.empty()) {
-        violet::Log::error("Renderer", "No render passes available");
-        return VK_NULL_HANDLE;
+    // Find the last graphics pass
+    for (auto it = passes.rbegin(); it != passes.rend(); ++it) {
+        if ((*it)->getType() == PassType::Graphics) {
+            RenderPass* renderPass = static_cast<RenderPass*>(it->get());
+            return renderPass->getRenderPass();
+        }
     }
-    return renderPasses.back().getRenderPass();
+
+    violet::Log::error("Renderer", "No graphics render passes available");
+    return VK_NULL_HANDLE;
+}
+
+RenderPass* ForwardRenderer::getRenderPass(size_t index) {
+    if (index >= passes.size()) {
+        return nullptr;
+    }
+
+    if (passes[index]->getType() == PassType::Graphics) {
+        return static_cast<RenderPass*>(passes[index].get());
+    }
+
+    return nullptr;
 }
 
 void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
-    passConfigs.clear();
-    renderPasses.clear();
+    passes.clear();
 
     // Clear values
     vk::ClearValue colorClear;
@@ -124,49 +150,43 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     // Main pass - single unified pass for all rendering with depth testing
-    // This approach reuses the current pipeline architecture while maintaining multi-stage execution
-    passConfigs.push_back({
-        .name = "Main",
-        .colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)},
-        .depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear),
-        .hasDepth = true,
-        .clearValues = {colorClear, depthClear},
-        .isSwapchainPass = true,  // Uses swapchain framebuffer for final output
-        .createOwnFramebuffer = false,  // Uses external swapchain framebuffer with depth
-        .srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .srcAccess = {},
-        .dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-        .execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-            if (currentWorld) {
-                setViewport(cmd, currentExtent);
+    RenderPassConfig mainPassConfig;
+    mainPassConfig.name = "Main";
+    mainPassConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)};
+    mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
+    mainPassConfig.hasDepth = true;
+    mainPassConfig.clearValues = {colorClear, depthClear};
+    mainPassConfig.isSwapchainPass = true;  // Uses swapchain framebuffer for final output
+    mainPassConfig.createOwnFramebuffer = false;  // Uses external swapchain framebuffer with depth
+    mainPassConfig.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    mainPassConfig.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    mainPassConfig.srcAccess = {};
+    mainPassConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    mainPassConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
+        if (currentWorld) {
+            setViewport(cmd, currentExtent);
 
-                // First render skybox (depth testing disabled, renders to background)
-                Material* envMaterial = environmentMap.getMaterial();
-                if (envMaterial) {
-                    environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
-                                              globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
-                }
-
-                // Then render scene geometry (depth testing enabled)
-                renderScene(cmd, frame, *currentWorld);
+            // First render skybox (depth testing disabled, renders to background)
+            Material* envMaterial = environmentMap.getMaterial();
+            if (envMaterial) {
+                environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
+                                          globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
             }
+
+            // Then render scene geometry (depth testing enabled)
+            renderScene(cmd, frame, *currentWorld);
         }
-    });
+    };
 
-    // Create actual RenderPass objects from configurations
-    for (size_t i = 0; i < passConfigs.size(); ++i) {
-        const auto& config = passConfigs[i];
-        RenderPass pass;
-        pass.init(context, config);
+    auto mainPass = eastl::make_unique<RenderPass>();
+    mainPass->init(context, mainPassConfig);
 
-        // Create framebuffers for passes that need them
-        if (config.createOwnFramebuffer) {
-            pass.createFramebuffers(currentExtent);
-        }
-
-        renderPasses.push_back(eastl::move(pass));
+    // Create framebuffers for passes that need them
+    if (mainPassConfig.createOwnFramebuffer) {
+        mainPass->createFramebuffers(currentExtent);
     }
+
+    passes.push_back(eastl::move(mainPass));
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
@@ -485,7 +505,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     // Create pipeline using the final pass RenderPass
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
+        pipeline->init(context, getRenderPass(0), globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
         // Pipeline initialized
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with shaders: '{}', '{}' - Error: {}",
@@ -527,7 +547,7 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     // Create pipeline with custom config using the final pass RenderPass
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, &renderPasses[0], globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
+        pipeline->init(context, getRenderPass(0), globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
         // Pipeline initialized with custom config
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with custom config for shaders: '{}', '{}' - Error: {}",
