@@ -12,6 +12,10 @@ void VulkanContext::init(GLFWwindow* win) {
     setupDebugMessenger();
     createSurface(window);
     pickPhysicalDevice();
+
+    // Load render settings from config file
+    renderSettings = RenderSettings::loadFromFile("config.json", *physicalDevice);
+
     createLogicalDevice();
     createCommandPool();
     createAllocator();

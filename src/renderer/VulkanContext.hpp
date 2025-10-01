@@ -8,6 +8,8 @@
 #include <EASTL/optional.h>
 #include <EASTL/string.h>
 
+#include "RenderSettings.hpp"
+
 namespace violet {
 
 struct QueueFamilyIndices {
@@ -50,6 +52,8 @@ public:
     vk::Format findDepthFormat();
     GLFWwindow* getWindow() const { return window; }
 
+    const RenderSettings& getRenderSettings() const { return renderSettings; }
+
 private:
     void createInstance();
     void setupDebugMessenger();
@@ -89,7 +93,8 @@ private:
 
     QueueFamilyIndices queueFamilies;
     GLFWwindow* window;
-    
+    RenderSettings renderSettings;
+
     const eastl::vector<const char*> validationLayers = {
         "VK_LAYER_KHRONOS_validation"
     };

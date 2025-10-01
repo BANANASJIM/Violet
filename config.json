@@ -1,0 +1,12 @@
+{
+  "renderer": {
+    "anisotropicFiltering": {
+      "enabled": true,
+      "maxAnisotropy": 16.0
+    },
+    "msaa": {
+      "enabled": false,
+      "samples": 4
+    }
+  }
+}
