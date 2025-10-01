@@ -16,7 +16,7 @@
 
 namespace violet {
 
-void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
+void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath, bool enableMipmaps) {
     context = ctx;
 
     eastl::string resolvedPath = FileSystem::resolveRelativePath(filePath);
@@ -26,6 +26,14 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
 
     if (!pixels) {
         throw RuntimeError("Failed to load texture image!");
+    }
+
+    // Calculate mip levels
+    format = vk::Format::eR8G8B8A8Srgb;
+    if (enableMipmaps) {
+        mipLevels = calculateMipLevels(texWidth, texHeight);
+    } else {
+        mipLevels = 1;
     }
 
     // Create staging buffer using ResourceFactory
@@ -46,27 +54,35 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath) {
     ImageInfo imageInfo;
     imageInfo.width = static_cast<uint32_t>(texWidth);
     imageInfo.height = static_cast<uint32_t>(texHeight);
-    imageInfo.format = vk::Format::eR8G8B8A8Srgb;
-    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.format = format;
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
+                     (enableMipmaps ? vk::ImageUsageFlagBits::eTransferSrc : vk::ImageUsageFlagBits{});
     imageInfo.debugName = filePath;
 
     imageResource = ResourceFactory::createImage(ctx, imageInfo);
     allocation = imageResource.allocation;
 
-    transitionImageLayout(ctx, vk::Format::eR8G8B8A8Srgb, vk::ImageLayout::eUndefined,
+    transitionImageLayout(ctx, format, vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eTransferDstOptimal);
     ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource,
                                        static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-    transitionImageLayout(ctx, vk::Format::eR8G8B8A8Srgb, vk::ImageLayout::eTransferDstOptimal,
-                          vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    // Generate mipmaps or transition directly
+    if (enableMipmaps) {
+        generateMipmaps(ctx, format, texWidth, texHeight, 1);
+    } else {
+        transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal,
+                              vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
 
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
-    createImageView(ctx, vk::Format::eR8G8B8A8Srgb);
+    createImageView(ctx, format);
     createSampler(ctx);
 }
 
-void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
+void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath, bool enableMipmaps) {
     context = ctx;
 
     eastl::string resolvedPath = FileSystem::resolveRelativePath(filePath);
@@ -80,7 +96,14 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     }
 
     vk::DeviceSize imageSize = kTexture->dataSize;
-    vk::Format format = static_cast<vk::Format>(kTexture->vkFormat);
+    format = static_cast<vk::Format>(kTexture->vkFormat);
+
+    // Calculate mip levels
+    if (enableMipmaps) {
+        mipLevels = calculateMipLevels(kTexture->baseWidth, kTexture->baseHeight);
+    } else {
+        mipLevels = 1;
+    }
 
     // Create staging buffer using ResourceFactory
     BufferInfo stagingBufferInfo;
@@ -99,7 +122,9 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     imageInfo.width = kTexture->baseWidth;
     imageInfo.height = kTexture->baseHeight;
     imageInfo.format = format;
-    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
+                     (enableMipmaps ? vk::ImageUsageFlagBits::eTransferSrc : vk::ImageUsageFlagBits{});
     imageInfo.debugName = filePath;
 
     imageResource = ResourceFactory::createImage(ctx, imageInfo);
@@ -107,7 +132,13 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
 
     transitionImageLayout(ctx, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
     ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource, kTexture->baseWidth, kTexture->baseHeight);
-    transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    // Generate mipmaps or transition directly
+    if (enableMipmaps) {
+        generateMipmaps(ctx, format, kTexture->baseWidth, kTexture->baseHeight, 1);
+    } else {
+        transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
 
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
@@ -117,12 +148,20 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath) {
     ktxTexture_Destroy(ktxTexture(kTexture));
 }
 
-void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb) {
+void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb, bool enableMipmaps) {
     context = ctx;
 
     // Calculate actual size needed
     int requiredChannels = 4; // Always convert to RGBA
     vk::DeviceSize imageSize = width * height * requiredChannels;
+
+    // Calculate mip levels
+    format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+    if (enableMipmaps) {
+        mipLevels = calculateMipLevels(width, height);
+    } else {
+        mipLevels = 1;
+    }
 
     // Create staging buffer using ResourceFactory
     BufferInfo stagingBufferInfo;
@@ -164,12 +203,13 @@ void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size
 
 
     // Create image using ResourceFactory
-    vk::Format format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     ImageInfo imageInfo;
     imageInfo.width = static_cast<uint32_t>(width);
     imageInfo.height = static_cast<uint32_t>(height);
     imageInfo.format = format;
-    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
+                     (enableMipmaps ? vk::ImageUsageFlagBits::eTransferSrc : vk::ImageUsageFlagBits{});
     imageInfo.debugName = "Texture from memory";
 
     imageResource = ResourceFactory::createImage(ctx, imageInfo);
@@ -178,7 +218,13 @@ void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size
     transitionImageLayout(ctx, format, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
     ResourceFactory::copyBufferToImage(ctx, stagingBuffer, imageResource,
                                        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-    transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    // Generate mipmaps or transition directly
+    if (enableMipmaps) {
+        generateMipmaps(ctx, format, width, height, 1);
+    } else {
+        transitionImageLayout(ctx, format, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
 
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
@@ -267,25 +313,23 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
     transitionCubemapLayout(ctx, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
     // Copy buffer to image for each face
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(ctx);
+    ResourceFactory::executeSingleTimeCommands(ctx, [&](vk::CommandBuffer cmd) {
+        for (uint32_t face = 0; face < 6; ++face) {
+            vk::BufferImageCopy region;
+            region.bufferOffset = face * faceDataSize;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = face;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = vk::Offset3D{0, 0, 0};
+            region.imageExtent = vk::Extent3D{faceSize, faceSize, 1};
 
-    for (uint32_t face = 0; face < 6; ++face) {
-        vk::BufferImageCopy region;
-        region.bufferOffset = face * faceDataSize;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-        region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = face;
-        region.imageSubresource.layerCount = 1;
-        region.imageOffset = vk::Offset3D{0, 0, 0};
-        region.imageExtent = vk::Extent3D{faceSize, faceSize, 1};
-
-        commandBuffer.copyBufferToImage(stagingBuffer.buffer, imageResource.image,
-                                       vk::ImageLayout::eTransferDstOptimal, region);
-    }
-
-    endSingleTimeCommands(ctx, commandBuffer);
+            cmd.copyBufferToImage(stagingBuffer.buffer, imageResource.image,
+                                 vk::ImageLayout::eTransferDstOptimal, region);
+        }
+    });
 
     // Transition to shader read
     transitionCubemapLayout(ctx, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -507,25 +551,23 @@ void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::stri
     transitionCubemapLayout(ctx, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
     // Copy buffer to image for each face
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(ctx);
+    ResourceFactory::executeSingleTimeCommands(ctx, [&](vk::CommandBuffer cmd) {
+        for (uint32_t face = 0; face < 6; ++face) {
+            vk::BufferImageCopy region;
+            region.bufferOffset = face * faceDataSize;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = face;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = vk::Offset3D{0, 0, 0};
+            region.imageExtent = vk::Extent3D{cubemapSize, cubemapSize, 1};
 
-    for (uint32_t face = 0; face < 6; ++face) {
-        vk::BufferImageCopy region;
-        region.bufferOffset = face * faceDataSize;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-        region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-        region.imageSubresource.mipLevel = 0;
-        region.imageSubresource.baseArrayLayer = face;
-        region.imageSubresource.layerCount = 1;
-        region.imageOffset = vk::Offset3D{0, 0, 0};
-        region.imageExtent = vk::Extent3D{cubemapSize, cubemapSize, 1};
-
-        commandBuffer.copyBufferToImage(stagingBuffer.buffer, imageResource.image,
-                                       vk::ImageLayout::eTransferDstOptimal, region);
-    }
-
-    endSingleTimeCommands(ctx, commandBuffer);
+            cmd.copyBufferToImage(stagingBuffer.buffer, imageResource.image,
+                                 vk::ImageLayout::eTransferDstOptimal, region);
+        }
+    });
 
     // Transition to shader read
     transitionCubemapLayout(ctx, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -566,7 +608,7 @@ void Texture::createImageView(VulkanContext* ctx, vk::Format format) {
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;  // Use actual mip levels
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
@@ -589,7 +631,12 @@ void Texture::createSampler(VulkanContext* ctx) {
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = vk::CompareOp::eAlways;
+
+    // Mipmap configuration
     samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = static_cast<float>(mipLevels);
+    samplerInfo.mipLodBias = 0.0f;
 
     sampler = vk::raii::Sampler(ctx->getDeviceRAII(), samplerInfo);
     // Sampler created
@@ -597,79 +644,176 @@ void Texture::createSampler(VulkanContext* ctx) {
 
 void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::ImageLayout oldLayout,
                                     vk::ImageLayout newLayout) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(ctx);
+    ResourceFactory::executeSingleTimeCommands(ctx, [&](vk::CommandBuffer cmd) {
+        vk::ImageMemoryBarrier barrier;
+        barrier.oldLayout = oldLayout;
+        barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = imageResource.image;
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
 
-    vk::ImageMemoryBarrier barrier;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = imageResource.image;
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+        vk::PipelineStageFlags sourceStage;
+        vk::PipelineStageFlags destinationStage;
 
-    vk::PipelineStageFlags sourceStage;
-    vk::PipelineStageFlags destinationStage;
+        if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+            barrier.srcAccessMask = {};
+            barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+            sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
+                   newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        } else {
+            violet::Log::error("Renderer", "Unsupported layout transition!");
+            return;
+        }
 
-    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
-        barrier.srcAccessMask = {};
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-        destinationStage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
-               newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-        sourceStage = vk::PipelineStageFlagBits::eTransfer;
-        destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else {
-        throw std::invalid_argument("Unsupported layout transition!");
-    }
-
-    commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
-
-    endSingleTimeCommands(ctx, commandBuffer);
+        cmd.pipelineBarrier(sourceStage, destinationStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
 }
 
 void Texture::transitionCubemapLayout(VulkanContext* ctx, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(ctx);
+    ResourceFactory::executeSingleTimeCommands(ctx, [&](vk::CommandBuffer cmd) {
+        vk::ImageMemoryBarrier barrier;
+        barrier.oldLayout = oldLayout;
+        barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = imageResource.image;
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6; // 6 faces for cubemap
 
-    vk::ImageMemoryBarrier barrier;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = imageResource.image;
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 6; // 6 faces for cubemap
+        vk::PipelineStageFlags sourceStage;
+        vk::PipelineStageFlags destinationStage;
 
-    vk::PipelineStageFlags sourceStage;
-    vk::PipelineStageFlags destinationStage;
+        if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
+            barrier.srcAccessMask = {};
+            barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+            sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
+                   newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        } else {
+            violet::Log::error("Renderer", "Unsupported layout transition!");
+            return;
+        }
 
-    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
-        barrier.srcAccessMask = {};
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-        sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-        destinationStage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
-               newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-        sourceStage = vk::PipelineStageFlagBits::eTransfer;
-        destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else {
-        throw std::invalid_argument("Unsupported layout transition!");
+        cmd.pipelineBarrier(sourceStage, destinationStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
+}
+
+uint32_t Texture::calculateMipLevels(uint32_t width, uint32_t height) {
+    return static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+}
+
+void Texture::generateMipmaps(VulkanContext* ctx, vk::Format format, uint32_t width, uint32_t height, uint32_t arrayLayers) {
+    // Check if image format supports linear blitting
+    vk::FormatProperties formatProperties = ctx->getPhysicalDevice().getFormatProperties(format);
+    if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
+        violet::Log::error("Renderer", "Texture format does not support linear blitting for mipmap generation");
+        return;
     }
 
-    commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    violet::Log::info("Renderer", "Generating {} mip levels for {}x{} texture ({}  layers)",
+                      mipLevels, width, height, arrayLayers);
 
-    endSingleTimeCommands(ctx, commandBuffer);
+    ResourceFactory::executeSingleTimeCommands(ctx, [&](vk::CommandBuffer cmd) {
+        vk::ImageMemoryBarrier barrier{};
+        barrier.image = imageResource.image;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = arrayLayers;
+        barrier.subresourceRange.levelCount = 1;
+
+        int32_t mipWidth = width;
+        int32_t mipHeight = height;
+
+        for (uint32_t i = 1; i < mipLevels; i++) {
+            // Transition previous mip level to TRANSFER_SRC_OPTIMAL
+            barrier.subresourceRange.baseMipLevel = i - 1;
+            barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+            barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eTransfer,
+                {}, 0, nullptr, 0, nullptr, 1, &barrier
+            );
+
+            // Blit from previous level to current level
+            vk::ImageBlit blit{};
+            blit.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+            blit.srcOffsets[1] = vk::Offset3D{mipWidth, mipHeight, 1};
+            blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+            blit.srcSubresource.mipLevel = i - 1;
+            blit.srcSubresource.baseArrayLayer = 0;
+            blit.srcSubresource.layerCount = arrayLayers;
+
+            blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+            blit.dstOffsets[1] = vk::Offset3D{mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1};
+            blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+            blit.dstSubresource.mipLevel = i;
+            blit.dstSubresource.baseArrayLayer = 0;
+            blit.dstSubresource.layerCount = arrayLayers;
+
+            cmd.blitImage(
+                imageResource.image, vk::ImageLayout::eTransferSrcOptimal,
+                imageResource.image, vk::ImageLayout::eTransferDstOptimal,
+                1, &blit,
+                vk::Filter::eLinear
+            );
+
+            // Transition previous mip level to SHADER_READ_ONLY_OPTIMAL
+            barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+            barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+            barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                {}, 0, nullptr, 0, nullptr, 1, &barrier
+            );
+
+            // Calculate next mip dimensions
+            if (mipWidth > 1) mipWidth /= 2;
+            if (mipHeight > 1) mipHeight /= 2;
+        }
+
+        // Transition the last mip level to SHADER_READ_ONLY_OPTIMAL
+        barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {}, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+    });
+
+    violet::Log::info("Renderer", "Mipmap generation complete");
 }
 
 void Texture::createCubemapImageView(VulkanContext* ctx) {
@@ -679,7 +823,7 @@ void Texture::createCubemapImageView(VulkanContext* ctx) {
     viewInfo.format = imageResource.format;
     viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;  // Use actual mip levels
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 6; // 6 faces for cubemap
 

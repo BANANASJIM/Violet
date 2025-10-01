@@ -146,33 +146,29 @@ void* ResourceFactory::mapBuffer(VulkanContext* context, BufferResource& buffer)
 
 
 void ResourceFactory::copyBuffer(VulkanContext* context, BufferResource& src, BufferResource& dst, vk::DeviceSize size) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(context);
-
-    vk::BufferCopy copyRegion;
-    copyRegion.size = size;
-    commandBuffer.copyBuffer(src.buffer, dst.buffer, copyRegion);
-
-    endSingleTimeCommands(context, commandBuffer);
+    executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        vk::BufferCopy copyRegion;
+        copyRegion.size = size;
+        cmd.copyBuffer(src.buffer, dst.buffer, copyRegion);
+    });
 }
 
 void ResourceFactory::copyBufferToImage(VulkanContext* context, BufferResource& buffer, ImageResource& image,
                                         uint32_t width, uint32_t height) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(context);
+    executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        vk::BufferImageCopy region;
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = vk::Offset3D{0, 0, 0};
+        region.imageExtent = vk::Extent3D{width, height, 1};
 
-    vk::BufferImageCopy region;
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = vk::Offset3D{0, 0, 0};
-    region.imageExtent = vk::Extent3D{width, height, 1};
-
-    commandBuffer.copyBufferToImage(buffer.buffer, image.image, vk::ImageLayout::eTransferDstOptimal, region);
-
-    endSingleTimeCommands(context, commandBuffer);
+        cmd.copyBufferToImage(buffer.buffer, image.image, vk::ImageLayout::eTransferDstOptimal, region);
+    });
 }
 
 // New async methods for use with TransferPass
@@ -329,6 +325,48 @@ eastl::unique_ptr<Texture> ResourceFactory::createHDRCubemap(VulkanContext* cont
     auto texture = eastl::make_unique<Texture>();
     texture->loadEquirectangularToCubemap(context, hdrPath);
     return texture;
+}
+
+// Single-time command helpers
+vk::CommandBuffer ResourceFactory::beginSingleTimeCommands(VulkanContext* context) {
+    vk::CommandBufferAllocateInfo allocInfo;
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandPool = context->getCommandPool();
+    allocInfo.commandBufferCount = 1;
+
+    auto commandBuffers = context->getDevice().allocateCommandBuffers(allocInfo);
+    vk::CommandBuffer commandBuffer = commandBuffers[0];
+
+    vk::CommandBufferBeginInfo beginInfo;
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    commandBuffer.begin(beginInfo);
+
+    return commandBuffer;
+}
+
+void ResourceFactory::endSingleTimeCommands(VulkanContext* context, vk::CommandBuffer commandBuffer) {
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    context->getGraphicsQueue().submit(1, &submitInfo, {});
+    context->getGraphicsQueue().waitIdle();
+
+    context->getDevice().freeCommandBuffers(context->getCommandPool(), 1, &commandBuffer);
+}
+
+void ResourceFactory::endSingleTimeCommands(VulkanContext* context, const vk::raii::CommandBuffer& commandBuffer) {
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo;
+    submitInfo.commandBufferCount = 1;
+    vk::CommandBuffer cmdBuf = *commandBuffer;
+    submitInfo.pCommandBuffers = &cmdBuf;
+
+    context->getGraphicsQueue().submit(1, &submitInfo, {});
+    context->getGraphicsQueue().waitIdle();
 }
 
 } // namespace violet

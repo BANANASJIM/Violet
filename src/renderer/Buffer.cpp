@@ -39,13 +39,11 @@ void createBuffer(VulkanContext* context, vk::DeviceSize size, vk::BufferUsageFl
 }
 
 void copyBuffer(VulkanContext* context, vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(context);
-
-    vk::BufferCopy copyRegion;
-    copyRegion.size = size;
-    commandBuffer.copyBuffer(srcBuffer, dstBuffer, 1, &copyRegion);
-
-    endSingleTimeCommands(context, commandBuffer);
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        vk::BufferCopy copyRegion;
+        copyRegion.size = size;
+        cmd.copyBuffer(srcBuffer, dstBuffer, 1, &copyRegion);
+    });
 }
 
 void createBuffer(VulkanContext* context, vk::DeviceSize size, vk::BufferUsageFlags usage,
@@ -68,44 +66,14 @@ void createBuffer(VulkanContext* context, vk::DeviceSize size, vk::BufferUsageFl
 }
 
 void copyBuffer(VulkanContext* context, const vk::raii::Buffer& srcBuffer, const vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
-    vk::raii::CommandBuffer commandBuffer = beginSingleTimeCommandsRAII(context);
-
-    vk::BufferCopy copyRegion;
-    copyRegion.size = size;
-    commandBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
-
-    endSingleTimeCommands(context, commandBuffer);
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        vk::BufferCopy copyRegion;
+        copyRegion.size = size;
+        cmd.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
+    });
 }
 
-vk::CommandBuffer beginSingleTimeCommands(VulkanContext* context) {
-    vk::CommandBufferAllocateInfo allocInfo;
-    allocInfo.level = vk::CommandBufferLevel::ePrimary;
-    allocInfo.commandPool = context->getCommandPool();
-    allocInfo.commandBufferCount = 1;
-
-    auto commandBuffers = context->getDevice().allocateCommandBuffers(allocInfo);
-    vk::CommandBuffer commandBuffer = commandBuffers[0];
-
-    vk::CommandBufferBeginInfo beginInfo;
-    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
-    commandBuffer.begin(beginInfo);
-
-    return commandBuffer;
-}
-
-void endSingleTimeCommands(VulkanContext* context, vk::CommandBuffer commandBuffer) {
-    commandBuffer.end();
-
-    vk::SubmitInfo submitInfo;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    context->getGraphicsQueue().submit(1, &submitInfo, {});
-    context->getGraphicsQueue().waitIdle();
-
-    context->getDevice().freeCommandBuffers(context->getCommandPool(), 1, &commandBuffer);
-}
-
+// RAII variant for special use cases
 vk::raii::CommandBuffer beginSingleTimeCommandsRAII(VulkanContext* context) {
     vk::CommandBufferAllocateInfo allocInfo;
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -120,19 +88,6 @@ vk::raii::CommandBuffer beginSingleTimeCommandsRAII(VulkanContext* context) {
     commandBuffer.begin(beginInfo);
 
     return commandBuffer;
-}
-
-void endSingleTimeCommands(VulkanContext* context, const vk::raii::CommandBuffer& commandBuffer) {
-    commandBuffer.end();
-
-    vk::SubmitInfo submitInfo;
-    submitInfo.commandBufferCount = 1;
-    vk::CommandBuffer cmdBuf = *commandBuffer;
-    submitInfo.pCommandBuffers = &cmdBuf;
-
-    context->getGraphicsQueue().submit(1, &submitInfo, {});
-    context->getGraphicsQueue().waitIdle();
-    // RAII CommandBuffer will automatically free itself
 }
 
 }

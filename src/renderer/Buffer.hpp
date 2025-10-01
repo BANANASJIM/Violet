@@ -7,10 +7,8 @@ namespace violet {
 
 class VulkanContext;
 
-vk::CommandBuffer beginSingleTimeCommands(VulkanContext* context);
+// RAII variant for special use cases
 vk::raii::CommandBuffer beginSingleTimeCommandsRAII(VulkanContext* context);
-void endSingleTimeCommands(VulkanContext* context, vk::CommandBuffer commandBuffer);
-void endSingleTimeCommands(VulkanContext* context, const vk::raii::CommandBuffer& commandBuffer);
 
 // Legacy functions for backward compatibility - will be deprecated
 uint32_t findMemoryType(VulkanContext* context, uint32_t typeFilter, vk::MemoryPropertyFlags properties);

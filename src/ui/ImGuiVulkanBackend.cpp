@@ -112,9 +112,9 @@ void ImGuiVulkanBackend::createDescriptorPool() {
 }
 
 void ImGuiVulkanBackend::uploadFonts() {
-    vk::CommandBuffer commandBuffer = beginSingleTimeCommands(context);
-    ImGui_ImplVulkan_CreateFontsTexture();
-    endSingleTimeCommands(context, commandBuffer);
+    ResourceFactory::executeSingleTimeCommands(context, [](vk::CommandBuffer cmd) {
+        ImGui_ImplVulkan_CreateFontsTexture();
+    });
 }
 
 }

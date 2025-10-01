@@ -96,9 +96,22 @@ public:
     static eastl::unique_ptr<Texture> createHDRTexture(VulkanContext* context, const eastl::string& hdrPath);
     static eastl::unique_ptr<Texture> createHDRCubemap(VulkanContext* context, const eastl::string& hdrPath);
 
+    // Single-time command execution with functional interface
+    template<typename Func>
+    static void executeSingleTimeCommands(VulkanContext* context, Func&& func) {
+        vk::CommandBuffer cmd = beginSingleTimeCommands(context);
+        func(cmd);
+        endSingleTimeCommands(context, cmd);
+    }
+
 private:
     static VmaMemoryUsage toVmaUsage(MemoryUsage usage);
     static VmaAllocationCreateFlags getVmaFlags(MemoryUsage usage);
+
+    // Internal helpers for single-time commands
+    static vk::CommandBuffer beginSingleTimeCommands(VulkanContext* context);
+    static void endSingleTimeCommands(VulkanContext* context, vk::CommandBuffer commandBuffer);
+    static void endSingleTimeCommands(VulkanContext* context, const vk::raii::CommandBuffer& commandBuffer);
 };
 
 } // namespace violet

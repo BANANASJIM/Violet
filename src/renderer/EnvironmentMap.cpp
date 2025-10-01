@@ -256,113 +256,111 @@ void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Textu
     computeDescriptorSet->updateStorageImage(0, cubemapTexture, 1);  // Binding 1: output imageCube
 
     // Create command buffer for compute operation
-    vk::CommandBuffer cmd = beginSingleTimeCommands(context);
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        // Transition cubemap to general layout for storage image writes
+        vk::ImageMemoryBarrier barrier;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.oldLayout = vk::ImageLayout::eUndefined;
+        barrier.newLayout = vk::ImageLayout::eGeneral;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = cubemapTexture->getImage();
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;  // All 6 cubemap faces
 
-    // Transition cubemap to general layout for storage image writes
-    vk::ImageMemoryBarrier barrier;
-    barrier.srcAccessMask = {};
-    barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-    barrier.oldLayout = vk::ImageLayout::eUndefined;
-    barrier.newLayout = vk::ImageLayout::eGeneral;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = cubemapTexture->getImage();
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 6;  // All 6 cubemap faces
-
-    cmd.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTopOfPipe,
-        vk::PipelineStageFlagBits::eComputeShader,
-        {},
-        0, nullptr,
-        0, nullptr,
-        1, &barrier
-    );
-
-    // Bind compute pipeline
-    equirectToCubemapPipeline->bind(cmd);
-
-    // Bind descriptor set
-    cmd.bindDescriptorSets(
-        vk::PipelineBindPoint::eCompute,
-        equirectToCubemapPipeline->getPipelineLayout(),
-        0,
-        computeDescriptorSet->getDescriptorSet(0),
-        {}
-    );
-
-    // Dispatch compute shader for each cubemap face
-    struct PushConstants {
-        uint32_t cubemapSize;
-        uint32_t currentFace;
-    } pushConstants;
-
-    pushConstants.cubemapSize = cubemapSize;
-
-    // Calculate workgroup count (16x16 local size in shader)
-    uint32_t workgroupCountX = (cubemapSize + 15) / 16;
-    uint32_t workgroupCountY = (cubemapSize + 15) / 16;
-
-    for (uint32_t face = 0; face < 6; ++face) {
-        pushConstants.currentFace = face;
-
-        // Push constants for current face
-        cmd.pushConstants(
-            equirectToCubemapPipeline->getPipelineLayout(),
-            vk::ShaderStageFlagBits::eCompute,
-            0,
-            sizeof(PushConstants),
-            &pushConstants
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eComputeShader,
+            {},
+            0, nullptr,
+            0, nullptr,
+            1, &barrier
         );
 
-        // Dispatch compute workgroups
-        equirectToCubemapPipeline->dispatch(cmd, workgroupCountX, workgroupCountY, 1);
+        // Bind compute pipeline
+        equirectToCubemapPipeline->bind(cmd);
 
-        // Insert barrier between faces to ensure proper ordering
-        if (face < 5) {
-            vk::MemoryBarrier memBarrier;
-            memBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-            memBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+        // Bind descriptor set
+        cmd.bindDescriptorSets(
+            vk::PipelineBindPoint::eCompute,
+            equirectToCubemapPipeline->getPipelineLayout(),
+            0,
+            computeDescriptorSet->getDescriptorSet(0),
+            {}
+        );
 
-            cmd.pipelineBarrier(
-                vk::PipelineStageFlagBits::eComputeShader,
-                vk::PipelineStageFlagBits::eComputeShader,
-                {},
-                1, &memBarrier,
-                0, nullptr,
-                0, nullptr
+        // Dispatch compute shader for each cubemap face
+        struct PushConstants {
+            uint32_t cubemapSize;
+            uint32_t currentFace;
+        } pushConstants;
+
+        pushConstants.cubemapSize = cubemapSize;
+
+        // Calculate workgroup count (16x16 local size in shader)
+        uint32_t workgroupCountX = (cubemapSize + 15) / 16;
+        uint32_t workgroupCountY = (cubemapSize + 15) / 16;
+
+        for (uint32_t face = 0; face < 6; ++face) {
+            pushConstants.currentFace = face;
+
+            // Push constants for current face
+            cmd.pushConstants(
+                equirectToCubemapPipeline->getPipelineLayout(),
+                vk::ShaderStageFlagBits::eCompute,
+                0,
+                sizeof(PushConstants),
+                &pushConstants
             );
+
+            // Dispatch compute workgroups
+            equirectToCubemapPipeline->dispatch(cmd, workgroupCountX, workgroupCountY, 1);
+
+            // Insert barrier between faces to ensure proper ordering
+            if (face < 5) {
+                vk::MemoryBarrier memBarrier;
+                memBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                memBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+
+                cmd.pipelineBarrier(
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    {},
+                    1, &memBarrier,
+                    0, nullptr,
+                    0, nullptr
+                );
+            }
         }
-    }
 
-    // Transition cubemap to shader read-only optimal for rendering
-    vk::ImageMemoryBarrier finalBarrier;
-    finalBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-    finalBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-    finalBarrier.oldLayout = vk::ImageLayout::eGeneral;
-    finalBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    finalBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    finalBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    finalBarrier.image = cubemapTexture->getImage();
-    finalBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    finalBarrier.subresourceRange.baseMipLevel = 0;
-    finalBarrier.subresourceRange.levelCount = 1;
-    finalBarrier.subresourceRange.baseArrayLayer = 0;
-    finalBarrier.subresourceRange.layerCount = 6;
+        // Transition cubemap to shader read-only optimal for rendering
+        vk::ImageMemoryBarrier finalBarrier;
+        finalBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+        finalBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        finalBarrier.oldLayout = vk::ImageLayout::eGeneral;
+        finalBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        finalBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        finalBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        finalBarrier.image = cubemapTexture->getImage();
+        finalBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        finalBarrier.subresourceRange.baseMipLevel = 0;
+        finalBarrier.subresourceRange.levelCount = 1;
+        finalBarrier.subresourceRange.baseArrayLayer = 0;
+        finalBarrier.subresourceRange.layerCount = 6;
 
-    cmd.pipelineBarrier(
-        vk::PipelineStageFlagBits::eComputeShader,
-        vk::PipelineStageFlagBits::eFragmentShader,
-        {},
-        0, nullptr,
-        0, nullptr,
-        1, &finalBarrier
-    );
-
-    endSingleTimeCommands(context, cmd);
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {},
+            0, nullptr,
+            0, nullptr,
+            1, &finalBarrier
+        );
+    });
 
     violet::Log::info("Renderer", "Cubemap generation complete");
 }

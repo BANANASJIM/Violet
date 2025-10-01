@@ -47,9 +47,9 @@ public:
         return *this;
     }
 
-    void loadFromFile(VulkanContext* context, const eastl::string& filePath);
-    void loadFromKTX2(VulkanContext* context, const eastl::string& filePath);
-    void loadFromMemory(VulkanContext* context, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb = true);
+    void loadFromFile(VulkanContext* context, const eastl::string& filePath, bool enableMipmaps = false);
+    void loadFromKTX2(VulkanContext* context, const eastl::string& filePath, bool enableMipmaps = false);
+    void loadFromMemory(VulkanContext* context, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb = true, bool enableMipmaps = false);
 
     // HDR support
     void loadHDR(VulkanContext* context, const eastl::string& hdrPath);
@@ -69,6 +69,7 @@ public:
     [[nodiscard]] bool isCubemap() const { return isCubemapTexture; }
     [[nodiscard]] bool isHDR() const { return format == vk::Format::eR16G16B16A16Sfloat || format == vk::Format::eR32G32B32A32Sfloat; }
     [[nodiscard]] vk::Format getFormat() const { return format; }
+    [[nodiscard]] uint32_t getMipLevels() const { return mipLevels; }
 
 private:
     void createImageView(VulkanContext* context, vk::Format format);
@@ -78,12 +79,17 @@ private:
     void createCubemapImageView(VulkanContext* context);
     void transitionCubemapLayout(VulkanContext* context, vk::ImageLayout oldLayout, vk::ImageLayout newLayout);
 
+    // Mipmap generation
+    void generateMipmaps(VulkanContext* context, vk::Format format, uint32_t width, uint32_t height, uint32_t arrayLayers = 1);
+    static uint32_t calculateMipLevels(uint32_t width, uint32_t height);
+
 private:
     ImageResource imageResource;
     vk::raii::ImageView imageView{nullptr};
     vk::raii::Sampler sampler{nullptr};
     bool isCubemapTexture = false;
     vk::Format format = vk::Format::eR8G8B8A8Srgb;
+    uint32_t mipLevels = 1;
 };
 
 } // namespace violet

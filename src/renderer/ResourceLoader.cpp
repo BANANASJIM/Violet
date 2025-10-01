@@ -75,14 +75,19 @@ void ResourceLoader::flush(VulkanContext* context) {
             copyRegion.srcBuffer = imgUpload.stagingBuffer.buffer;
             copyRegion.dstImage = imgUpload.targetImage.image;
             copyRegion.dstLayout = vk::ImageLayout::eTransferDstOptimal;
-            copyRegion.copyRegion = vk::BufferImageCopy{
-                .bufferOffset = 0,
-                .bufferRowLength = 0,
-                .bufferImageHeight = 0,
-                .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                .imageOffset = {0, 0, 0},
-                .imageExtent = {imgUpload.width, imgUpload.height, 1}
-            };
+
+            vk::BufferImageCopy copy;
+            copy.bufferOffset = 0;
+            copy.bufferRowLength = 0;
+            copy.bufferImageHeight = 0;
+            copy.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+            copy.imageSubresource.mipLevel = 0;
+            copy.imageSubresource.baseArrayLayer = 0;
+            copy.imageSubresource.layerCount = 1;
+            copy.imageOffset = vk::Offset3D{0, 0, 0};
+            copy.imageExtent = vk::Extent3D{imgUpload.width, imgUpload.height, 1};
+            copyRegion.copyRegion = copy;
+
             transferConfig.bufferToImageCopies.push_back(copyRegion);
         } else {
             // Cubemap or array texture - copy each layer separately
@@ -92,14 +97,19 @@ void ResourceLoader::flush(VulkanContext* context) {
                 copyRegion.srcBuffer = imgUpload.stagingBuffer.buffer;
                 copyRegion.dstImage = imgUpload.targetImage.image;
                 copyRegion.dstLayout = vk::ImageLayout::eTransferDstOptimal;
-                copyRegion.copyRegion = vk::BufferImageCopy{
-                    .bufferOffset = layer * layerSize,
-                    .bufferRowLength = 0,
-                    .bufferImageHeight = 0,
-                    .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, layer, 1},
-                    .imageOffset = {0, 0, 0},
-                    .imageExtent = {imgUpload.width, imgUpload.height, 1}
-                };
+
+                vk::BufferImageCopy copy;
+                copy.bufferOffset = layer * layerSize;
+                copy.bufferRowLength = 0;
+                copy.bufferImageHeight = 0;
+                copy.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+                copy.imageSubresource.mipLevel = 0;
+                copy.imageSubresource.baseArrayLayer = layer;
+                copy.imageSubresource.layerCount = 1;
+                copy.imageOffset = vk::Offset3D{0, 0, 0};
+                copy.imageExtent = vk::Extent3D{imgUpload.width, imgUpload.height, 1};
+                copyRegion.copyRegion = copy;
+
                 transferConfig.bufferToImageCopies.push_back(copyRegion);
             }
         }
@@ -128,17 +138,17 @@ void ResourceLoader::flush(VulkanContext* context) {
     transferPass->init(context, transferConfig);
 
     // Execute using single-time command buffer
-    vk::CommandBuffer cmd = beginSingleTimeCommands(context);
-    transferPass->begin(cmd, 0);
-    transferPass->execute(cmd, 0);
-    transferPass->end(cmd);
-    endSingleTimeCommands(context, cmd);
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        transferPass->begin(cmd, 0);
+        transferPass->execute(cmd, 0);
+        transferPass->end(cmd);
+    });
 
     // Cleanup staging buffers
-    for (const auto& bufUpload : pendingBuffers) {
+    for (auto& bufUpload : pendingBuffers) {
         ResourceFactory::destroyBuffer(context, bufUpload.stagingBuffer);
     }
-    for (const auto& imgUpload : pendingImages) {
+    for (auto& imgUpload : pendingImages) {
         ResourceFactory::destroyBuffer(context, imgUpload.stagingBuffer);
     }
 
