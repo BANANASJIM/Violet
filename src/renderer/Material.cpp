@@ -71,6 +71,25 @@ void Material::createDescriptorSetLayout(DescriptorSetType materialType) {
         textureBinding.pImmutableSamplers = nullptr;
         textureBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
         bindings.push_back(textureBinding);
+    } else if (materialType == DescriptorSetType::PostProcess) {
+        // PostProcess layout: 2 textures (color + depth from offscreen framebuffer)
+        // Binding 0: Color texture
+        vk::DescriptorSetLayoutBinding colorBinding;
+        colorBinding.binding = 0;
+        colorBinding.descriptorCount = 1;
+        colorBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        colorBinding.pImmutableSamplers = nullptr;
+        colorBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        bindings.push_back(colorBinding);
+
+        // Binding 1: Depth texture
+        vk::DescriptorSetLayoutBinding depthBinding;
+        depthBinding.binding = 1;
+        depthBinding.descriptorCount = 1;
+        depthBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        depthBinding.pImmutableSamplers = nullptr;
+        depthBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        bindings.push_back(depthBinding);
     } else if (materialType == DescriptorSetType::None) {
         // 不创建任何descriptor set layout - 仅使用全局set
         materialDescriptorSetLayout = nullptr;

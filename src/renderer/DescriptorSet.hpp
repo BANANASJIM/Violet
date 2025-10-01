@@ -14,6 +14,7 @@ enum class DescriptorSetType {
     MaterialTextures,     // PBR材质纹理采样器
     UnlitMaterialTextures, // Unlit材质纹理采样器 (简化版)
     EquirectToCubemap,    // 计算着色器: equirectangular to cubemap
+    PostProcess,          // 后处理: color + depth texture samplers
     None                  // 不创建任何descriptor set (仅使用全局set)
 };
 

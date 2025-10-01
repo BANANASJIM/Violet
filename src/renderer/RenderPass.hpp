@@ -94,6 +94,12 @@ public:
     // Access to own framebuffers
     vk::Framebuffer getFramebuffer(uint32_t frameIndex = 0) const;
 
+    // Access to attachment image views (for use as shader inputs)
+    vk::ImageView getColorImageView(uint32_t index = 0) const;
+    vk::ImageView getDepthImageView() const;
+    vk::Image getColorImage(uint32_t index = 0) const;
+    vk::Image getDepthImage() const;
+
     // Static helper for explicit barrier insertion between passes
     static void insertImageBarrier(
         vk::CommandBuffer cmd,

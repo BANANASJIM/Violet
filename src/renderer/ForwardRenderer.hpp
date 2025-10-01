@@ -122,6 +122,13 @@ public:
         DescriptorSetType    materialType,
         const PipelineConfig& config
     );
+    Material* createMaterial(
+        const eastl::string& vertexShader,
+        const eastl::string& fragmentShader,
+        DescriptorSetType    materialType,
+        const PipelineConfig& config,
+        RenderPass*          renderPass
+    );
     MaterialInstance* createMaterialInstance(Material* material);
     MaterialInstance* createPBRMaterialInstance(Material* material);
     MaterialInstance* createUnlitMaterialInstance(Material* material);
@@ -163,6 +170,10 @@ public:
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
+
+    // PostProcess access
+    Material* getPostProcessMaterial() const { return postProcessMaterial; }
+    void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
 
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
@@ -209,6 +220,10 @@ private:
     eastl::vector<eastl::unique_ptr<Pass>> passes;  // Unified pass list (graphics + compute)
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
+
+    // Post-process material for fullscreen quad rendering
+    Material* postProcessMaterial = nullptr;
+    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
 
 };
 

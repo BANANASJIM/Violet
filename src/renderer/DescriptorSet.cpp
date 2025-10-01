@@ -117,6 +117,27 @@ void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, Descr
         poolSizes[0].descriptorCount = maxFramesInFlight;
         poolSizes[1].type            = vk::DescriptorType::eStorageImage;
         poolSizes[1].descriptorCount = maxFramesInFlight;
+    } else if (type == DescriptorSetType::PostProcess) {
+        // PostProcess descriptor layout: 2 texture samplers (color + depth)
+        bindings.resize(2);
+
+        // Binding 0: Color texture from offscreen framebuffer
+        bindings[0].binding            = 0;
+        bindings[0].descriptorCount    = 1;
+        bindings[0].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
+        bindings[0].pImmutableSamplers = nullptr;
+        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eFragment;
+
+        // Binding 1: Depth texture from offscreen framebuffer
+        bindings[1].binding            = 1;
+        bindings[1].descriptorCount    = 1;
+        bindings[1].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
+        bindings[1].pImmutableSamplers = nullptr;
+        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eFragment;
+
+        poolSizes.resize(1);
+        poolSizes[0].type            = vk::DescriptorType::eCombinedImageSampler;
+        poolSizes[0].descriptorCount = maxFramesInFlight * 2;
     } else if (type == DescriptorSetType::None) {
         // 不创建任何descriptor set - 仅使用全局descriptor set
         return;

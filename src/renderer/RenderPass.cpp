@@ -276,7 +276,7 @@ void RenderPass::createFramebuffers(vk::Extent2D extent) {
         depthImageInfo.width = actualExtent.width;
         depthImageInfo.height = actualExtent.height;
         depthImageInfo.format = config.depthAttachment.format;
-        depthImageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+        depthImageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
         depthImageInfo.memoryUsage = MemoryUsage::GPU_ONLY;
         depthImageInfo.debugName = config.name + "_Depth";
 
@@ -359,6 +359,28 @@ vk::Framebuffer RenderPass::getFramebuffer(uint32_t frameIndex) const {
 
     // For now, we only have one framebuffer, but this can be extended
     return framebuffers[0];
+}
+
+vk::ImageView RenderPass::getColorImageView(uint32_t index) const {
+    if (index >= colorImageViews.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return colorImageViews[index];
+}
+
+vk::ImageView RenderPass::getDepthImageView() const {
+    return depthImageView;
+}
+
+vk::Image RenderPass::getColorImage(uint32_t index) const {
+    if (index >= colorImages.size()) {
+        return VK_NULL_HANDLE;
+    }
+    return colorImages[index].image;
+}
+
+vk::Image RenderPass::getDepthImage() const {
+    return depthImage.image;
 }
 
 }

@@ -8,6 +8,7 @@
 #include "renderer/Buffer.hpp"
 
 #include "core/Log.hpp"
+#include "core/FileSystem.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/Camera.hpp"
@@ -52,6 +53,31 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     }
 
     createDefaultPBRTextures();
+
+    // Create post-process material (uses PostProcess pass for pipeline)
+    RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
+    if (postProcessPass) {
+        PipelineConfig postProcessPipelineConfig;
+        postProcessPipelineConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for fullscreen quad
+        postProcessPipelineConfig.enableDepthTest = false;  // No depth test
+        postProcessPipelineConfig.enableDepthWrite = false;
+        postProcessPipelineConfig.useVertexInput = false;  // No vertex buffer for fullscreen quad
+
+        postProcessMaterial = createMaterial(
+            FileSystem::resolveRelativePath("build/shaders/postprocess.vert.spv"),
+            FileSystem::resolveRelativePath("build/shaders/postprocess.frag.spv"),
+            DescriptorSetType::PostProcess,
+            postProcessPipelineConfig,
+            postProcessPass
+        );
+
+        // Create descriptor set for post-process material
+        postProcessDescriptorSet = eastl::make_unique<DescriptorSet>();
+        postProcessDescriptorSet->create(context, 1, DescriptorSetType::PostProcess);  // Only need 1 set (not per-frame)
+
+        // Update descriptor set with offscreen textures
+        updatePostProcessDescriptors();
+    }
 }
 
 void ForwardRenderer::cleanup() {
@@ -149,15 +175,16 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     vk::ClearValue depthClear;
     depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
-    // Main pass - single unified pass for all rendering with depth testing
+    // Pass 1: Main pass - Render scene to offscreen framebuffer
     RenderPassConfig mainPassConfig;
     mainPassConfig.name = "Main";
-    mainPassConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)};
+    mainPassConfig.colorAttachments = {AttachmentDesc::color(swapchainFormat, vk::AttachmentLoadOp::eClear)};
     mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
     mainPassConfig.hasDepth = true;
     mainPassConfig.clearValues = {colorClear, depthClear};
-    mainPassConfig.isSwapchainPass = true;  // Uses swapchain framebuffer for final output
-    mainPassConfig.createOwnFramebuffer = false;  // Uses external swapchain framebuffer with depth
+    mainPassConfig.isSwapchainPass = false;  // Render to offscreen, not swapchain
+    mainPassConfig.createOwnFramebuffer = true;  // Create own offscreen framebuffer
+    mainPassConfig.followsSwapchainSize = true;  // Size follows swapchain
     mainPassConfig.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
     mainPassConfig.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
     mainPassConfig.srcAccess = {};
@@ -181,12 +208,58 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     auto mainPass = eastl::make_unique<RenderPass>();
     mainPass->init(context, mainPassConfig);
 
-    // Create framebuffers for passes that need them
+    // Create offscreen framebuffers
     if (mainPassConfig.createOwnFramebuffer) {
         mainPass->createFramebuffers(currentExtent);
     }
 
     passes.push_back(eastl::move(mainPass));
+
+    // Pass 2: PostProcess pass - Render fullscreen quad to swapchain
+    RenderPassConfig postProcessConfig;
+    postProcessConfig.name = "PostProcess";
+    postProcessConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eDontCare)};
+    postProcessConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
+    postProcessConfig.hasDepth = true;  // Need depth for debug renderer compatibility with swapchain framebuffer
+    postProcessConfig.clearValues = {colorClear, depthClear};
+    postProcessConfig.isSwapchainPass = true;  // Render to swapchain
+    postProcessConfig.createOwnFramebuffer = false;  // Use external swapchain framebuffer
+    postProcessConfig.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    postProcessConfig.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    postProcessConfig.srcAccess = {};
+    postProcessConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    postProcessConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
+        setViewport(cmd, currentExtent);
+
+        if (!postProcessMaterial || !postProcessMaterial->getPipeline()) {
+            return;
+        }
+
+        // Bind post-process pipeline
+        postProcessMaterial->getPipeline()->bind(cmd);
+
+        // Bind descriptor set with offscreen textures (set 1)
+        if (postProcessDescriptorSet) {
+            vk::DescriptorSet descSet = postProcessDescriptorSet->getDescriptorSet(0);
+            cmd.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                postProcessMaterial->getPipelineLayout(),
+                1,  // MATERIAL_SET = 1
+                1,
+                &descSet,
+                0,
+                nullptr
+            );
+        }
+
+        // Draw fullscreen quad (3 vertices, no vertex buffer)
+        cmd.draw(3, 1, 0, 0);
+    };
+
+    auto postProcessPass = eastl::make_unique<RenderPass>();
+    postProcessPass->init(context, postProcessConfig);
+
+    passes.push_back(eastl::move(postProcessPass));
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
@@ -488,25 +561,26 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     return createMaterial(vertexShader, fragmentShader, DescriptorSetType::MaterialTextures);
 }
 
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType) {
-    // Creating material with specified shaders and type
-
+// Core implementation with all parameters
+Material* ForwardRenderer::createMaterial(
+    const eastl::string& vertexShader,
+    const eastl::string& fragmentShader,
+    DescriptorSetType materialType,
+    const PipelineConfig& config,
+    RenderPass* renderPass
+) {
     auto material = eastl::make_unique<Material>();
 
     try {
-        // Material creates its descriptor set layout based on type
         material->create(context, materialType);
-        // Material descriptor set layout created
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to create material with descriptor set type {}: {}", static_cast<int>(materialType), e.what());
         return nullptr;
     }
 
-    // Create pipeline using the final pass RenderPass
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, getRenderPass(0), globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader);
-        // Pipeline initialized
+        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with shaders: '{}', '{}' - Error: {}",
             vertexShader.c_str(), fragmentShader.c_str(), e.what());
@@ -514,7 +588,6 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
         return nullptr;
     }
 
-    // Validate that the pipeline was created properly
     if (!pipeline->getPipeline()) {
         violet::Log::error("ForwardRenderer", "Pipeline creation failed - null pipeline object");
         delete pipeline;
@@ -526,50 +599,18 @@ Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, con
     Material* ptr = material.get();
     materials.push_back(eastl::move(material));
 
-    // Material created successfully
     return ptr;
 }
 
+// Convenience overload: default config and render pass
+Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType) {
+    PipelineConfig defaultConfig;
+    return createMaterial(vertexShader, fragmentShader, materialType, defaultConfig, getRenderPass(0));
+}
+
+// Convenience overload: custom config, default render pass
 Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType, const PipelineConfig& config) {
-    // Creating material with specified shaders, type, and pipeline config
-
-    auto material = eastl::make_unique<Material>();
-
-    try {
-        // Material creates its descriptor set layout based on type
-        material->create(context, materialType);
-        // Material descriptor set layout created
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to create material with descriptor set type {}: {}", static_cast<int>(materialType), e.what());
-        return nullptr;
-    }
-
-    // Create pipeline with custom config using the final pass RenderPass
-    auto pipeline = new GraphicsPipeline();
-    try {
-        pipeline->init(context, getRenderPass(0), globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
-        // Pipeline initialized with custom config
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with custom config for shaders: '{}', '{}' - Error: {}",
-            vertexShader.c_str(), fragmentShader.c_str(), e.what());
-        delete pipeline;
-        return nullptr;
-    }
-
-    // Validate that the pipeline was created properly
-    if (!pipeline->getPipeline()) {
-        violet::Log::error("ForwardRenderer", "Pipeline creation failed with custom config - null pipeline object");
-        delete pipeline;
-        return nullptr;
-    }
-
-    material->pipeline = pipeline;
-
-    Material* ptr = material.get();
-    materials.push_back(eastl::move(material));
-
-    // Material created successfully with custom config
-    return ptr;
+    return createMaterial(vertexShader, fragmentShader, materialType, config, getRenderPass(0));
 }
 
 MaterialInstance* ForwardRenderer::createMaterialInstance(Material* material) {
@@ -834,19 +875,135 @@ void ForwardRenderer::createDefaultPBRTextures() {
 }
 
 
-void ForwardRenderer::insertPassTransition(vk::CommandBuffer cmd, size_t passIndex) {
-    // Explicit pass-to-pass transitions can be added here if needed
-    // For now, attachment layout transitions handle most cases
-    // Future use: shadow maps, intermediate textures, etc.
+void ForwardRenderer::updatePostProcessDescriptors() {
+    if (!postProcessDescriptorSet || passes.size() < 2) {
+        return;
+    }
 
-    // Example for future shadow pass:
-    // if (passIndex == 1 && passDescriptors[0].name == "Shadow") {
-    //     RenderPass::insertMemoryBarrier(cmd,
-    //         vk::PipelineStageFlagBits::eColorAttachmentOutput,
-    //         vk::PipelineStageFlagBits::eFragmentShader,
-    //         vk::AccessFlagBits::eColorAttachmentWrite,
-    //         vk::AccessFlagBits::eShaderRead);
-    // }
+    RenderPass* mainPass = getRenderPass(0);
+    if (!mainPass) {
+        return;
+    }
+
+    // Get offscreen textures from Main pass
+    vk::ImageView colorView = mainPass->getColorImageView(0);
+    vk::ImageView depthView = mainPass->getDepthImageView();
+
+    if (!colorView || !depthView) {
+        violet::Log::warn("Renderer", "Failed to get offscreen textures for post-process");
+        return;
+    }
+
+    // Create sampler for offscreen textures
+    vk::SamplerCreateInfo samplerInfo{};
+    samplerInfo.magFilter = vk::Filter::eLinear;
+    samplerInfo.minFilter = vk::Filter::eLinear;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.anisotropyEnable = false;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = vk::BorderColor::eFloatOpaqueBlack;
+    samplerInfo.unnormalizedCoordinates = false;
+    samplerInfo.compareEnable = false;
+    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+
+    vk::Sampler sampler = context->getDevice().createSampler(samplerInfo);
+
+    // Update descriptor set with color texture (binding 0)
+    vk::DescriptorImageInfo colorImageInfo{};
+    colorImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    colorImageInfo.imageView = colorView;
+    colorImageInfo.sampler = sampler;
+
+    vk::WriteDescriptorSet colorWrite{};
+    colorWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
+    colorWrite.dstBinding = 0;
+    colorWrite.dstArrayElement = 0;
+    colorWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    colorWrite.descriptorCount = 1;
+    colorWrite.pImageInfo = &colorImageInfo;
+
+    // Update descriptor set with depth texture (binding 1)
+    vk::DescriptorImageInfo depthImageInfo{};
+    depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    depthImageInfo.imageView = depthView;
+    depthImageInfo.sampler = sampler;
+
+    vk::WriteDescriptorSet depthWrite{};
+    depthWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
+    depthWrite.dstBinding = 1;
+    depthWrite.dstArrayElement = 0;
+    depthWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    depthWrite.descriptorCount = 1;
+    depthWrite.pImageInfo = &depthImageInfo;
+
+    eastl::array<vk::WriteDescriptorSet, 2> writes = {colorWrite, depthWrite};
+    context->getDevice().updateDescriptorSets(2, writes.data(), 0, nullptr);
+}
+
+void ForwardRenderer::insertPassTransition(vk::CommandBuffer cmd, size_t passIndex) {
+    // Transition from Main pass (index 0) to PostProcess pass (index 1)
+    if (passIndex == 1 && passes.size() >= 2) {
+        RenderPass* mainPass = getRenderPass(0);
+        if (!mainPass) return;
+
+        // Get offscreen color and depth images
+        vk::Image colorImage = mainPass->getColorImage(0);
+        vk::Image depthImage = mainPass->getDepthImage();
+
+        // Transition color attachment from write to read
+        if (colorImage) {
+            vk::ImageMemoryBarrier colorBarrier{};
+            colorBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            colorBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            colorBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            colorBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            colorBarrier.image = colorImage;
+            colorBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+            colorBarrier.subresourceRange.baseMipLevel = 0;
+            colorBarrier.subresourceRange.levelCount = 1;
+            colorBarrier.subresourceRange.baseArrayLayer = 0;
+            colorBarrier.subresourceRange.layerCount = 1;
+            colorBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+            colorBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                {},
+                {},
+                {},
+                colorBarrier
+            );
+        }
+
+        // Transition depth attachment from write to read
+        if (depthImage) {
+            vk::ImageMemoryBarrier depthBarrier{};
+            depthBarrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+            depthBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            depthBarrier.image = depthImage;
+            depthBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+            depthBarrier.subresourceRange.baseMipLevel = 0;
+            depthBarrier.subresourceRange.levelCount = 1;
+            depthBarrier.subresourceRange.baseArrayLayer = 0;
+            depthBarrier.subresourceRange.layerCount = 1;
+            depthBarrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            depthBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+            cmd.pipelineBarrier(
+                vk::PipelineStageFlagBits::eLateFragmentTests,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                {},
+                {},
+                {},
+                depthBarrier
+            );
+        }
+    }
 }
 
 } // namespace violet
