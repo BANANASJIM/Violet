@@ -63,6 +63,13 @@ void VulkanContext::cleanup() {
 }
 
 void VulkanContext::createInstance() {
+#ifdef __APPLE__
+    // Enable MoltenVK Metal argument buffers for bindless support
+    // This is required for descriptor indexing on macOS
+    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "1", 1);
+    violet::Log::info("Renderer", "Enabled MoltenVK Metal argument buffers for bindless support");
+#endif
+
     vk::ApplicationInfo appInfo;
     appInfo.pApplicationName = "Violet Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -73,11 +80,11 @@ void VulkanContext::createInstance() {
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     eastl::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    
+
     if (enableValidationLayers) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
-    
+
 #ifdef __APPLE__
     extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
     extensions.push_back("VK_KHR_get_physical_device_properties2");
@@ -175,13 +182,17 @@ void VulkanContext::createLogicalDevice() {
     
     vk::PhysicalDeviceVulkan13Features features13;
     features13.dynamicRendering = VK_TRUE;
-    
+
     vk::PhysicalDeviceVulkan12Features features12;
     features12.pNext = &features13;
-    features12.descriptorIndexing = VK_TRUE;
+    features12.timelineSemaphore = VK_TRUE;
+
+    // Bindless descriptor indexing features (part of Vulkan 1.2 core)
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
-    features12.timelineSemaphore = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     
     vk::DeviceCreateInfo createInfo;
     createInfo.pNext = &features12;
