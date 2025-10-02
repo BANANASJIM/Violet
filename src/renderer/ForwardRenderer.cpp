@@ -244,7 +244,7 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     RenderPassConfig mainPassConfig;
     mainPassConfig.name = "Main";
     mainPassConfig.colorAttachments = {AttachmentDesc::color(swapchainFormat, vk::AttachmentLoadOp::eClear)};
-    mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
+    mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore);
     mainPassConfig.hasDepth = true;
     mainPassConfig.clearValues = {colorClear, depthClear};
     mainPassConfig.isSwapchainPass = false;  // Render to offscreen, not swapchain
