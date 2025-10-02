@@ -19,6 +19,10 @@ struct PipelineConfig {
     bool enableDepthWrite = true;
     bool enableBlending = false;
     bool useVertexInput = true;  // Set to false for full-screen effects like skybox
+    eastl::vector<vk::PushConstantRange> pushConstantRanges;  // Custom push constant ranges
+    eastl::vector<vk::DescriptorSetLayout> additionalDescriptorSets;  // Additional descriptor sets (e.g., bindless)
+    vk::DescriptorSetLayout globalDescriptorSetLayout = nullptr;  // Global descriptor set layout from DescriptorManager
+    vk::DescriptorSetLayout materialDescriptorSetLayout = nullptr;  // Material descriptor set layout from DescriptorManager
 };
 
 class GraphicsPipeline : public PipelineBase {

@@ -13,6 +13,7 @@ class GraphicsPipeline;
 class Texture;
 class UniformBuffer;
 class DescriptorSet;
+class DescriptorManager;
 
 class Material {
 public:
@@ -26,16 +27,13 @@ public:
     Material& operator=(Material&&) = default;
 
     void create(VulkanContext* context);
-    void create(VulkanContext* context, DescriptorSetType materialType);
     void cleanup();
 
     GraphicsPipeline* getPipeline() const { return pipeline; }
     vk::PipelineLayout getPipelineLayout() const;
 
-    // Material管理自己的descriptor set layout
-    vk::DescriptorSetLayout getDescriptorSetLayout() const;
-    void createDescriptorSetLayout();
-    void createDescriptorSetLayout(DescriptorSetType materialType);
+    // NOTE: Descriptor set layouts are now managed centrally by DescriptorManager
+    // Material no longer creates or owns descriptor set layouts
 
     enum class AlphaMode {
         Opaque,
@@ -55,9 +53,6 @@ private:
     VulkanContext* context = nullptr;
     AlphaMode alphaMode = AlphaMode::Opaque;
     bool doubleSided = false;
-
-    // Material管理自己的descriptor set layout
-    vk::DescriptorSetLayout materialDescriptorSetLayout;
 };
 
 struct PBRMaterialData {
@@ -85,22 +80,18 @@ public:
     MaterialInstance(MaterialInstance&&) = default;
     MaterialInstance& operator=(MaterialInstance&&) = default;
 
-    virtual void create(VulkanContext* context, Material* material) = 0;
+    virtual void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) = 0;
     virtual void cleanup() = 0;
-    virtual void setBaseColorTexture(Texture* texture) = 0;
-    virtual void updateDescriptorSet(uint32_t frameIndex) = 0;
-    virtual void createDescriptorSet(uint32_t maxFramesInFlight) = 0;
 
-    DescriptorSet* getDescriptorSet() const { return descriptorSet; }
+    // Bindless API - material ID points to materials[materialID] in SSBO
+    virtual uint32_t getMaterialID() const = 0;
+
     Material* getMaterial() const { return material; }
-    void setDirty(bool isDirty) { dirty = isDirty; }
 
 protected:
     VulkanContext* context = nullptr;
     Material* material = nullptr;
-    DescriptorSet* descriptorSet = nullptr;
-    UniformBuffer* uniformBuffer = nullptr;
-    bool dirty = true;
+    DescriptorManager* descriptorManager = nullptr;
 };
 
 class PBRMaterialInstance : public MaterialInstance {
@@ -108,33 +99,45 @@ public:
     PBRMaterialInstance() = default;
     ~PBRMaterialInstance();
 
-    void create(VulkanContext* context, Material* material) override;
+    void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) override;
     void cleanup() override;
-    void setBaseColorTexture(Texture* texture) override { baseColorTexture = texture; dirty = true; }
-    void updateDescriptorSet(uint32_t frameIndex) override;
-    void createDescriptorSet(uint32_t maxFramesInFlight) override;
 
-    void setMetallicRoughnessTexture(Texture* texture) { metallicRoughnessTexture = texture; dirty = true; }
-    void setNormalTexture(Texture* texture) { normalTexture = texture; dirty = true; }
-    void setOcclusionTexture(Texture* texture) { occlusionTexture = texture; dirty = true; }
-    void setEmissiveTexture(Texture* texture) { emissiveTexture = texture; dirty = true; }
+    // Texture setters - automatically update materialID's texture indices in SSBO
+    void setBaseColorTexture(Texture* texture);
+    void setMetallicRoughnessTexture(Texture* texture);
+    void setNormalTexture(Texture* texture);
+    void setOcclusionTexture(Texture* texture);
+    void setEmissiveTexture(Texture* texture);
 
+    // Texture getters
     Texture* getBaseColorTexture() const { return baseColorTexture; }
     Texture* getMetallicRoughnessTexture() const { return metallicRoughnessTexture; }
     Texture* getNormalTexture() const { return normalTexture; }
     Texture* getOcclusionTexture() const { return occlusionTexture; }
     Texture* getEmissiveTexture() const { return emissiveTexture; }
 
-    PBRMaterialData& getData() { dirty = true; return data; }
+    // Material data access
+    PBRMaterialData& getData() { return data; }
     const PBRMaterialData& getData() const { return data; }
+
+    // Update material parameters (not textures) in SSBO
+    void updateMaterialData();
+
+    // Bindless API implementation
+    uint32_t getMaterialID() const override { return materialID; }
 
 private:
     PBRMaterialData data;
+
+    // Texture pointers (for reference)
     Texture* baseColorTexture = nullptr;
     Texture* metallicRoughnessTexture = nullptr;
     Texture* normalTexture = nullptr;
     Texture* occlusionTexture = nullptr;
     Texture* emissiveTexture = nullptr;
+
+    // Material ID - index into materials[] SSBO
+    uint32_t materialID = 0;
 };
 
 class UnlitMaterialInstance : public MaterialInstance {
@@ -142,20 +145,33 @@ public:
     UnlitMaterialInstance() = default;
     ~UnlitMaterialInstance();
 
-    void create(VulkanContext* context, Material* material) override;
+    void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) override;
     void cleanup() override;
-    void setBaseColorTexture(Texture* texture) override { baseColorTexture = texture; dirty = true; }
-    void updateDescriptorSet(uint32_t frameIndex) override;
-    void createDescriptorSet(uint32_t maxFramesInFlight) override;
 
+    // Texture setter - automatically update materialID's texture index in SSBO
+    void setBaseColorTexture(Texture* texture);
+
+    // Texture getter
     Texture* getBaseColorTexture() const { return baseColorTexture; }
 
-    UnlitMaterialData& getData() { dirty = true; return data; }
+    // Material data access
+    UnlitMaterialData& getData() { return data; }
     const UnlitMaterialData& getData() const { return data; }
+
+    // Update material parameters in SSBO
+    void updateMaterialData();
+
+    // Bindless API implementation
+    uint32_t getMaterialID() const override { return materialID; }
 
 private:
     UnlitMaterialData data;
+
+    // Texture pointer (for reference)
     Texture* baseColorTexture = nullptr;
+
+    // Material ID - index into materials[] SSBO
+    uint32_t materialID = 0;
 };
 
 

@@ -32,7 +32,6 @@ private:
     void initializeScene();
     void loadAsset(const eastl::string& path);
     void loadAssetAtPosition(const eastl::string& path, const glm::vec3& position);
-    void createTestCube();
 
 private:
     World world;

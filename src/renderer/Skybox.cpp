@@ -69,7 +69,7 @@ void Skybox::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* fwdRender
     material = renderer->createMaterial(
         FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
         FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        DescriptorSetType::GlobalUniforms, skyboxConfig);
+        "Global", skyboxConfig);
 
     violet::Log::info("Renderer", "Skybox initialized with material");
 }

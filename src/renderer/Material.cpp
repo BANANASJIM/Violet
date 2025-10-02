@@ -2,6 +2,7 @@
 #include "renderer/VulkanContext.hpp"
 #include "renderer/GraphicsPipeline.hpp"
 #include "renderer/DescriptorSet.hpp"
+#include "renderer/DescriptorManager.hpp"
 #include "renderer/UniformBuffer.hpp"
 #include "renderer/Texture.hpp"
 #include "core/Log.hpp"
@@ -15,99 +16,14 @@ Material::~Material() {
 
 void Material::create(VulkanContext* ctx) {
     context = ctx;
-    createDescriptorSetLayout();
-}
-
-void Material::create(VulkanContext* ctx, DescriptorSetType materialType) {
-    context = ctx;
-    createDescriptorSetLayout(materialType);
-}
-
-void Material::createDescriptorSetLayout() {
-    // Default to PBR material layout
-    createDescriptorSetLayout(DescriptorSetType::MaterialTextures);
-}
-
-void Material::createDescriptorSetLayout(DescriptorSetType materialType) {
-    eastl::vector<vk::DescriptorSetLayoutBinding> bindings;
-
-    if (materialType == DescriptorSetType::MaterialTextures) {
-        // PBR Material layout: UBO + 5 textures
-        // Binding 0: Material UBO
-        vk::DescriptorSetLayoutBinding uboBinding;
-        uboBinding.binding = 0;
-        uboBinding.descriptorCount = 1;
-        uboBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
-        uboBinding.pImmutableSamplers = nullptr;
-        uboBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-        bindings.push_back(uboBinding);
-
-        // Binding 1-5: Textures (Base color, Metallic-roughness, Normal, Occlusion, Emissive)
-        for (uint32_t i = 1; i <= 5; ++i) {
-            vk::DescriptorSetLayoutBinding textureBinding;
-            textureBinding.binding = i;
-            textureBinding.descriptorCount = 1;
-            textureBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-            textureBinding.pImmutableSamplers = nullptr;
-            textureBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-            bindings.push_back(textureBinding);
-        }
-    } else if (materialType == DescriptorSetType::UnlitMaterialTextures) {
-        // Unlit Material layout: UBO + 1 texture
-        // Binding 0: Material UBO
-        vk::DescriptorSetLayoutBinding uboBinding;
-        uboBinding.binding = 0;
-        uboBinding.descriptorCount = 1;
-        uboBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
-        uboBinding.pImmutableSamplers = nullptr;
-        uboBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-        bindings.push_back(uboBinding);
-
-        // Binding 1: Base color texture
-        vk::DescriptorSetLayoutBinding textureBinding;
-        textureBinding.binding = 1;
-        textureBinding.descriptorCount = 1;
-        textureBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        textureBinding.pImmutableSamplers = nullptr;
-        textureBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-        bindings.push_back(textureBinding);
-    } else if (materialType == DescriptorSetType::PostProcess) {
-        // PostProcess layout: 2 textures (color + depth from offscreen framebuffer)
-        // Binding 0: Color texture
-        vk::DescriptorSetLayoutBinding colorBinding;
-        colorBinding.binding = 0;
-        colorBinding.descriptorCount = 1;
-        colorBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        colorBinding.pImmutableSamplers = nullptr;
-        colorBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-        bindings.push_back(colorBinding);
-
-        // Binding 1: Depth texture
-        vk::DescriptorSetLayoutBinding depthBinding;
-        depthBinding.binding = 1;
-        depthBinding.descriptorCount = 1;
-        depthBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        depthBinding.pImmutableSamplers = nullptr;
-        depthBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-        bindings.push_back(depthBinding);
-    } else if (materialType == DescriptorSetType::None) {
-        // 不创建任何descriptor set layout - 仅使用全局set
-        materialDescriptorSetLayout = nullptr;
-        return;
-    }
-
-    vk::DescriptorSetLayoutCreateInfo layoutInfo;
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-
-    materialDescriptorSetLayout = context->getDevice().createDescriptorSetLayout(layoutInfo);
+    // NOTE: Descriptor set layout creation removed
+    // Layouts are now managed centrally by DescriptorManager
+    // Material no longer owns descriptor set layouts
 }
 
 void Material::cleanup() {
-    if (materialDescriptorSetLayout) {
-        context->getDevice().destroyDescriptorSetLayout(materialDescriptorSetLayout);
-        materialDescriptorSetLayout = nullptr;
-    }
+    // NOTE: Material no longer owns descriptor set layouts
+    // Layouts are managed centrally by DescriptorManager
 
     if (pipeline) {
         pipeline->cleanup();
@@ -120,78 +36,182 @@ vk::PipelineLayout Material::getPipelineLayout() const {
     return pipeline ? pipeline->getPipelineLayout() : vk::PipelineLayout{};
 }
 
-vk::DescriptorSetLayout Material::getDescriptorSetLayout() const {
-    return materialDescriptorSetLayout;
-}
-
 // PBRMaterialInstance implementation
 PBRMaterialInstance::~PBRMaterialInstance() {
     cleanup();
 }
 
-void PBRMaterialInstance::create(VulkanContext* ctx, Material* mat) {
+void PBRMaterialInstance::create(VulkanContext* ctx, Material* mat, DescriptorManager* descMgr) {
     context = ctx;
     material = mat;
+    descriptorManager = descMgr;
 
-    // Initialize material instance data
+    // Initialize material data with defaults
     data = PBRMaterialData{};
 
-    // Create uniform buffer for material data
-    uniformBuffer = new UniformBuffer();
-    uniformBuffer->create(context, sizeof(PBRMaterialData));
-}
+    // Allocate material ID in SSBO (all fields initialized to 0/default)
+    DescriptorManager::MaterialData materialData{
+        .baseColorFactor = data.baseColorFactor,
+        .metallicFactor = data.metallicFactor,
+        .roughnessFactor = data.roughnessFactor,
+        .normalScale = data.normalScale,
+        .occlusionStrength = data.occlusionStrength,
+        .emissiveFactor = data.emissiveFactor,
+        .alphaCutoff = data.alphaCutoff,
+        // Texture indices default to 0 (no texture)
+        .baseColorTexIndex = 0,
+        .metallicRoughnessTexIndex = 0,
+        .normalTexIndex = 0,
+        .occlusionTexIndex = 0,
+        .emissiveTexIndex = 0
+    };
 
-void PBRMaterialInstance::createDescriptorSet(uint32_t maxFramesInFlight) {
-    // 使用Material的descriptor set layout创建descriptor set实例
-    descriptorSet = new DescriptorSet();
-    descriptorSet->create(context, maxFramesInFlight, DescriptorSetType::MaterialTextures);
+    materialID = descriptorManager->allocateMaterialData(materialData);
+    if (materialID == 0) {
+        violet::Log::error("Renderer", "Failed to allocate material ID for PBRMaterialInstance");
+    }
 }
 
 void PBRMaterialInstance::cleanup() {
-    if (descriptorSet) {
-        descriptorSet->cleanup();
-        delete descriptorSet;
-        descriptorSet = nullptr;
+    if (!descriptorManager || materialID == 0) {
+        return;
     }
 
-    if (uniformBuffer) {
-        uniformBuffer->cleanup();
-        delete uniformBuffer;
-        uniformBuffer = nullptr;
+    // Get current material data to retrieve texture indices
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (matData) {
+        // Free all bindless texture indices
+        if (matData->baseColorTexIndex != 0) {
+            descriptorManager->freeBindlessTexture(matData->baseColorTexIndex);
+        }
+        if (matData->metallicRoughnessTexIndex != 0) {
+            descriptorManager->freeBindlessTexture(matData->metallicRoughnessTexIndex);
+        }
+        if (matData->normalTexIndex != 0) {
+            descriptorManager->freeBindlessTexture(matData->normalTexIndex);
+        }
+        if (matData->occlusionTexIndex != 0) {
+            descriptorManager->freeBindlessTexture(matData->occlusionTexIndex);
+        }
+        if (matData->emissiveTexIndex != 0) {
+            descriptorManager->freeBindlessTexture(matData->emissiveTexIndex);
+        }
     }
+
+    // Free material ID slot
+    descriptorManager->freeMaterialData(materialID);
+    materialID = 0;
 }
 
-void PBRMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
-    if (!descriptorSet) {
-        violet::Log::error("Renderer", "PBRMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
+void PBRMaterialInstance::setBaseColorTexture(Texture* texture) {
+    if (baseColorTexture == texture || !descriptorManager || materialID == 0) return;
+
+    // Get current material data
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    // Free old texture index
+    if (matData->baseColorTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->baseColorTexIndex);
+    }
+
+    // Update texture pointer
+    baseColorTexture = texture;
+
+    // Allocate new texture index and update SSBO
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.baseColorTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void PBRMaterialInstance::setMetallicRoughnessTexture(Texture* texture) {
+    if (metallicRoughnessTexture == texture || !descriptorManager || materialID == 0) return;
+
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    if (matData->metallicRoughnessTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->metallicRoughnessTexIndex);
+    }
+
+    metallicRoughnessTexture = texture;
+
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.metallicRoughnessTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void PBRMaterialInstance::setNormalTexture(Texture* texture) {
+    if (normalTexture == texture || !descriptorManager || materialID == 0) return;
+
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    if (matData->normalTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->normalTexIndex);
+    }
+
+    normalTexture = texture;
+
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.normalTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void PBRMaterialInstance::setOcclusionTexture(Texture* texture) {
+    if (occlusionTexture == texture || !descriptorManager || materialID == 0) return;
+
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    if (matData->occlusionTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->occlusionTexIndex);
+    }
+
+    occlusionTexture = texture;
+
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.occlusionTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void PBRMaterialInstance::setEmissiveTexture(Texture* texture) {
+    if (emissiveTexture == texture || !descriptorManager || materialID == 0) return;
+
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    if (matData->emissiveTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->emissiveTexIndex);
+    }
+
+    emissiveTexture = texture;
+
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.emissiveTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void PBRMaterialInstance::updateMaterialData() {
+    if (!descriptorManager || materialID == 0) {
         return;
     }
 
-    if (!dirty) {
-        return;
-    }
+    // Get current material data to preserve texture indices
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
 
-    // Descriptor set updates happen every frame, no need to log
+    // Update only material parameters, keep texture indices unchanged
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.baseColorFactor = data.baseColorFactor;
+    updatedData.metallicFactor = data.metallicFactor;
+    updatedData.roughnessFactor = data.roughnessFactor;
+    updatedData.normalScale = data.normalScale;
+    updatedData.occlusionStrength = data.occlusionStrength;
+    updatedData.emissiveFactor = data.emissiveFactor;
+    updatedData.alphaCutoff = data.alphaCutoff;
 
-    // Update uniform buffer
-    if (uniformBuffer) {
-        uniformBuffer->update(&data, sizeof(PBRMaterialData));
-        descriptorSet->updateUniformBuffer(frameIndex, uniformBuffer, 0);
-    } else {
-        violet::Log::error("Renderer", "PBRMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
-        return; // Cannot continue without uniform buffer
-    }
-
-    // Force binding all texture slots to avoid descriptor set inconsistencies
-    // This ensures every binding has a valid texture even if some are null
-    descriptorSet->updateTexture(frameIndex, baseColorTexture, 1);
-    descriptorSet->updateTexture(frameIndex, metallicRoughnessTexture, 2);
-    descriptorSet->updateTexture(frameIndex, normalTexture, 3);
-    descriptorSet->updateTexture(frameIndex, occlusionTexture, 4);
-    descriptorSet->updateTexture(frameIndex, emissiveTexture, 5);
-
-    dirty = false;
-    // Update completed
+    descriptorManager->updateMaterialData(materialID, updatedData);
 }
 
 // UnlitMaterialInstance implementation
@@ -199,68 +219,84 @@ UnlitMaterialInstance::~UnlitMaterialInstance() {
     cleanup();
 }
 
-void UnlitMaterialInstance::create(VulkanContext* ctx, Material* mat) {
+void UnlitMaterialInstance::create(VulkanContext* ctx, Material* mat, DescriptorManager* descMgr) {
     context = ctx;
     material = mat;
+    descriptorManager = descMgr;
 
-    // Initialize material instance data
+    // Initialize material data with defaults
     data = UnlitMaterialData{};
 
-    // Create uniform buffer for material data
-    uniformBuffer = new UniformBuffer();
-    uniformBuffer->create(context, sizeof(UnlitMaterialData));
-}
+    // Allocate material ID in SSBO
+    DescriptorManager::MaterialData materialData{
+        .baseColorFactor = data.baseColor,
+        .metallicFactor = 0.0f,
+        .roughnessFactor = 1.0f,
+        .normalScale = 1.0f,
+        .occlusionStrength = 1.0f,
+        .emissiveFactor = glm::vec3(0.0f),
+        .alphaCutoff = 0.5f,
+        // Texture index defaults to 0
+        .baseColorTexIndex = 0
+    };
 
-void UnlitMaterialInstance::createDescriptorSet(uint32_t maxFramesInFlight) {
-    // 使用Unlit材质的descriptor set layout创建descriptor set实例
-    descriptorSet = new DescriptorSet();
-    descriptorSet->create(context, maxFramesInFlight, DescriptorSetType::UnlitMaterialTextures);
+    materialID = descriptorManager->allocateMaterialData(materialData);
+    if (materialID == 0) {
+        violet::Log::error("Renderer", "Failed to allocate material ID for UnlitMaterialInstance");
+    }
 }
 
 void UnlitMaterialInstance::cleanup() {
-    if (descriptorSet) {
-        descriptorSet->cleanup();
-        delete descriptorSet;
-        descriptorSet = nullptr;
+    if (!descriptorManager || materialID == 0) {
+        return;
     }
 
-    if (uniformBuffer) {
-        uniformBuffer->cleanup();
-        delete uniformBuffer;
-        uniformBuffer = nullptr;
+    // Get current material data to retrieve texture index
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (matData && matData->baseColorTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->baseColorTexIndex);
     }
+
+    // Free material ID slot
+    descriptorManager->freeMaterialData(materialID);
+    materialID = 0;
 }
 
-void UnlitMaterialInstance::updateDescriptorSet(uint32_t frameIndex) {
-    if (!descriptorSet) {
-        violet::Log::error("Renderer", "UnlitMaterialInstance: descriptorSet is null - cannot update for frameIndex {}", frameIndex);
+void UnlitMaterialInstance::setBaseColorTexture(Texture* texture) {
+    if (baseColorTexture == texture || !descriptorManager || materialID == 0) return;
+
+    // Get current material data
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
+
+    // Free old texture index
+    if (matData->baseColorTexIndex != 0) {
+        descriptorManager->freeBindlessTexture(matData->baseColorTexIndex);
+    }
+
+    // Update texture pointer
+    baseColorTexture = texture;
+
+    // Allocate new texture index and update SSBO
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.baseColorTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
+    descriptorManager->updateMaterialData(materialID, updatedData);
+}
+
+void UnlitMaterialInstance::updateMaterialData() {
+    if (!descriptorManager || materialID == 0) {
         return;
     }
 
-    if (!dirty) {
-        return;
-    }
+    // Get current material data to preserve texture index
+    const auto* matData = descriptorManager->getMaterialData(materialID);
+    if (!matData) return;
 
-    // Descriptor set updates happen every frame, no need to log
+    // Update only material parameters, keep texture index unchanged
+    DescriptorManager::MaterialData updatedData = *matData;
+    updatedData.baseColorFactor = data.baseColor;
 
-    // Update uniform buffer
-    if (uniformBuffer) {
-        uniformBuffer->update(&data, sizeof(UnlitMaterialData));
-        descriptorSet->updateUniformBuffer(frameIndex, uniformBuffer, 0);
-    } else {
-        violet::Log::error("Renderer", "UnlitMaterialInstance: uniformBuffer is null for frameIndex {}", frameIndex);
-        return;
-    }
-
-    // Update base color texture only
-    if (baseColorTexture) {
-        descriptorSet->updateTexture(frameIndex, baseColorTexture, 1);
-    } else {
-        // Using default texture
-    }
-
-    dirty = false;
-    // Update completed
+    descriptorManager->updateMaterialData(materialID, updatedData);
 }
 
 } // namespace violet

@@ -9,6 +9,7 @@
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
+#include "core/Timer.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/Camera.hpp"
@@ -30,16 +31,22 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     context = ctx;
     maxFramesInFlight = framesInFlight;
 
+    // Initialize descriptor manager first
+    descriptorManager.init(context, maxFramesInFlight);
+
+    // Declare all descriptor set layouts (declarative registration)
+    registerDescriptorLayouts();
+
     // Setup multi-pass system
     setupPasses(swapchainFormat);
 
     // Initialize subsystems - use first graphics pass for components that need RenderPass
-    globalUniforms.init(context, maxFramesInFlight);
+    globalUniforms.init(context, &descriptorManager, maxFramesInFlight);
 
     // Find first graphics pass for initialization
     RenderPass* firstRenderPass = getRenderPass(0);
     if (firstRenderPass) {
-        debugRenderer.init(context, firstRenderPass, &globalUniforms, maxFramesInFlight);
+        debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, maxFramesInFlight);
         environmentMap.init(context, firstRenderPass, this);
     }
 
@@ -54,26 +61,66 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
 
     createDefaultPBRTextures();
 
+    // Initialize bindless through DescriptorManager
+    descriptorManager.initBindless(1024);
+
+    // Initialize material data SSBO for bindless architecture
+    descriptorManager.initMaterialDataBuffer(1024);
+
+    // Register default textures in bindless array
+    if (defaultWhiteTexture) {
+        uint32_t whiteTexIndex = descriptorManager.allocateBindlessTexture(defaultWhiteTexture);
+        violet::Log::info("Renderer", "Registered default white texture at bindless index {}", whiteTexIndex);
+    }
+
+    // Create PBR bindless material (uses bindless texture array + material data SSBO)
+    RenderPass* mainPass = getRenderPass(0);
+    if (mainPass) {
+        PipelineConfig bindlessConfig;
+        bindlessConfig.pushConstantRanges.push_back(vk::PushConstantRange{
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            0,
+            sizeof(BindlessPushConstants)
+        });
+
+        // Add bindless descriptor set layouts (set 1: bindless textures, set 2: material data SSBO)
+        bindlessConfig.additionalDescriptorSets.push_back(descriptorManager.getLayout("Bindless"));
+        bindlessConfig.additionalDescriptorSets.push_back(descriptorManager.getLayout("MaterialData"));
+
+        pbrBindlessMaterial = createMaterial(
+            FileSystem::resolveRelativePath("build/shaders/pbr_bindless.vert.spv"),
+            FileSystem::resolveRelativePath("build/shaders/pbr_bindless.frag.spv"),
+            "",  // No traditional material layout needed
+            bindlessConfig,
+            mainPass
+        );
+
+        if (pbrBindlessMaterial) {
+            violet::Log::info("Renderer", "PBR bindless material created successfully");
+        }
+    }
+
     // Create post-process material (uses PostProcess pass for pipeline)
     RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
     if (postProcessPass) {
         PipelineConfig postProcessPipelineConfig;
         postProcessPipelineConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for fullscreen quad
         postProcessPipelineConfig.enableDepthTest = false;  // No depth test
-        postProcessPipelineConfig.enableDepthWrite = false;
+        postProcessPipelineConfig.enableDepthWrite = true;
         postProcessPipelineConfig.useVertexInput = false;  // No vertex buffer for fullscreen quad
 
         postProcessMaterial = createMaterial(
             FileSystem::resolveRelativePath("build/shaders/postprocess.vert.spv"),
             FileSystem::resolveRelativePath("build/shaders/postprocess.frag.spv"),
-            DescriptorSetType::PostProcess,
+            "PostProcess",
             postProcessPipelineConfig,
             postProcessPass
         );
 
         // Create descriptor set for post-process material
+        auto sets = descriptorManager.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
         postProcessDescriptorSet = eastl::make_unique<DescriptorSet>();
-        postProcessDescriptorSet->create(context, 1, DescriptorSetType::PostProcess);  // Only need 1 set (not per-frame)
+        postProcessDescriptorSet->init(context, sets);
 
         // Update descriptor set with offscreen textures
         updatePostProcessDescriptors();
@@ -81,6 +128,12 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
 }
 
 void ForwardRenderer::cleanup() {
+    // Destroy post-process sampler
+    if (postProcessSampler) {
+        context->getDevice().destroySampler(postProcessSampler);
+        postProcessSampler = VK_NULL_HANDLE;
+    }
+
     for (auto& pass : passes) {
         if (pass) {
             pass->cleanup();
@@ -90,9 +143,21 @@ void ForwardRenderer::cleanup() {
     debugRenderer.cleanup();
     globalUniforms.cleanup();
     environmentMap.cleanup();
+
+    // IMPORTANT: Clear globalMaterialIndex first!
+    // This map contains raw pointers to MaterialInstance objects
+    // Must be cleared before destroying the actual instances
+    globalMaterialIndex.clear();
+
+    // Clear materials and textures BEFORE cleaning up descriptor manager
+    // Materials need to free bindless texture indices during cleanup
     materialInstances.clear();
     materials.clear();
     textures.clear();
+
+    // Now safe to cleanup descriptor manager after materials are destroyed
+    descriptorManager.cleanup();  // Cleanup centralized descriptor manager (includes bindless)
+
     renderables.clear();
     renderableCache.clear();
 }
@@ -191,7 +256,7 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     mainPassConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
     mainPassConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
         if (currentWorld) {
-            setViewport(cmd, currentExtent);
+            this->setViewport(cmd, currentExtent);
 
             // First render skybox (depth testing disabled, renders to background)
             Material* envMaterial = environmentMap.getMaterial();
@@ -218,8 +283,8 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     // Pass 2: PostProcess pass - Render fullscreen quad to swapchain
     RenderPassConfig postProcessConfig;
     postProcessConfig.name = "PostProcess";
-    postProcessConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eDontCare)};
-    postProcessConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
+    postProcessConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)};
+    postProcessConfig.depthAttachment = AttachmentDesc::swapchainDepth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
     postProcessConfig.hasDepth = true;  // Need depth for debug renderer compatibility with swapchain framebuffer
     postProcessConfig.clearValues = {colorClear, depthClear};
     postProcessConfig.isSwapchainPass = true;  // Render to swapchain
@@ -229,7 +294,7 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     postProcessConfig.srcAccess = {};
     postProcessConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
     postProcessConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-        setViewport(cmd, currentExtent);
+        this->setViewport(cmd, currentExtent);
 
         if (!postProcessMaterial || !postProcessMaterial->getPipeline()) {
             return;
@@ -432,10 +497,34 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     renderStats.drawCalls = 0;
     renderStats.skippedRenderables = 0;
 
-    Material* currentMaterial = nullptr;
-    Mesh*     currentMesh     = nullptr;
+    // ========== BINDLESS RENDERING ==========
+    if (!pbrBindlessMaterial || !pbrBindlessMaterial->getPipeline()) {
+        violet::Log::error("Renderer", "PBR bindless material not available");
+        return;
+    }
 
-    // Only render visible renderables
+    // Bind pipeline once for all objects
+    pbrBindlessMaterial->getPipeline()->bind(commandBuffer);
+
+    // Bind all descriptor sets once (set 0: Global, set 1: Bindless Textures, set 2: Material Data SSBO)
+    vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
+    vk::DescriptorSet bindlessSet = descriptorManager.getBindlessSet();
+    vk::DescriptorSet materialDataSet = descriptorManager.getMaterialDataSet();
+
+    eastl::array<vk::DescriptorSet, 3> descriptorSets = {globalSet, bindlessSet, materialDataSet};
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        pbrBindlessMaterial->getPipelineLayout(),
+        0,  // First set = 0
+        3,  // Bind 3 sets
+        descriptorSets.data(),
+        0,
+        nullptr
+    );
+
+    Mesh* currentMesh = nullptr;
+
+    // Render loop - only update push constants per object
     for (uint32_t idx : visibleIndices) {
         if (idx >= renderables.size()) {
             renderStats.skippedRenderables++;
@@ -447,27 +536,13 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
             continue;
         }
 
-        // Use BaseRenderer's bindVertexIndexBuffers helper
+        // Bind vertex/index buffers if mesh changed
         if (renderable.mesh != currentMesh) {
             currentMesh = renderable.mesh;
-            bindVertexIndexBuffers(commandBuffer, currentMesh);
+            this->bindVertexIndexBuffers(commandBuffer, currentMesh);
         }
 
-        // Material binding
-        if (renderable.material != currentMaterial) {
-            currentMaterial = renderable.material;
-            if (currentMaterial && currentMaterial->getPipeline()) {
-                currentMaterial->getPipeline()->bind(commandBuffer);
-
-                // Use BaseRenderer's bindGlobalDescriptors helper
-                vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
-                bindGlobalDescriptors(commandBuffer, currentMaterial->getPipelineLayout(), globalSet, GLOBAL_SET);
-            } else {
-                continue;
-            }
-        }
-
-        // Bind MaterialInstance's descriptor set (set 1) - 使用SubMesh的materialIndex
+        // Get material instance to retrieve materialID
         MaterialInstance* matInstance = nullptr;
         if (auto* matComp = world.try_get<MaterialComponent>(renderable.entity)) {
             const SubMesh& subMesh = currentMesh->getSubMesh(renderable.subMeshIndex);
@@ -475,22 +550,41 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
             matInstance = getMaterialInstanceByIndex(materialId);
         }
 
-        if (matInstance && matInstance->getDescriptorSet()) {
-            // Update material descriptor set for current frame
-            matInstance->updateDescriptorSet(frameIndex);
-
-            vk::DescriptorSet materialSet = matInstance->getDescriptorSet()->getDescriptorSet(frameIndex);
-            // Use BaseRenderer's bindMaterialDescriptors helper
-            bindMaterialDescriptors(commandBuffer, currentMaterial->getPipelineLayout(), materialSet, MATERIAL_SET);
+        if (!matInstance) {
+            renderStats.skippedRenderables++;
+            continue;
         }
 
-        // Use BaseRenderer's pushModelMatrix helper
-        pushModelMatrix(commandBuffer, currentMaterial->getPipelineLayout(), renderable.worldTransform);
+        // Push constants: model matrix + material ID
+        BindlessPushConstants push{
+            .model = renderable.worldTransform,
+            .materialID = matInstance->getMaterialID(),
+            .padding = {0, 0, 0}
+        };
+
+        commandBuffer.pushConstants(
+            pbrBindlessMaterial->getPipelineLayout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            0,
+            sizeof(BindlessPushConstants),
+            &push
+        );
 
         // Draw call
         const SubMesh& subMesh = currentMesh->getSubMesh(renderable.subMeshIndex);
         commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
         renderStats.drawCalls++;
+    }
+
+    // Log render statistics once per second
+    static Timer statsTimer;
+    static double lastStatsTime = 0.0;
+    double currentTime = statsTimer.getTime();
+    if (currentTime - lastStatsTime >= 1.0) {
+        violet::Log::info("Renderer", "Render stats: Total={}, Visible={}, DrawCalls={}, Skipped={}",
+            renderStats.totalRenderables, renderStats.visibleRenderables,
+            renderStats.drawCalls, renderStats.skippedRenderables);
+        lastStatsTime = currentTime;
     }
 
     // Debug rendering (after main scene rendering)
@@ -558,29 +652,44 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
 
 Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader) {
     // Default to PBR material
-    return createMaterial(vertexShader, fragmentShader, DescriptorSetType::MaterialTextures);
+    return createMaterial(vertexShader, fragmentShader, "PBRMaterial");
 }
 
 // Core implementation with all parameters
 Material* ForwardRenderer::createMaterial(
     const eastl::string& vertexShader,
     const eastl::string& fragmentShader,
-    DescriptorSetType materialType,
+    const eastl::string& materialLayoutName,
     const PipelineConfig& config,
     RenderPass* renderPass
 ) {
     auto material = eastl::make_unique<Material>();
 
     try {
-        material->create(context, materialType);
+        material->create(context);
     } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to create material with descriptor set type {}: {}", static_cast<int>(materialType), e.what());
+        violet::Log::error("ForwardRenderer", "Failed to create material: {}", e.what());
         return nullptr;
+    }
+
+    // Get material descriptor set layout from DescriptorManager
+    PipelineConfig finalConfig = config;  // Copy config to add material layout
+    if (!materialLayoutName.empty() && descriptorManager.hasLayout(materialLayoutName)) {
+        finalConfig.materialDescriptorSetLayout = descriptorManager.getLayout(materialLayoutName);
+    }
+
+    // Set global descriptor set layout from DescriptorManager
+    finalConfig.globalDescriptorSetLayout = descriptorManager.getLayout("Global");
+
+    if (!finalConfig.globalDescriptorSetLayout) {
+        violet::Log::error("ForwardRenderer", "Failed to get 'Global' layout from DescriptorManager");
+    } else {
+        violet::Log::debug("Renderer", "Set global descriptor set layout for material");
     }
 
     auto pipeline = new GraphicsPipeline();
     try {
-        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, config);
+        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, finalConfig);
     } catch (const std::exception& e) {
         violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with shaders: '{}', '{}' - Error: {}",
             vertexShader.c_str(), fragmentShader.c_str(), e.what());
@@ -603,14 +712,14 @@ Material* ForwardRenderer::createMaterial(
 }
 
 // Convenience overload: default config and render pass
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType) {
+Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, const eastl::string& materialLayoutName) {
     PipelineConfig defaultConfig;
-    return createMaterial(vertexShader, fragmentShader, materialType, defaultConfig, getRenderPass(0));
+    return createMaterial(vertexShader, fragmentShader, materialLayoutName, defaultConfig, getRenderPass(0));
 }
 
 // Convenience overload: custom config, default render pass
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, DescriptorSetType materialType, const PipelineConfig& config) {
-    return createMaterial(vertexShader, fragmentShader, materialType, config, getRenderPass(0));
+Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, const eastl::string& materialLayoutName, const PipelineConfig& config) {
+    return createMaterial(vertexShader, fragmentShader, materialLayoutName, config, getRenderPass(0));
 }
 
 MaterialInstance* ForwardRenderer::createMaterialInstance(Material* material) {
@@ -620,12 +729,9 @@ MaterialInstance* ForwardRenderer::createMaterialInstance(Material* material) {
 
 MaterialInstance* ForwardRenderer::createPBRMaterialInstance(Material* material) {
     auto instance = eastl::make_unique<PBRMaterialInstance>();
-    instance->create(context, material);
+    instance->create(context, material, &descriptorManager);
 
-    // MaterialInstance创建自己的descriptor set
-    instance->createDescriptorSet(maxFramesInFlight);
-
-    // Set default PBR textures if available
+    // Set default PBR textures if available (automatically registers in bindless)
     if (defaultMetallicRoughnessTexture) {
         instance->setMetallicRoughnessTexture(defaultMetallicRoughnessTexture);
     }
@@ -645,31 +751,12 @@ MaterialInstance* ForwardRenderer::createUnlitMaterialInstance(Material* materia
         return nullptr;
     }
 
-    // Creating unlit material instance
-
     auto instance = eastl::make_unique<UnlitMaterialInstance>();
-
-    try {
-        instance->create(context, material);
-        // Unlit material instance created
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to create unlit material instance: {}", e.what());
-        return nullptr;
-    }
-
-    try {
-        // MaterialInstance创建自己的descriptor set
-        instance->createDescriptorSet(maxFramesInFlight);
-        // Material instance descriptor set created
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to create descriptor set for material instance: {}", e.what());
-        return nullptr;
-    }
+    instance->create(context, material, &descriptorManager);
 
     MaterialInstance* ptr = instance.get();
     materialInstances.push_back(eastl::move(instance));
 
-    // Unlit material instance creation completed
     return ptr;
 }
 
@@ -693,12 +780,13 @@ GlobalUniforms::~GlobalUniforms() {
     cleanup();
 }
 
-void GlobalUniforms::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
+void GlobalUniforms::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight) {
     context = ctx;
 
-    // Create global descriptor set using new unified approach
+    // Allocate descriptor sets from DescriptorManager
+    auto sets = descMgr->allocateSets("Global", maxFramesInFlight);
     descriptorSet = eastl::make_unique<DescriptorSet>();
-    descriptorSet->create(context, maxFramesInFlight, DescriptorSetType::GlobalUniforms);
+    descriptorSet->init(context, sets);
 
     uniformBuffers.resize(maxFramesInFlight);
     for (uint32_t i = 0; i < maxFramesInFlight; ++i) {
@@ -830,6 +918,85 @@ void GlobalUniforms::setSkyboxTexture(Texture* texture) {
     }
 }
 
+void ForwardRenderer::registerDescriptorLayouts() {
+    // Global uniforms layout - per-frame updates
+    descriptorManager.registerLayout({
+        .name = "Global",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
+            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}
+        },
+        .frequency = UpdateFrequency::PerFrame
+    });
+
+    // PBR material layout - per-material updates
+    descriptorManager.registerLayout({
+        .name = "PBRMaterial",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
+            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Base color
+            {.binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Metallic-roughness
+            {.binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Normal
+            {.binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Occlusion
+            {.binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Emissive
+        },
+        .frequency = UpdateFrequency::PerMaterial
+    });
+
+    // Unlit material layout - per-material updates
+    descriptorManager.registerLayout({
+        .name = "UnlitMaterial",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
+            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Base color
+        },
+        .frequency = UpdateFrequency::PerMaterial
+    });
+
+    // PostProcess layout - per-pass updates
+    descriptorManager.registerLayout({
+        .name = "PostProcess",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Color texture
+            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Depth texture
+        },
+        .frequency = UpdateFrequency::PerPass
+    });
+
+    // Compute shader layout for equirect to cubemap
+    descriptorManager.registerLayout({
+        .name = "EquirectToCubemap",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input equirect
+            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output cubemap
+        },
+        .frequency = UpdateFrequency::Static
+    });
+
+    // Bindless texture array layout - static, rarely updated
+    descriptorManager.registerLayout({
+        .name = "Bindless",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment, .count = 1024}
+        },
+        .frequency = UpdateFrequency::Static,
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,
+        .bindingFlags = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind
+    });
+
+    // Material data SSBO - bindless architecture (set 2)
+    // Contains all material parameters + texture indices
+    descriptorManager.registerLayout({
+        .name = "MaterialData",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
+        },
+        .frequency = UpdateFrequency::Static
+    });
+
+    violet::Log::info("Renderer", "Registered all descriptor layouts declaratively");
+}
+
 void ForwardRenderer::createDefaultPBRTextures() {
     // Create basic white and black textures
     defaultWhiteTexture = addTexture(ResourceFactory::createWhiteTexture(context));
@@ -894,27 +1061,29 @@ void ForwardRenderer::updatePostProcessDescriptors() {
         return;
     }
 
-    // Create sampler for offscreen textures
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = vk::Filter::eLinear;
-    samplerInfo.minFilter = vk::Filter::eLinear;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.anisotropyEnable = false;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = vk::BorderColor::eFloatOpaqueBlack;
-    samplerInfo.unnormalizedCoordinates = false;
-    samplerInfo.compareEnable = false;
-    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    // Create sampler for offscreen textures (only once)
+    if (!postProcessSampler) {
+        vk::SamplerCreateInfo samplerInfo{};
+        samplerInfo.magFilter = vk::Filter::eLinear;
+        samplerInfo.minFilter = vk::Filter::eLinear;
+        samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.anisotropyEnable = false;
+        samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.borderColor = vk::BorderColor::eFloatOpaqueBlack;
+        samplerInfo.unnormalizedCoordinates = false;
+        samplerInfo.compareEnable = false;
+        samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
 
-    vk::Sampler sampler = context->getDevice().createSampler(samplerInfo);
+        postProcessSampler = context->getDevice().createSampler(samplerInfo);
+    }
 
     // Update descriptor set with color texture (binding 0)
     vk::DescriptorImageInfo colorImageInfo{};
     colorImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     colorImageInfo.imageView = colorView;
-    colorImageInfo.sampler = sampler;
+    colorImageInfo.sampler = postProcessSampler;
 
     vk::WriteDescriptorSet colorWrite{};
     colorWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
@@ -928,7 +1097,7 @@ void ForwardRenderer::updatePostProcessDescriptors() {
     vk::DescriptorImageInfo depthImageInfo{};
     depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     depthImageInfo.imageView = depthView;
-    depthImageInfo.sampler = sampler;
+    depthImageInfo.sampler = postProcessSampler;
 
     vk::WriteDescriptorSet depthWrite{};
     depthWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);

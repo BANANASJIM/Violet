@@ -12,157 +12,58 @@ DescriptorSet::~DescriptorSet() {
     cleanup();
 }
 
+void DescriptorSet::init(VulkanContext* ctx, const eastl::vector<vk::DescriptorSet>& sets) {
+    context = ctx;
+    descriptorSets = sets;
+    // No pool/layout ownership - managed by DescriptorManager
+}
+
 void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight) {
-    // 默认创建材质纹理类型的descriptor set
-    create(ctx, maxFramesInFlight, DescriptorSetType::MaterialTextures);
+    // WARNING: This method is COMPUTE SHADER ONLY
+    // Graphics pipelines should use DescriptorManager::allocateSets() instead
+    violet::Log::warn("Renderer", "DescriptorSet::create() called - this is a legacy compute-only API");
+    create(ctx, maxFramesInFlight, DescriptorSetType::EquirectToCubemap);
 }
 
 void DescriptorSet::create(VulkanContext* ctx, uint32_t maxFramesInFlight, DescriptorSetType type) {
+    // WARNING: This method is COMPUTE SHADER ONLY - kept for ComputePipeline compatibility
+    // Graphics pipelines must use DescriptorManager for centralized descriptor management
+
     context = ctx;
 
-    eastl::vector<vk::DescriptorSetLayoutBinding> bindings;
-    eastl::vector<vk::DescriptorPoolSize>         poolSizes;
-
-    if (type == DescriptorSetType::GlobalUniforms) {
-        // Global uniform buffer layout
-        bindings.resize(2);
-
-        // Binding 0: Global UBO
-        bindings[0].binding            = 0; // CAMERA_UBO_BINDING
-        bindings[0].descriptorCount    = 1;
-        bindings[0].descriptorType     = vk::DescriptorType::eUniformBuffer;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-
-        // Binding 1: Environment map (skybox cubemap)
-        bindings[1].binding            = 1;
-        bindings[1].descriptorCount    = 1;
-        bindings[1].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-        bindings[1].pImmutableSamplers = nullptr;
-        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        poolSizes.resize(2);
-        poolSizes[0].type            = vk::DescriptorType::eUniformBuffer;
-        poolSizes[0].descriptorCount = maxFramesInFlight;
-        poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
-        poolSizes[1].descriptorCount = maxFramesInFlight;
-    } else if (type == DescriptorSetType::MaterialTextures) {
-        // Material descriptor layout: 1 UBO + 5 texture samplers
-        bindings.resize(6);
-
-        // Binding 0: Material UBO
-        bindings[0].binding            = 0;
-        bindings[0].descriptorCount    = 1;
-        bindings[0].descriptorType     = vk::DescriptorType::eUniformBuffer;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        // Bindings 1-5: Textures
-        for (uint32_t i = 1; i <= 5; ++i) {
-            bindings[i].binding            = i;
-            bindings[i].descriptorCount    = 1;
-            bindings[i].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-            bindings[i].pImmutableSamplers = nullptr;
-            bindings[i].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-        }
-
-        poolSizes.resize(2);
-        poolSizes[0].type            = vk::DescriptorType::eUniformBuffer;
-        poolSizes[0].descriptorCount = maxFramesInFlight;
-        poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
-        poolSizes[1].descriptorCount = maxFramesInFlight * 5;
-    } else if (type == DescriptorSetType::UnlitMaterialTextures) {
-        // Unlit material descriptor layout: 1 UBO + 1 texture sampler
-        bindings.resize(2);
-
-        // Binding 0: Material UBO
-        bindings[0].binding            = 0;
-        bindings[0].descriptorCount    = 1;
-        bindings[0].descriptorType     = vk::DescriptorType::eUniformBuffer;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        // Binding 1: Base color texture
-        bindings[1].binding            = 1;
-        bindings[1].descriptorCount    = 1;
-        bindings[1].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-        bindings[1].pImmutableSamplers = nullptr;
-        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        poolSizes.resize(2);
-        poolSizes[0].type            = vk::DescriptorType::eUniformBuffer;
-        poolSizes[0].descriptorCount = maxFramesInFlight;
-        poolSizes[1].type            = vk::DescriptorType::eCombinedImageSampler;
-        poolSizes[1].descriptorCount = maxFramesInFlight;
-    } else if (type == DescriptorSetType::EquirectToCubemap) {
-        // Compute shader descriptor layout: input sampler2D + output imageCube
-        bindings.resize(2);
-
-        // Binding 0: Equirectangular input texture (sampler2D)
-        bindings[0].binding            = 0;
-        bindings[0].descriptorCount    = 1;
-        bindings[0].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eCompute;
-
-        // Binding 1: Cubemap output (storage image)
-        bindings[1].binding            = 1;
-        bindings[1].descriptorCount    = 1;
-        bindings[1].descriptorType     = vk::DescriptorType::eStorageImage;
-        bindings[1].pImmutableSamplers = nullptr;
-        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eCompute;
-
-        poolSizes.resize(2);
-        poolSizes[0].type            = vk::DescriptorType::eCombinedImageSampler;
-        poolSizes[0].descriptorCount = maxFramesInFlight;
-        poolSizes[1].type            = vk::DescriptorType::eStorageImage;
-        poolSizes[1].descriptorCount = maxFramesInFlight;
-    } else if (type == DescriptorSetType::PostProcess) {
-        // PostProcess descriptor layout: 2 texture samplers (color + depth)
-        bindings.resize(2);
-
-        // Binding 0: Color texture from offscreen framebuffer
-        bindings[0].binding            = 0;
-        bindings[0].descriptorCount    = 1;
-        bindings[0].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        // Binding 1: Depth texture from offscreen framebuffer
-        bindings[1].binding            = 1;
-        bindings[1].descriptorCount    = 1;
-        bindings[1].descriptorType     = vk::DescriptorType::eCombinedImageSampler;
-        bindings[1].pImmutableSamplers = nullptr;
-        bindings[1].stageFlags         = vk::ShaderStageFlagBits::eFragment;
-
-        poolSizes.resize(1);
-        poolSizes[0].type            = vk::DescriptorType::eCombinedImageSampler;
-        poolSizes[0].descriptorCount = maxFramesInFlight * 2;
-    } else if (type == DescriptorSetType::None) {
-        // 不创建任何descriptor set - 仅使用全局descriptor set
+    // Only EquirectToCubemap (compute shader) is supported
+    // Graphics pipelines should use DescriptorManager instead
+    if (type != DescriptorSetType::EquirectToCubemap) {
+        violet::Log::error("Renderer", "DescriptorSet::create() - Only EquirectToCubemap (compute) is supported. Graphics pipelines must use DescriptorManager!");
         return;
     }
 
+    // COMPUTE SHADER ONLY: EquirectToCubemap layout
+    eastl::vector<vk::DescriptorSetLayoutBinding> bindings = {
+        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute},
+        {1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute}
+    };
+    eastl::vector<vk::DescriptorPoolSize> poolSizes = {
+        {vk::DescriptorType::eCombinedImageSampler, maxFramesInFlight},
+        {vk::DescriptorType::eStorageImage, maxFramesInFlight}
+    };
+
     vk::DescriptorSetLayoutCreateInfo layoutInfo;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings    = bindings.data();
-
+    layoutInfo.pBindings = bindings.data();
     descriptorSetLayout = ctx->getDevice().createDescriptorSetLayout(layoutInfo);
 
-    // Create descriptor pool
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes    = poolSizes.data();
-    poolInfo.maxSets       = maxFramesInFlight;
-
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = maxFramesInFlight;
     descriptorPool = ctx->getDevice().createDescriptorPool(poolInfo);
 
-    // Allocate descriptor sets
     eastl::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, descriptorSetLayout);
-    vk::DescriptorSetAllocateInfo          allocInfo;
-    allocInfo.descriptorPool     = descriptorPool;
+    vk::DescriptorSetAllocateInfo allocInfo;
+    allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = maxFramesInFlight;
-    allocInfo.pSetLayouts        = layouts.data();
+    allocInfo.pSetLayouts = layouts.data();
 
     auto stdSets = ctx->getDevice().allocateDescriptorSets(allocInfo);
     descriptorSets.resize(stdSets.size());

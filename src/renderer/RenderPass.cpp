@@ -18,11 +18,11 @@ AttachmentDesc AttachmentDesc::color(vk::Format fmt, vk::AttachmentLoadOp load) 
     return desc;
 }
 
-AttachmentDesc AttachmentDesc::depth(vk::Format fmt, vk::AttachmentLoadOp load) {
+AttachmentDesc AttachmentDesc::depth(vk::Format fmt, vk::AttachmentLoadOp load, vk::AttachmentStoreOp store) {
     AttachmentDesc desc;
     desc.format = fmt;
     desc.loadOp = load;
-    desc.storeOp = vk::AttachmentStoreOp::eDontCare;
+    desc.storeOp = store;
     desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
         vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined;
     desc.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
@@ -37,6 +37,17 @@ AttachmentDesc AttachmentDesc::swapchainColor(vk::Format fmt, vk::AttachmentLoad
     desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
         vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eUndefined;
     desc.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    return desc;
+}
+
+AttachmentDesc AttachmentDesc::swapchainDepth(vk::Format fmt, vk::AttachmentLoadOp load) {
+    AttachmentDesc desc;
+    desc.format = fmt;
+    desc.loadOp = load;
+    desc.storeOp = vk::AttachmentStoreOp::eStore;  // Must store depth for swapchain
+    desc.initialLayout = (load == vk::AttachmentLoadOp::eLoad) ?
+        vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined;
+    desc.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
     return desc;
 }
 

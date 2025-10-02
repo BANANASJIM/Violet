@@ -79,7 +79,7 @@ void EnvironmentMap::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* f
     skyboxMaterial = renderer->createMaterial(
         FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
         FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        DescriptorSetType::GlobalUniforms, skyboxConfig);
+        "Global", skyboxConfig);
 
     // Create compute pipeline for equirectangular to cubemap conversion
     equirectToCubemapPipeline = eastl::make_unique<ComputePipeline>();

@@ -13,6 +13,7 @@
 #include <entt/entt.hpp>
 
 #include "renderer/DescriptorSet.hpp"
+#include "renderer/DescriptorManager.hpp"
 #include "renderer/Material.hpp"
 #include "renderer/Renderable.hpp"
 #include "renderer/Texture.hpp"
@@ -41,14 +42,22 @@ struct RenderStats {
     uint32_t skippedRenderables = 0;
 };
 
+// Traditional push constants (legacy)
 struct PushConstantData {
     glm::mat4 model;
+};
+
+// Bindless push constants (includes material ID)
+struct BindlessPushConstants {
+    glm::mat4 model;
+    uint32_t materialID;
+    uint32_t padding[3];  // Align to 16 bytes
 };
 
 class GlobalUniforms {
 public:
     ~GlobalUniforms();
-    void           init(VulkanContext* context, uint32_t maxFramesInFlight);
+    void           init(VulkanContext* context, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
     void           cleanup();
     void           update(entt::registry& world, uint32_t frameIndex, float skyboxExposure = 1.0f, float skyboxRotation = 0.0f, bool skyboxEnabled = false);
     DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
@@ -110,22 +119,23 @@ public:
 
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
 
+    // Modern API: Use DescriptorManager layout names (e.g., "PBRMaterial", "UnlitMaterial", "PostProcess")
     Material* createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader);
     Material* createMaterial(
         const eastl::string& vertexShader,
         const eastl::string& fragmentShader,
-        DescriptorSetType    materialType
+        const eastl::string& materialLayoutName
     );
     Material* createMaterial(
         const eastl::string& vertexShader,
         const eastl::string& fragmentShader,
-        DescriptorSetType    materialType,
+        const eastl::string&  materialLayoutName,
         const PipelineConfig& config
     );
     Material* createMaterial(
         const eastl::string& vertexShader,
         const eastl::string& fragmentShader,
-        DescriptorSetType    materialType,
+        const eastl::string&  materialLayoutName,
         const PipelineConfig& config,
         RenderPass*          renderPass
     );
@@ -175,9 +185,15 @@ public:
     Material* getPostProcessMaterial() const { return postProcessMaterial; }
     void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
 
+    // Descriptor manager access
+    DescriptorManager& getDescriptorManager() { return descriptorManager; }
+
 private:
     void collectFromEntity(entt::entity entity, entt::registry& world);
     void createDefaultPBRTextures();
+
+    // Declarative descriptor layouts registration
+    void registerDescriptorLayouts();
 
     // Declarative pass helpers
     void insertPassTransition(vk::CommandBuffer cmd, size_t passIndex);
@@ -224,6 +240,13 @@ private:
     // Post-process material for fullscreen quad rendering
     Material* postProcessMaterial = nullptr;
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
+    vk::Sampler postProcessSampler = VK_NULL_HANDLE;
+
+    // Bindless materials (use bindless texture array + material data SSBO)
+    Material* pbrBindlessMaterial = nullptr;
+
+    // Centralized descriptor management
+    DescriptorManager descriptorManager;
 
 };
 

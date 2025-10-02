@@ -53,7 +53,7 @@ void VioletApp::createResources() {
 
     // Initialize renderers with new Pass system
     renderer.init(getContext(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
-    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
 
     // Configure App base class
@@ -77,7 +77,7 @@ void VioletApp::createResources() {
 
             // Update world bounds for all MeshComponents after world transforms are computed
             auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
-            for (auto [entity, transformComp, meshComp] : view.each()) {
+            for (auto&& [entity, transformComp, meshComp] : view.each()) {
                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
             }
 
@@ -89,11 +89,6 @@ void VioletApp::createResources() {
         }
     } catch (const violet::Exception& e) {
         violet::Log::warn("App", "Failed to load scene: {}", e.what_c_str());
-        createTestCube();
-    }
-
-    if (!currentScene) {
-        createTestCube();
     }
 }
 
@@ -175,7 +170,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
 
                 // Update world bounds for all MeshComponents after world transforms are computed
                 auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
-                for (auto [entity, transformComp, meshComp] : view.each()) {
+                for (auto&& [entity, transformComp, meshComp] : view.each()) {
                     meshComp.updateWorldBounds(transformComp.world.getMatrix());
                 }
 
@@ -287,7 +282,7 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
 
                         // Update world bounds for all MeshComponents
                         auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
-                        for (auto [entity, transformComp, meshComp] : view.each()) {
+                        for (auto&& [entity, transformComp, meshComp] : view.each()) {
                             meshComp.updateWorldBounds(transformComp.world.getMatrix());
                         }
 
@@ -334,77 +329,6 @@ void VioletApp::onWindowResize(int width, int height) {
             }
         }
     }
-}
-
-void VioletApp::createTestCube() {
-    auto cubeEntity = world.createEntity();
-    auto& transformComp          = world.addComponent<TransformComponent>(cubeEntity);
-    transformComp.local.position = glm::vec3(0.0f, 0.0f, 0.0f);
-    transformComp.local.scale    = glm::vec3(1.f, 1.0f, 1.0f);
-
-    transformComp.world.position = transformComp.local.position;
-    transformComp.world.rotation = transformComp.local.rotation;
-    transformComp.world.scale = transformComp.local.scale;
-    transformComp.dirty = false;
-
-    auto mesh = eastl::make_unique<Mesh>();
-    eastl::vector<Vertex> vertices = TestData::getCubeVertices();
-    eastl::vector<uint32_t> indices = TestData::getCubeIndices();
-    eastl::vector<SubMesh> subMeshes;
-    SubMesh                cubeSubMesh;
-    cubeSubMesh.firstIndex    = 0;
-    cubeSubMesh.indexCount    = static_cast<uint32_t>(indices.size());
-    cubeSubMesh.materialIndex = 0;
-    subMeshes.push_back(cubeSubMesh);
-
-    mesh->create(getContext(), vertices, indices, subMeshes);
-    auto& meshComp = world.addComponent<MeshComponent>(cubeEntity, eastl::move(mesh));
-
-    eastl::string vertShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/pbr.vert.spv");
-    eastl::string fragShaderPath = violet::FileSystem::resolveRelativePath("build/shaders/pbr.frag.spv");
-
-    Material* material = renderer.createMaterial(vertShaderPath, fragShaderPath, DescriptorSetType::MaterialTextures);
-
-    if (!material) {
-        violet::Log::error("App", "Failed to create PBR material");
-        return;
-    }
-
-    // Always create PBR material instance
-    MaterialInstance* materialInstance = renderer.createPBRMaterialInstance(material);
-    if (materialInstance) {
-        auto* pbrInstance = static_cast<PBRMaterialInstance*>(materialInstance);
-        auto& materialData = pbrInstance->getData();
-        materialData.baseColorFactor = glm::vec4(0.8f, 0.6f, 0.4f, 1.0f);
-        materialData.metallicFactor = 0.1f;
-        materialData.roughnessFactor = 0.4f;
-        materialData.normalScale = 1.0f;
-        materialData.occlusionStrength = 1.0f;
-        materialData.emissiveFactor = glm::vec3(0.0f);
-        materialData.alphaCutoff = 0.5f;
-
-        pbrInstance->setBaseColorTexture(&defaultTexture);
-        // Don't set default textures - let PBR instance use its own defaults
-    }
-
-    if (!materialInstance) {
-        violet::Log::error("App", "Failed to create PBR material instance");
-        return;
-    }
-
-    for (uint32_t frame = 0; frame < 3; ++frame) {
-        materialInstance->setDirty(true);
-        materialInstance->updateDescriptorSet(frame);
-    }
-
-    // Register the material instance with a unique ID for the test cube
-    static uint32_t testMaterialId = 0xFFFF0000; // High ID for test materials
-    renderer.registerMaterialInstance(testMaterialId, materialInstance);
-
-    // Create material component with the ID
-    MaterialComponent matComp;
-    matComp.materialIndexToId[0] = testMaterialId; // Single material for SubMesh 0
-    world.addComponent<MaterialComponent>(cubeEntity, eastl::move(matComp));
 }
 
 void VioletApp::cleanup() {

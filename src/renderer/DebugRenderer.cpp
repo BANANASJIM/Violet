@@ -30,7 +30,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFl
     // We'll need GlobalUniforms for actual debug rendering, so this method doesn't do much
 }
 
-void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, uint32_t framesInFlight) {
+void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, DescriptorManager* descMgr, uint32_t framesInFlight) {
     context = ctx;
     renderPass = rp;
     maxFramesInFlight = framesInFlight;
@@ -41,7 +41,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
-    debugMaterial->create(context, DescriptorSetType::UnlitMaterialTextures);
+    debugMaterial->create(context);
 
     // Create debug pipeline with line topology
     debugPipeline = eastl::make_unique<GraphicsPipeline>();
@@ -51,6 +51,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     config.enableDepthTest = true;
     config.enableDepthWrite = false;
     config.enableBlending = true;
+    config.globalDescriptorSetLayout = descMgr->getLayout("Global");  // Use DescriptorManager for layout
 
     // Query available device features to determine what we can use
     vk::PhysicalDeviceFeatures availableFeatures = context->getPhysicalDevice().getFeatures();
@@ -72,7 +73,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 
     // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
     wireframePipeline = eastl::make_unique<GraphicsPipeline>();
-    PipelineConfig wireframeConfig = config;  // Copy base config
+    PipelineConfig wireframeConfig = config;  // Copy base config (including globalDescriptorSetLayout)
     wireframeConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
 
     // Set wireframe mode for triangle rendering
@@ -88,7 +89,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 
     // Create solid pipeline for filled triangle rendering
     solidPipeline = eastl::make_unique<GraphicsPipeline>();
-    PipelineConfig solidConfig = config;  // Copy base config
+    PipelineConfig solidConfig = config;  // Copy base config (including globalDescriptorSetLayout)
     solidConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
     solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
     solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects

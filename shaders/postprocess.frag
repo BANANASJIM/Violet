@@ -22,7 +22,6 @@ void main() {
     // For now, just pass through the color
     // Future: tonemapping, color grading, bloom, etc.
     outColor = vec4(color, 1.0);
+    gl_FragDepth = depth;
 
-    // Debug: Visualize depth (uncomment to test)
-    // outColor = vec4(vec3(depth), 1.0);
 }

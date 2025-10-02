@@ -112,23 +112,49 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* g
     depthStencil.stencilTestEnable = VK_FALSE;
 
     eastl::vector<vk::DescriptorSetLayout> setLayouts;
-    setLayouts.push_back(globalDescriptorSet->getLayout());
 
-    // 只有当材质有有效的descriptor set layout时才添加
-    if (material->getDescriptorSetLayout()) {
-        setLayouts.push_back(material->getDescriptorSetLayout());
+    // Use global layout from config if provided (new API), otherwise fall back to legacy API
+    if (config.globalDescriptorSetLayout) {
+        setLayouts.push_back(config.globalDescriptorSetLayout);
+    } else if (globalDescriptorSet) {
+        vk::DescriptorSetLayout legacyLayout = globalDescriptorSet->getLayout();
+        if (!legacyLayout) {
+            violet::Log::error("Renderer", "GraphicsPipeline: Legacy globalDescriptorSet->getLayout() returned null");
+        }
+        setLayouts.push_back(legacyLayout);
+    } else {
+        violet::Log::error("Renderer", "GraphicsPipeline: No global descriptor set layout available (neither config nor globalDescriptorSet)");
     }
 
-    vk::PushConstantRange pushConstantRange;
-    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(glm::mat4);
+    // Add additional descriptor sets from config (e.g., bindless texture array)
+    for (const auto& layout : config.additionalDescriptorSets) {
+        setLayouts.push_back(layout);
+    }
 
+    // Add material descriptor set layout if provided in config
+    if (config.materialDescriptorSetLayout) {
+        setLayouts.push_back(config.materialDescriptorSetLayout);
+    }
+
+    // Use push constant ranges from config if specified
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (!config.pushConstantRanges.empty()) {
+        // Use custom push constant ranges from config
+        pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size());
+        pipelineLayoutInfo.pPushConstantRanges = config.pushConstantRanges.data();
+    } else {
+        // Default push constant range (model matrix only)
+        vk::PushConstantRange pushConstantRange;
+        pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(glm::mat4);
+
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+    }
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 

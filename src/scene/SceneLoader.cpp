@@ -440,12 +440,9 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             instance->setEmissiveTexture(loadCtx.defaultTexture);
         }
 
-        // Update descriptor set for all frames in flight
-        // Force dirty flag for each frame to ensure all get updated
-        for (uint32_t frame = 0; frame < 3; ++frame) {
-            instance->setDirty(true);  // Force dirty state for each frame
-            instance->updateDescriptorSet(frame);
-        }
+        // Update material data in SSBO (bindless architecture)
+        // All textures have been registered in bindless array, now sync material parameters
+        instance->updateMaterialData();
 
         // Generate unique material ID (combine file hash with material index for uniqueness)
         // For now, use a simple scheme: high bits for file, low bits for material index

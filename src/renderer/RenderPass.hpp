@@ -23,8 +23,10 @@ struct AttachmentDesc {
 
     // Factory methods for common attachment types
     static AttachmentDesc color(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
-    static AttachmentDesc depth(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
+    static AttachmentDesc depth(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear,
+                                vk::AttachmentStoreOp store = vk::AttachmentStoreOp::eDontCare);
     static AttachmentDesc swapchainColor(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
+    static AttachmentDesc swapchainDepth(vk::Format fmt, vk::AttachmentLoadOp load = vk::AttachmentLoadOp::eClear);
 
     // Convert to Vulkan attachment description
     vk::AttachmentDescription toVulkan() const;

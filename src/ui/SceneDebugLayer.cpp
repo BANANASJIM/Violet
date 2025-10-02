@@ -221,7 +221,7 @@ void SceneDebugLayer::onImGuiRender() {
                         scene->updateWorldTransforms(world->getRegistry());
                         // Update world bounds
                         auto meshView = world->view<TransformComponent, MeshComponent>();
-                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                        for (auto&& [entity, transformComp, meshComp] : meshView.each()) {
                             if (transformComp.dirty) {
                                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
                                 transformComp.dirty = false;
@@ -246,7 +246,7 @@ void SceneDebugLayer::onImGuiRender() {
                     if (scene) {
                         scene->updateWorldTransforms(world->getRegistry());
                         auto meshView = world->view<TransformComponent, MeshComponent>();
-                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                        for (auto&& [entity, transformComp, meshComp] : meshView.each()) {
                             if (transformComp.dirty) {
                                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
                                 transformComp.dirty = false;
@@ -271,7 +271,7 @@ void SceneDebugLayer::onImGuiRender() {
                     if (scene) {
                         scene->updateWorldTransforms(world->getRegistry());
                         auto meshView = world->view<TransformComponent, MeshComponent>();
-                        for (auto [entity, transformComp, meshComp] : meshView.each()) {
+                        for (auto&& [entity, transformComp, meshComp] : meshView.each()) {
                             if (transformComp.dirty) {
                                 meshComp.updateWorldBounds(transformComp.world.getMatrix());
                                 transformComp.dirty = false;
@@ -680,7 +680,7 @@ void SceneDebugLayer::renderGizmo() {
 
             // Update world bounds for all affected entities
             auto meshView = world->view<TransformComponent, MeshComponent>();
-            for (auto [entity, transformComp, meshComp] : meshView.each()) {
+            for (auto&& [entity, transformComp, meshComp] : meshView.each()) {
                 if (transformComp.dirty) {
                     meshComp.updateWorldBounds(transformComp.world.getMatrix());
                     transformComp.dirty = false;
