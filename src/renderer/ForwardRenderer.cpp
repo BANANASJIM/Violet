@@ -105,8 +105,9 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     if (postProcessPass) {
         PipelineConfig postProcessPipelineConfig;
         postProcessPipelineConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for fullscreen quad
-        postProcessPipelineConfig.enableDepthTest = false;  // No depth test
-        postProcessPipelineConfig.enableDepthWrite = true;
+        postProcessPipelineConfig.enableDepthTest = true;   // Enable depth test for depth writes to work
+        postProcessPipelineConfig.enableDepthWrite = true;  // Write sampled depth to swapchain
+        postProcessPipelineConfig.depthCompareOp = vk::CompareOp::eAlways;  // Always pass depth test
         postProcessPipelineConfig.useVertexInput = false;  // No vertex buffer for fullscreen quad
 
         postProcessMaterial = createMaterial(

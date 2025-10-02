@@ -104,8 +104,8 @@ void App::createSyncObjects() {
 
 void App::drawFrame() {
     // Wait for previous frame
-    context.getDevice().waitForFences(1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-    context.getDevice().resetFences(1, &inFlightFences[currentFrame]);
+    auto waitResult = context.getDevice().waitForFences(1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    auto resetResult = context.getDevice().resetFences(1, &inFlightFences[currentFrame]);
 
     // Acquire next image
     uint32_t imageIndex;
@@ -194,7 +194,7 @@ void App::submitAndPresent(uint32_t imageIndex) {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
+    auto submitResult = context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
     swapchain.present(imageIndex, renderFinishedSemaphores[currentFrame]);
 }
 

@@ -139,7 +139,7 @@ void Swapchain::present(uint32_t imageIndex, vk::Semaphore waitSemaphore) {
         &imageIndex
     );
 
-    context->getPresentQueue().presentKHR(presentInfo);
+    auto presentResult = context->getPresentQueue().presentKHR(presentInfo);
 }
 
 vk::SurfaceFormatKHR Swapchain::chooseSwapSurfaceFormat(const eastl::vector<vk::SurfaceFormatKHR>& availableFormats) {

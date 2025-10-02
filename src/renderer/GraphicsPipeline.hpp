@@ -17,6 +17,7 @@ struct PipelineConfig {
     float lineWidth = 1.0f;
     bool enableDepthTest = true;
     bool enableDepthWrite = true;
+    vk::CompareOp depthCompareOp = vk::CompareOp::eLess;  // Default to less for normal depth testing
     bool enableBlending = false;
     bool useVertexInput = true;  // Set to false for full-screen effects like skybox
     eastl::vector<vk::PushConstantRange> pushConstantRanges;  // Custom push constant ranges

@@ -351,7 +351,7 @@ void ResourceFactory::endSingleTimeCommands(VulkanContext* context, vk::CommandB
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer;
 
-    context->getGraphicsQueue().submit(1, &submitInfo, {});
+    auto submitResult = context->getGraphicsQueue().submit(1, &submitInfo, {});
     context->getGraphicsQueue().waitIdle();
 
     context->getDevice().freeCommandBuffers(context->getCommandPool(), 1, &commandBuffer);
@@ -365,7 +365,7 @@ void ResourceFactory::endSingleTimeCommands(VulkanContext* context, const vk::ra
     vk::CommandBuffer cmdBuf = *commandBuffer;
     submitInfo.pCommandBuffers = &cmdBuf;
 
-    context->getGraphicsQueue().submit(1, &submitInfo, {});
+    auto submitResult = context->getGraphicsQueue().submit(1, &submitInfo, {});
     context->getGraphicsQueue().waitIdle();
 }
 

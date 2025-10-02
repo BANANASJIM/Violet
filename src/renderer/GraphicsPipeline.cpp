@@ -107,7 +107,7 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* g
     vk::PipelineDepthStencilStateCreateInfo depthStencil;
     depthStencil.depthTestEnable = config.enableDepthTest;
     depthStencil.depthWriteEnable = config.enableDepthWrite;
-    depthStencil.depthCompareOp = vk::CompareOp::eLess;
+    depthStencil.depthCompareOp = config.depthCompareOp;  // Use config's depth compare op
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
