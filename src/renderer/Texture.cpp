@@ -239,10 +239,7 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
 
     violet::Log::info("Renderer", "Loading cubemap with 6 faces");
 
-    // For now, create a simple placeholder cubemap texture
-    // TODO: Implement proper cubemap loading from files
-
-    // Create a larger placeholder cubemap with gradient colors for better visibility
+    // Create a placeholder cubemap with gradient colors for visibility
     constexpr uint32_t faceSize = 256;  // Larger size for better testing
     constexpr uint32_t channels = 4;
     constexpr uint32_t faceDataSize = faceSize * faceSize * channels;

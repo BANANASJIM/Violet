@@ -66,13 +66,13 @@ public:
 
     static void* mapBuffer(VulkanContext* context, BufferResource& buffer);
 
-    // Legacy immediate transfer methods (uses single-time command buffers)
+    // Immediate transfer methods (uses single-time command buffers)
     static void copyBuffer(VulkanContext* context, BufferResource& src, BufferResource& dst, vk::DeviceSize size);
     static void copyBufferToImage(VulkanContext* context, BufferResource& buffer, ImageResource& image,
                                   uint32_t width, uint32_t height);
 
-    // New TransferPass-based methods (for batch operations)
-    // These create TransferPass configs that can be batched with ResourceLoader
+    // Async transfer methods (for use within command buffers)
+    // These methods can be batched with ResourceLoader for better performance
     static void copyBufferAsync(VulkanContext* context, vk::CommandBuffer cmd,
                                BufferResource& src, BufferResource& dst, vk::DeviceSize size);
     static void copyBufferToImageAsync(VulkanContext* context, vk::CommandBuffer cmd,

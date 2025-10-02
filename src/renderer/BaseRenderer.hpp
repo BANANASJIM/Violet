@@ -19,8 +19,6 @@ public:
     BaseRenderer() = default;
     virtual ~BaseRenderer() = default;
 
-    // Pure virtual functions that must be implemented by derived classes
-    virtual void cleanup() = 0;
 
     // Common public methods
     void setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& extent);

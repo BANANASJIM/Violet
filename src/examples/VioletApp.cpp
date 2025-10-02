@@ -53,7 +53,7 @@ void VioletApp::createResources() {
 
     // Initialize renderers with new Pass system
     renderer.init(getContext(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
-    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
 
     // Configure App base class
@@ -146,8 +146,6 @@ void VioletApp::update(float deltaTime) {
         currentScene->updateWorldTransforms(world.getRegistry());
     }
 }
-
-// Removed updateUniforms and recordCommands - now handled by Pass system
 
 void VioletApp::loadAsset(const eastl::string& path) {
     violet::Log::info("App", "Loading asset: {}", path.c_str());
@@ -259,7 +257,7 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                             }
                         }
                     } else {
-                        // Multiple root nodes - apply to each (legacy behavior)
+                        // Multiple root nodes - apply to each
                         for (uint32_t rootNodeId : rootNodeIds) {
                             const Node* node = tempScene->getNode(rootNodeId);
                             if (node && registry.valid(node->entity)) {
@@ -335,7 +333,7 @@ void VioletApp::cleanup() {
     if (currentScene) {
         currentScene->cleanup();
     }
-    renderer.cleanup();
+    // renderer 会在析构函数中自动 cleanup
     defaultTexture.cleanup();
 }
 

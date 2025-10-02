@@ -30,14 +30,14 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFl
     // We'll need GlobalUniforms for actual debug rendering, so this method doesn't do much
 }
 
-void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, DescriptorManager* descMgr, uint32_t framesInFlight) {
+void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, DescriptorManager* descMgr, vk::Format swapchainFormat, uint32_t framesInFlight) {
     context = ctx;
     renderPass = rp;
     maxFramesInFlight = framesInFlight;
     globalUniforms = globalUnif;
 
     // Setup overlay pass for UI rendering
-    setupOverlayPass(vk::Format::eB8G8R8A8Srgb); // TODO: Get actual swapchain format
+    setupOverlayPass(swapchainFormat);
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();

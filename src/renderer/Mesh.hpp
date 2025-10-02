@@ -51,15 +51,19 @@ public:
 
     size_t getSubMeshCount() const { return subMeshes.size(); }
     const SubMesh& getSubMesh(size_t index) const { return subMeshes[index]; }
-    const AABB& getLocalBounds() const { return localBounds; }
+    AABB getLocalBounds() const {
+        AABB combinedBounds;
+        for (const auto& subMesh : subMeshes) {
+            combinedBounds.expand(subMesh.localBounds);
+        }
+        return combinedBounds;
+    }
 
 private:
     VertexBuffer vertexBuffer;
     IndexBuffer indexBuffer;
     eastl::vector<SubMesh> subMeshes;
-    AABB localBounds;  // Will be removed after migration
 
-    void computeBounds(const eastl::vector<Vertex>& vertices);
     void computeSubMeshBounds(const eastl::vector<Vertex>& vertices,
                               const eastl::vector<uint32_t>& indices);
     void computeSubMeshBounds(const eastl::vector<Vertex>& vertices,

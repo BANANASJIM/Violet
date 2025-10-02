@@ -45,12 +45,11 @@ public:
     DebugRenderer& operator=(const DebugRenderer&) = delete;
 
     void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight);
-    void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
+    void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms, DescriptorManager* descMgr, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
 
     // UI support
     void setUILayer(class UILayer* layer) { uiLayer = layer; }
     void renderDebugAndUI(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
-    void cleanup() override;
     void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
 
     void renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum);
@@ -90,7 +89,10 @@ public:
 
     void setShowAABBs(bool show) { showAABBDebug = show; }
 
+    void cleanup();
+
 private:
+
     // UI rendering
     class UILayer* uiLayer = nullptr;
     RenderPass overlayPass;

@@ -52,14 +52,12 @@ struct TransformComponent {
 
 struct MeshComponent {
     eastl::unique_ptr<Mesh> mesh;
-    AABB worldBounds;  // Legacy - will be removed
     eastl::vector<AABB> subMeshWorldBounds;  // World-space bounds for each SubMesh
     bool dirty = true;
 
     MeshComponent() = default;
     MeshComponent(eastl::unique_ptr<Mesh> meshPtr) : mesh(eastl::move(meshPtr)) {
         if (mesh) {
-            worldBounds = mesh->getLocalBounds();
             // Initialize SubMesh world bounds
             subMeshWorldBounds.resize(mesh->getSubMeshCount());
             for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
@@ -70,9 +68,6 @@ struct MeshComponent {
 
     void updateWorldBounds(const glm::mat4& worldTransform) {
         if (mesh) {
-            // Update legacy bounds
-            worldBounds = mesh->getLocalBounds().transform(worldTransform);
-
             // Update each SubMesh world bounds
             for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
                 const auto& subMesh = mesh->getSubMesh(i);

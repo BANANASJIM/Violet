@@ -16,7 +16,6 @@ void Mesh::create(
 ) {
     subMeshes = subMeshes_;
 
-    computeBounds(vertices);
     computeSubMeshBounds(vertices, indices);
 
     if (!vertices.empty()) {
@@ -48,7 +47,6 @@ void Mesh::create(
 ) {
     subMeshes = subMeshes_;
 
-    computeBounds(vertices);
     computeSubMeshBounds(vertices, indices);
 
     if (!vertices.empty()) {
@@ -76,14 +74,6 @@ void Mesh::cleanup() {
     vertexBuffer.cleanup();
     indexBuffer.cleanup();
     subMeshes.clear();
-    localBounds.reset();
-}
-
-void Mesh::computeBounds(const eastl::vector<Vertex>& vertices) {
-    localBounds.reset();
-    for (const auto& vertex : vertices) {
-        localBounds.expand(vertex.pos);
-    }
 }
 
 void Mesh::computeSubMeshBounds(const eastl::vector<Vertex>& vertices,

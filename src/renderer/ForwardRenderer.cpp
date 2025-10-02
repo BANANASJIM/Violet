@@ -46,7 +46,7 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
     // Find first graphics pass for initialization
     RenderPass* firstRenderPass = getRenderPass(0);
     if (firstRenderPass) {
-        debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, maxFramesInFlight);
+        debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, swapchainFormat, maxFramesInFlight);
         environmentMap.init(context, firstRenderPass, this);
     }
 
@@ -129,38 +129,45 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
 }
 
 void ForwardRenderer::cleanup() {
-    // Destroy post-process sampler
-    if (postProcessSampler) {
-        context->getDevice().destroySampler(postProcessSampler);
-        postProcessSampler = VK_NULL_HANDLE;
-    }
+    // Protect against double cleanup
+    if (isCleanedUp) return;
+    isCleanedUp = true;
 
+    // Step 1: Clear containers with raw pointers first
+    globalMaterialIndex.clear();  // Contains raw pointers to MaterialInstance objects
+    renderables.clear();
+    renderableCache.clear();
+
+    // Step 2: Cleanup high-level rendering components
+    // These may still reference materials/textures, so clean them before destroying resources
+    environmentMap.cleanup();
+    debugRenderer.cleanup();
+
+    // Step 3: Cleanup render passes
     for (auto& pass : passes) {
         if (pass) {
             pass->cleanup();
         }
     }
     passes.clear();
-    debugRenderer.cleanup();
+
+    // Step 4: Destroy post-process sampler
+    if (postProcessSampler) {
+        context->getDevice().destroySampler(postProcessSampler);
+        postProcessSampler = VK_NULL_HANDLE;
+    }
+
+    // Step 5: Cleanup global uniforms (may reference textures)
     globalUniforms.cleanup();
-    environmentMap.cleanup();
 
-    // IMPORTANT: Clear globalMaterialIndex first!
-    // This map contains raw pointers to MaterialInstance objects
-    // Must be cleared before destroying the actual instances
-    globalMaterialIndex.clear();
-
-    // Clear materials and textures BEFORE cleaning up descriptor manager
-    // Materials need to free bindless texture indices during cleanup
+    // Step 6: Clear materials and textures
+    // Materials need to free bindless texture indices during destruction
     materialInstances.clear();
     materials.clear();
     textures.clear();
 
-    // Now safe to cleanup descriptor manager after materials are destroyed
-    descriptorManager.cleanup();  // Cleanup centralized descriptor manager (includes bindless)
-
-    renderables.clear();
-    renderableCache.clear();
+    // Step 7: Finally cleanup descriptor manager after all resources are destroyed
+    descriptorManager.cleanup();  // Safe to cleanup after materials/textures are gone
 }
 
 
@@ -419,8 +426,12 @@ void ForwardRenderer::buildSceneBVH(entt::registry& world) {
 
                 } else {
                     violet::Log::warn("Renderer", "Invalid subMeshIndex {} for renderable {}", subMeshIndex, i);
-                    // Fallback to legacy bounds
-                    renderableBounds.push_back(meshComp->worldBounds);
+                    // Fallback to first submesh bounds
+                    if (!meshComp->subMeshWorldBounds.empty()) {
+                        renderableBounds.push_back(meshComp->subMeshWorldBounds[0]);
+                    } else {
+                        renderableBounds.push_back(AABB{});  // Empty bounds
+                    }
                 }
             } else {
                 // Fallback: transform local bounds - this shouldn't happen anymore
@@ -611,8 +622,12 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
                         if (subMeshIndex < meshComp->getSubMeshCount()) {
                             aabbs.push_back(meshComp->getSubMeshWorldBounds(subMeshIndex));
                         } else {
-                            // Fallback to legacy bounds if something is wrong
-                            aabbs.push_back(meshComp->worldBounds);
+                            // Fallback to first submesh bounds if something is wrong
+                            if (!meshComp->subMeshWorldBounds.empty()) {
+                                aabbs.push_back(meshComp->subMeshWorldBounds[0]);
+                            } else {
+                                aabbs.push_back(AABB{});  // Empty bounds
+                            }
                         }
 
                         // Check if this renderable index is in visibleIndices

@@ -1630,13 +1630,6 @@ void SceneDebugLayer::renderHDRFileSelector(EnvironmentMap& environmentMap) {
 
         ImGui::Separator();
 
-        // Add placeholder option
-        if (ImGui::Selectable("Reset to Placeholder")) {
-            eastl::array<eastl::string, 6> placeholderFaces;
-            environmentMap.loadCubemap(placeholderFaces);
-            ImGui::CloseCurrentPopup();
-        }
-
         // Refresh button
         if (ImGui::Button("Refresh List")) {
             scanHDRFiles();

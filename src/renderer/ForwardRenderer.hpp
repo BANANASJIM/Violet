@@ -42,11 +42,6 @@ struct RenderStats {
     uint32_t skippedRenderables = 0;
 };
 
-// Traditional push constants (legacy)
-struct PushConstantData {
-    glm::mat4 model;
-};
-
 // Bindless push constants (includes material ID)
 struct BindlessPushConstants {
     glm::mat4 model;
@@ -103,7 +98,6 @@ public:
     ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
     void init(VulkanContext* context, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
-    void cleanup() override;
 
     // Get final pass RenderPass for swapchain framebuffer creation
     vk::RenderPass getFinalPassRenderPass() const;
@@ -189,6 +183,7 @@ public:
     DescriptorManager& getDescriptorManager() { return descriptorManager; }
 
 private:
+    void cleanup();  // Private cleanup function called from destructor
     void collectFromEntity(entt::entity entity, entt::registry& world);
     void createDefaultPBRTextures();
 
@@ -198,54 +193,42 @@ private:
     // Declarative pass helpers
     void insertPassTransition(vk::CommandBuffer cmd, size_t passIndex);
 
-    GlobalUniforms globalUniforms;
+    // Cleanup protection
+    bool isCleanedUp = false;
 
     eastl::vector<Renderable>                          renderables;
-    eastl::vector<AABB>                                renderableBounds;  // Bounds for each renderable
-    eastl::vector<eastl::unique_ptr<Material>>         materials;
-    eastl::vector<eastl::unique_ptr<MaterialInstance>> materialInstances;
-    eastl::vector<eastl::unique_ptr<Texture>>          textures;
-
-    // Global material instance index (GLTF material index -> MaterialInstance pointer)
-    eastl::hash_map<uint32_t, MaterialInstance*> globalMaterialIndex;
-
+    eastl::vector<AABB>                                renderableBounds;
     eastl::hash_map<entt::entity, eastl::vector<uint32_t>> renderableCache;
-
-    // BVH for frustum culling
     BVH sceneBVH;
     eastl::vector<uint32_t> visibleIndices;
-    bool sceneDirty = true;    // Track if any objects moved
-    bool bvhBuilt = false;     // Track if BVH built at least once
-
-    // Rendering statistics
+    bool sceneDirty = true;
+    bool bvhBuilt = false;
     RenderStats renderStats;
+    entt::registry* currentWorld = nullptr;
+    vk::Extent2D currentExtent = {1280, 720};
 
-    // Debug rendering
-    DebugRenderer debugRenderer;
-
-    // Skybox rendering
-    EnvironmentMap environmentMap;
-
-    // Default PBR textures
     Texture* defaultWhiteTexture = nullptr;
     Texture* defaultBlackTexture = nullptr;
     Texture* defaultMetallicRoughnessTexture = nullptr;
     Texture* defaultNormalTexture = nullptr;
 
-    // Multi-pass system data
-    eastl::vector<eastl::unique_ptr<Pass>> passes;  // Unified pass list (graphics + compute)
-    entt::registry* currentWorld = nullptr;
-    vk::Extent2D currentExtent = {1280, 720};
-
-    // Post-process material for fullscreen quad rendering
     Material* postProcessMaterial = nullptr;
-    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
-    vk::Sampler postProcessSampler = VK_NULL_HANDLE;
-
-    // Bindless materials (use bindless texture array + material data SSBO)
     Material* pbrBindlessMaterial = nullptr;
 
-    // Centralized descriptor management
+    vk::Sampler postProcessSampler = VK_NULL_HANDLE;
+
+    eastl::vector<eastl::unique_ptr<Texture>>          textures;
+
+    eastl::vector<eastl::unique_ptr<MaterialInstance>> materialInstances;
+    eastl::vector<eastl::unique_ptr<Material>>         materials;
+    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
+    eastl::hash_map<uint32_t, MaterialInstance*> globalMaterialIndex;
+
+    GlobalUniforms globalUniforms;
+    DebugRenderer debugRenderer;
+    EnvironmentMap environmentMap;
+    eastl::vector<eastl::unique_ptr<Pass>> passes;
+
     DescriptorManager descriptorManager;
 
 };

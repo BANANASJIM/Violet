@@ -113,17 +113,11 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* g
 
     eastl::vector<vk::DescriptorSetLayout> setLayouts;
 
-    // Use global layout from config if provided (new API), otherwise fall back to legacy API
+    // Add global descriptor set layout from config
     if (config.globalDescriptorSetLayout) {
         setLayouts.push_back(config.globalDescriptorSetLayout);
-    } else if (globalDescriptorSet) {
-        vk::DescriptorSetLayout legacyLayout = globalDescriptorSet->getLayout();
-        if (!legacyLayout) {
-            violet::Log::error("Renderer", "GraphicsPipeline: Legacy globalDescriptorSet->getLayout() returned null");
-        }
-        setLayouts.push_back(legacyLayout);
     } else {
-        violet::Log::error("Renderer", "GraphicsPipeline: No global descriptor set layout available (neither config nor globalDescriptorSet)");
+        violet::Log::error("Renderer", "GraphicsPipeline: No global descriptor set layout provided in config");
     }
 
     // Add additional descriptor sets from config (e.g., bindless texture array)

@@ -9,19 +9,10 @@ class VulkanContext;
 class UniformBuffer;
 class Texture;
 
-// NOTE: This enum is DEPRECATED for graphics pipelines
+// NOTE: This enum is ONLY for compute shaders
 // Graphics pipelines should use DescriptorManager with string-based layout names
-// This enum is kept ONLY for ComputePipeline backward compatibility
 enum class DescriptorSetType {
-    EquirectToCubemap,    // Compute shader: equirectangular to cubemap conversion
-
-    // DEPRECATED - Graphics pipelines should use DescriptorManager instead
-    GlobalUniforms,       // Use DescriptorManager::getLayout("Global")
-    MaterialTextures,     // Use DescriptorManager::getLayout("PBRMaterial")
-    UnlitMaterialTextures, // Use DescriptorManager::getLayout("UnlitMaterial")
-    PostProcess,          // Use DescriptorManager::getLayout("PostProcess")
-    BindlessTest,         // Use DescriptorManager::getLayout("Bindless")
-    None                  // Not needed with DescriptorManager
+    EquirectToCubemap    // Compute shader: equirectangular to cubemap conversion
 };
 
 /**
@@ -42,9 +33,8 @@ public:
     // Modern API: Initialize with pre-allocated descriptor sets from DescriptorManager
     void init(VulkanContext* context, const eastl::vector<vk::DescriptorSet>& sets);
 
-    // Legacy API: COMPUTE SHADER ONLY - Graphics pipelines should use DescriptorManager
-    // This method is kept only for ComputePipeline compatibility (e.g., EquirectToCubemap)
-    // WARNING: Do NOT use this for graphics pipelines - use DescriptorManager::allocateSets() instead
+    // Compute shader API: Only for compute pipelines (e.g., EquirectToCubemap)
+    // Graphics pipelines must use DescriptorManager::allocateSets() instead
     void create(VulkanContext* context, uint32_t maxFramesInFlight);
     void create(VulkanContext* context, uint32_t maxFramesInFlight, DescriptorSetType type);
 
