@@ -59,7 +59,7 @@ void TestTexture::createCheckerboardTexture(VulkanContext* context, Texture& tex
     ResourceFactory::destroyBuffer(context, stagingBuffer);
 
     texture.createImageView(context, vk::Format::eR8G8B8A8Srgb);
-    texture.createSampler(context);
+    // Sampler will be set externally via setSampler()
 }
 
 void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
@@ -101,7 +101,7 @@ void TestTexture::createWhiteTexture(VulkanContext* context, Texture& texture) {
     ResourceFactory::destroyBuffer(context, stagingBuffer);
 
     texture.createImageView(context, vk::Format::eR8G8B8A8Srgb);
-    texture.createSampler(context);
+    // Sampler will be set externally via setSampler()
 }
 
 }

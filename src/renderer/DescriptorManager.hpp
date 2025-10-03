@@ -20,6 +20,46 @@ struct BindlessPushConstants {
     uint32_t padding[3];  // Align to 16 bytes
 };
 
+// Sampler types for common use cases
+enum class SamplerType {
+    Default,        // Linear, Repeat, Anisotropy enabled
+    ClampToEdge,    // Linear, ClampToEdge, No anisotropy (for PostProcess)
+    Nearest,        // Nearest, Repeat, No anisotropy
+    Shadow,         // Linear, ClampToBorder, CompareOp enabled
+    Cubemap,        // Linear, ClampToEdge, No anisotropy (for skybox/environment)
+    NearestClamp    // Nearest, ClampToEdge, No anisotropy
+};
+
+// Declarative sampler configuration
+struct SamplerConfig {
+    vk::Filter magFilter = vk::Filter::eLinear;
+    vk::Filter minFilter = vk::Filter::eLinear;
+    vk::SamplerAddressMode addressModeU = vk::SamplerAddressMode::eRepeat;
+    vk::SamplerAddressMode addressModeV = vk::SamplerAddressMode::eRepeat;
+    vk::SamplerAddressMode addressModeW = vk::SamplerAddressMode::eRepeat;
+    vk::SamplerMipmapMode mipmapMode = vk::SamplerMipmapMode::eLinear;
+    float minLod = 0.0f;
+    float maxLod = VK_LOD_CLAMP_NONE;
+    float mipLodBias = 0.0f;
+    bool anisotropyEnable = false;
+    float maxAnisotropy = 1.0f;
+    vk::BorderColor borderColor = vk::BorderColor::eFloatOpaqueBlack;
+    bool compareEnable = false;
+    vk::CompareOp compareOp = vk::CompareOp::eNever;
+
+    // Hash for caching
+    size_t hash() const;
+    bool operator==(const SamplerConfig& other) const;
+
+    // Predefined configurations
+    static SamplerConfig getDefault(float maxAnisotropy);
+    static SamplerConfig getClampToEdge();
+    static SamplerConfig getNearest();
+    static SamplerConfig getShadow();
+    static SamplerConfig getCubemap();
+    static SamplerConfig getNearestClamp();
+};
+
 // Descriptor update frequency determines pool allocation strategy
 enum class UpdateFrequency {
     PerFrame,      // Updates every frame (camera, time)
@@ -96,6 +136,10 @@ public:
 
     // Check if layout exists
     bool hasLayout(const eastl::string& layoutName) const;
+
+    // Sampler management - centralized sampler creation and caching
+    vk::Sampler getSampler(SamplerType type);
+    vk::Sampler getOrCreateSampler(const SamplerConfig& config);
 
     // Bindless texture management integration
     void initBindless(uint32_t maxTextures);
@@ -183,6 +227,13 @@ private:
     // Material data SSBO management
     bool materialDataEnabled = false;
     vk::DescriptorSet materialDataSet;
+
+    // Sampler cache - avoid creating duplicate samplers
+    eastl::hash_map<size_t, vk::Sampler> samplerCache;  // Hash -> Sampler
+    eastl::hash_map<SamplerType, vk::Sampler> predefinedSamplers;  // Type -> Sampler
+
+    // Internal sampler creation
+    vk::Sampler createSampler(const SamplerConfig& config);
     BufferResource materialDataBuffer;  // Managed by ResourceFactory
     void* materialDataMapped = nullptr;  // Persistent mapping from VMA
     eastl::vector<MaterialData> materialDataSlots;

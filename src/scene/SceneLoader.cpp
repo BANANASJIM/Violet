@@ -303,6 +303,9 @@ void SceneLoader::loadTextures(GLTFLoadContext& loadCtx, const void* modelPtr) {
                 texture->loadFromFile(loadCtx.vulkanContext, eastl::string(gltfImage.uri.c_str()));
             }
 
+            // Set sampler from DescriptorManager
+            texture->setSampler(loadCtx.renderer->getDescriptorManager().getSampler(SamplerType::Default));
+
             // Transfer ownership to Renderer for persistent storage
             Texture* texturePtr = loadCtx.renderer->getMaterialManager()->addTexture(eastl::move(texture));
             loadCtx.textures[i] = texturePtr;

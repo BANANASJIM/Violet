@@ -396,6 +396,7 @@ void MaterialManager::createDefaultWhiteTexture() {
     const uint8_t white[] = {255, 255, 255, 255};
     auto texture = eastl::make_unique<Texture>();
     texture->loadFromMemory(context, white, sizeof(white), 1, 1, 4, false);
+    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
     defaultTextures.white = addTexture(eastl::move(texture));
 }
 
@@ -403,6 +404,7 @@ void MaterialManager::createDefaultBlackTexture() {
     const uint8_t black[] = {0, 0, 0, 255};
     auto texture = eastl::make_unique<Texture>();
     texture->loadFromMemory(context, black, sizeof(black), 1, 1, 4, false);
+    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
     defaultTextures.black = addTexture(eastl::move(texture));
 }
 
@@ -410,6 +412,7 @@ void MaterialManager::createDefaultNormalTexture() {
     const uint8_t normal[] = {128, 128, 255, 255};  // R=0.5, G=0.5, B=1.0
     auto texture = eastl::make_unique<Texture>();
     texture->loadFromMemory(context, normal, sizeof(normal), 1, 1, 4, false);
+    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
     defaultTextures.normal = addTexture(eastl::move(texture));
 }
 
@@ -417,6 +420,7 @@ void MaterialManager::createDefaultMetallicRoughnessTexture() {
     const uint8_t metallicRoughness[] = {255, 128, 0, 255};  // R=1.0 (roughness), G=0.5 (metallic)
     auto texture = eastl::make_unique<Texture>();
     texture->loadFromMemory(context, metallicRoughness, sizeof(metallicRoughness), 1, 1, 4, false);
+    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
     defaultTextures.metallicRoughness = addTexture(eastl::move(texture));
 }
 

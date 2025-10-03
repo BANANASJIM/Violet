@@ -49,8 +49,6 @@ VioletApp::~VioletApp() {
 }
 
 void VioletApp::createResources() {
-    createTestResources();
-
     // Initialize renderer first to set up DescriptorManager (but don't create materials yet)
     // MaterialManager is passed but not used until after MaterialManager.init()
     renderer.init(getContext(), &materialManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
@@ -77,7 +75,7 @@ void VioletApp::createResources() {
     eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");
     try {
         violet::Log::info("App", "Loading default scene: {}", scenePath.c_str());
-        currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, &defaultTexture);
+        currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, materialManager.getDefaultTexture(DefaultTextureType::White));
 
         if (currentScene) {
             currentScene->updateWorldTransforms(world.getRegistry());
@@ -100,9 +98,7 @@ void VioletApp::createResources() {
     }
 }
 
-void VioletApp::createTestResources() {
-    TestTexture::createWhiteTexture(getContext(), defaultTexture);
-}
+// createTestResources removed - using MaterialManager default textures instead
 
 
 void VioletApp::initializeScene() {
@@ -171,7 +167,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 // Clear old renderables before loading new scene
                 renderer.clearRenderables();
 
-                currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
+                currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, materialManager.getDefaultTexture(DefaultTextureType::White));
                 currentScene->updateWorldTransforms(world.getRegistry());
 
                 // Update world bounds for all MeshComponents after world transforms are computed
@@ -226,7 +222,7 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
         if (ext == ".gltf" || ext == ".glb") {
             try {
                 // Load the glTF file into a temporary scene to get the entities
-                auto tempScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, &defaultTexture);
+                auto tempScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, materialManager.getDefaultTexture(DefaultTextureType::White));
 
                 if (tempScene) {
                     // Update world transforms for the loaded entities
@@ -343,7 +339,7 @@ void VioletApp::cleanup() {
         currentScene->cleanup();
     }
     // renderer 会在析构函数中自动 cleanup
-    defaultTexture.cleanup();
+    // defaultTexture removed - using MaterialManager default textures instead
 }
 
 } // namespace violet

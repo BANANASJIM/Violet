@@ -79,7 +79,7 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath, bo
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, format);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 }
 
 void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath, bool enableMipmaps) {
@@ -143,7 +143,7 @@ void Texture::loadFromKTX2(VulkanContext* ctx, const eastl::string& filePath, bo
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, format);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 
     ktxTexture_Destroy(ktxTexture(kTexture));
 }
@@ -229,7 +229,7 @@ void Texture::loadFromMemory(VulkanContext* ctx, const unsigned char* data, size
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, format);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 }
 
 void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 6>& facePaths) {
@@ -336,7 +336,7 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
 
     // Create image view and sampler for cubemap
     createCubemapImageView(ctx);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 
     violet::Log::info("Renderer", "Cubemap texture loaded successfully");
 }
@@ -360,7 +360,7 @@ void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format f
     allocation = imageResource.allocation;
 
     createCubemapImageView(context);
-    createSampler(context);
+    // Sampler will be set externally via setSampler()
 
     violet::Log::info("Renderer", "Empty cubemap created: {}x{}", size, size);
 }
@@ -433,7 +433,7 @@ void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
     ResourceFactory::destroyBuffer(ctx, stagingBuffer);
 
     createImageView(ctx, format);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 
     violet::Log::info("Renderer", "HDR texture loaded successfully: {}x{}", width, height);
 }
@@ -574,7 +574,7 @@ void Texture::loadEquirectangularToCubemap(VulkanContext* ctx, const eastl::stri
 
     // Create image view and sampler for cubemap
     createCubemapImageView(ctx);
-    createSampler(ctx);
+    // Sampler will be set externally via setSampler()
 
     violet::Log::info("Renderer", "HDR equirectangular converted to cubemap successfully");
 }
@@ -613,31 +613,8 @@ void Texture::createImageView(VulkanContext* ctx, vk::Format format) {
     // ImageView created
 }
 
-void Texture::createSampler(VulkanContext* ctx) {
-    vk::PhysicalDeviceProperties properties = ctx->getPhysicalDevice().getProperties();
-
-    vk::SamplerCreateInfo samplerInfo;
-    samplerInfo.magFilter = vk::Filter::eLinear;
-    samplerInfo.minFilter = vk::Filter::eLinear;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
-    samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.compareOp = vk::CompareOp::eAlways;
-
-    // Mipmap configuration
-    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = static_cast<float>(mipLevels);
-    samplerInfo.mipLodBias = 0.0f;
-
-    sampler = vk::raii::Sampler(ctx->getDeviceRAII(), samplerInfo);
-    // Sampler created
-}
+// createSampler() removed - samplers are now managed by DescriptorManager
+// Use setSampler() to assign a sampler from DescriptorManager
 
 void Texture::transitionImageLayout(VulkanContext* ctx, vk::Format format, vk::ImageLayout oldLayout,
                                     vk::ImageLayout newLayout) {

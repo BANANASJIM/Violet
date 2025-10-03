@@ -65,15 +65,17 @@ public:
 
     [[nodiscard]] vk::Image getImage() const { return imageResource.image; }
     [[nodiscard]] vk::ImageView getImageView() const { return *imageView; }
-    [[nodiscard]] vk::Sampler getSampler() const { return *sampler; }
+    [[nodiscard]] vk::Sampler getSampler() const { return sampler; }
     [[nodiscard]] bool isCubemap() const { return isCubemapTexture; }
     [[nodiscard]] bool isHDR() const { return format == vk::Format::eR16G16B16A16Sfloat || format == vk::Format::eR32G32B32A32Sfloat; }
     [[nodiscard]] vk::Format getFormat() const { return format; }
     [[nodiscard]] uint32_t getMipLevels() const { return mipLevels; }
 
+    // Sampler management - set from external source (DescriptorManager)
+    void setSampler(vk::Sampler externalSampler) { sampler = externalSampler; }
+
 private:
     void createImageView(VulkanContext* context, vk::Format format);
-    void createSampler(VulkanContext* context);
     void transitionImageLayout(VulkanContext* context, vk::Format format, vk::ImageLayout oldLayout,
                                vk::ImageLayout newLayout);
     void createCubemapImageView(VulkanContext* context);
@@ -86,7 +88,7 @@ private:
 private:
     ImageResource imageResource;
     vk::raii::ImageView imageView{nullptr};
-    vk::raii::Sampler sampler{nullptr};
+    vk::Sampler sampler = VK_NULL_HANDLE;  // External sampler from DescriptorManager (not owned)
     bool isCubemapTexture = false;
     vk::Format format = vk::Format::eR8G8B8A8Srgb;
     uint32_t mipLevels = 1;

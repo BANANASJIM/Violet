@@ -116,11 +116,7 @@ void ForwardRenderer::cleanup() {
     }
     passes.clear();
 
-    // Step 4: Destroy post-process sampler
-    if (postProcessSampler) {
-        context->getDevice().destroySampler(postProcessSampler);
-        postProcessSampler = VK_NULL_HANDLE;
-    }
+    // Step 4: Samplers are now managed by DescriptorManager (no cleanup needed)
 
     // Step 5: Cleanup global uniforms (may reference textures)
     globalUniforms.cleanup();
@@ -874,29 +870,14 @@ void ForwardRenderer::updatePostProcessDescriptors() {
         return;
     }
 
-    // Create sampler for offscreen textures (only once)
-    if (!postProcessSampler) {
-        vk::SamplerCreateInfo samplerInfo{};
-        samplerInfo.magFilter = vk::Filter::eLinear;
-        samplerInfo.minFilter = vk::Filter::eLinear;
-        samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.anisotropyEnable = false;
-        samplerInfo.maxAnisotropy = 1.0f;
-        samplerInfo.borderColor = vk::BorderColor::eFloatOpaqueBlack;
-        samplerInfo.unnormalizedCoordinates = false;
-        samplerInfo.compareEnable = false;
-        samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
-
-        postProcessSampler = context->getDevice().createSampler(samplerInfo);
-    }
+    // Get sampler from DescriptorManager (reuse cached sampler)
+    vk::Sampler sampler = descriptorManager.getSampler(SamplerType::ClampToEdge);
 
     // Update descriptor set with color texture (binding 0)
     vk::DescriptorImageInfo colorImageInfo{};
     colorImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     colorImageInfo.imageView = colorView;
-    colorImageInfo.sampler = postProcessSampler;
+    colorImageInfo.sampler = sampler;
 
     vk::WriteDescriptorSet colorWrite{};
     colorWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
@@ -910,7 +891,7 @@ void ForwardRenderer::updatePostProcessDescriptors() {
     vk::DescriptorImageInfo depthImageInfo{};
     depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     depthImageInfo.imageView = depthView;
-    depthImageInfo.sampler = postProcessSampler;
+    depthImageInfo.sampler = sampler;
 
     vk::WriteDescriptorSet depthWrite{};
     depthWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);

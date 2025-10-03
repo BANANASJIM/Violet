@@ -29,7 +29,6 @@ protected:
     void onWindowResize(int width, int height) override;
 
 private:
-    void createTestResources();
     void initializeScene();
     void loadAsset(const eastl::string& path);
     void loadAssetAtPosition(const eastl::string& path, const glm::vec3& position);
@@ -41,7 +40,6 @@ private:
     DebugRenderer debugRenderer;
 
     eastl::unique_ptr<Scene> currentScene;
-    Texture defaultTexture;
 
     eastl::unique_ptr<AssetBrowserLayer> assetBrowser;
     eastl::unique_ptr<SceneDebugLayer> sceneDebug;

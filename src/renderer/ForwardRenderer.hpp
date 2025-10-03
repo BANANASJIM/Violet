@@ -179,7 +179,6 @@ private:
     // Render pipeline specific materials (owned by renderer)
     eastl::unique_ptr<Material> postProcessMaterial;
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
-    vk::Sampler postProcessSampler = VK_NULL_HANDLE;
 
     // Reference to PBR material from MaterialManager
     Material* pbrBindlessMaterial = nullptr;
