@@ -8,7 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
-#include "renderer/ForwardRenderer.hpp"
+#include "renderer/core/ForwardRenderer.hpp"
 #include "ecs/Components.hpp"
 #include "math/Ray.hpp"
 #include "scene/Scene.hpp"

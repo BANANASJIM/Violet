@@ -1,6 +1,6 @@
 #include "Swapchain.hpp"
-#include "VulkanContext.hpp"
-#include "ResourceFactory.hpp"
+#include "renderer/core/VulkanContext.hpp"
+#include "resource/gpu/ResourceFactory.hpp"
 #include "core/Log.hpp"
 #include <GLFW/glfw3.h>
 #include <EASTL/array.h>

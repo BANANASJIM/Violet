@@ -11,7 +11,7 @@
 #include "core/FileSystem.hpp"
 #include "examples/TestData.hpp"
 #include "examples/TestTexture.hpp"
-#include "renderer/Mesh.hpp"
+#include "resource/Mesh.hpp"
 #include "scene/SceneLoader.hpp"
 
 namespace violet {

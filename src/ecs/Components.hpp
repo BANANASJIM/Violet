@@ -10,10 +10,10 @@
 #include <EASTL/vector.h>
 #include <EASTL/hash_map.h>
 
-#include "renderer/Camera.hpp"
+#include "renderer/camera/Camera.hpp"
 #include "renderer/CameraController.hpp"
 #include "renderer/Renderable.hpp"
-#include "renderer/Mesh.hpp"
+#include "resource/Mesh.hpp"
 #include "math/AABB.hpp"
 
 namespace violet {

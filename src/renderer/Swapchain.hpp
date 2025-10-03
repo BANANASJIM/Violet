@@ -2,7 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>
-#include "ResourceFactory.hpp"
+#include "resource/gpu/ResourceFactory.hpp"
 
 namespace violet {
 

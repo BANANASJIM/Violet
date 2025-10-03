@@ -1,6 +1,6 @@
-#include "Vertex.hpp"
-#include "VulkanContext.hpp"
-#include "Buffer.hpp"
+#include "resource/Vertex.hpp"
+#include "renderer/core/VulkanContext.hpp"
+#include "resource/gpu/Buffer.hpp"
 
 namespace violet {
 

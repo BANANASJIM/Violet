@@ -1,7 +1,7 @@
 #include "TestTexture.hpp"
-#include "renderer/VulkanContext.hpp"
-#include "renderer/Buffer.hpp"
-#include "renderer/ResourceFactory.hpp"
+#include "renderer/core/VulkanContext.hpp"
+#include "resource/gpu/Buffer.hpp"
+#include "resource/gpu/ResourceFactory.hpp"
 
 namespace violet {
 

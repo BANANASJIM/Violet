@@ -1,9 +1,9 @@
 #pragma once
 
 #include "Window.hpp"
-#include "renderer/VulkanContext.hpp"
+#include "renderer/core/VulkanContext.hpp"
 #include "renderer/Swapchain.hpp"
-#include "renderer/RenderPass.hpp"
+#include "renderer/core/RenderPass.hpp"
 #include "ui/ImGuiVulkanBackend.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>

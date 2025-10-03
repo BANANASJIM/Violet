@@ -1,6 +1,6 @@
 #include "RenderSettingsLayer.hpp"
-#include "renderer/ForwardRenderer.hpp"
-#include "renderer/VulkanContext.hpp"
+#include "renderer/core/ForwardRenderer.hpp"
+#include "renderer/core/VulkanContext.hpp"
 #include <imgui.h>
 
 namespace violet {

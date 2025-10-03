@@ -3,10 +3,10 @@
 #include "core/Log.hpp"
 #include "asset/AssetLoader.hpp"
 #include "asset/GLTFAsset.hpp"
-#include "renderer/ResourceManager.hpp"
-#include "renderer/Mesh.hpp"
-#include "renderer/Texture.hpp"
-#include "renderer/Material.hpp"
+#include "resource/ResourceManager.hpp"
+#include "resource/Mesh.hpp"
+#include "resource/Texture.hpp"
+#include "resource/Material.hpp"
 
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL

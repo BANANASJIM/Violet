@@ -1,6 +1,6 @@
 #include "ImGuiVulkanBackend.hpp"
-#include "renderer/VulkanContext.hpp"
-#include "renderer/Buffer.hpp"
+#include "renderer/core/VulkanContext.hpp"
+#include "resource/gpu/Buffer.hpp"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>

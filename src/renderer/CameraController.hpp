@@ -3,7 +3,7 @@
 #include <glm/glm.hpp>
 #include <EASTL/unordered_map.h>
 
-#include "Camera.hpp"
+#include "renderer/camera/Camera.hpp"
 #include "core/events/EventDispatcher.hpp"
 #include "input/InputEvents.hpp"
 

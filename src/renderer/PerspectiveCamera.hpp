@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.hpp"
+#include "renderer/camera/Camera.hpp"
 
 namespace violet {
 

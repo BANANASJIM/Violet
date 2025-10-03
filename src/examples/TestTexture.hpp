@@ -1,6 +1,6 @@
 #pragma once
 
-#include "renderer/Texture.hpp"
+#include "resource/Texture.hpp"
 
 namespace violet {
 

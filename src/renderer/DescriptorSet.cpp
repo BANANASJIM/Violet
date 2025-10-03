@@ -1,8 +1,8 @@
 #include "DescriptorSet.hpp"
 
-#include "Texture.hpp"
-#include "UniformBuffer.hpp"
-#include "VulkanContext.hpp"
+#include "resource/Texture.hpp"
+#include "resource/gpu/UniformBuffer.hpp"
+#include "renderer/core/VulkanContext.hpp"
 #include "core/Log.hpp"
 
 namespace violet {

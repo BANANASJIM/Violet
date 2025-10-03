@@ -1,6 +1,6 @@
 #pragma once
 
-#include "renderer/Vertex.hpp"
+#include "resource/Vertex.hpp"
 #include <EASTL/vector.h>
 
 namespace violet {

@@ -7,13 +7,13 @@
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
-#include "renderer/Material.hpp"
-#include "renderer/MaterialManager.hpp"
-#include "renderer/Mesh.hpp"
-#include "renderer/ForwardRenderer.hpp"
-#include "renderer/Texture.hpp"
-#include "renderer/Vertex.hpp"
-#include "renderer/VulkanContext.hpp"
+#include "resource/Material.hpp"
+#include "resource/MaterialManager.hpp"
+#include "resource/Mesh.hpp"
+#include "renderer/core/ForwardRenderer.hpp"
+#include "resource/Texture.hpp"
+#include "resource/Vertex.hpp"
+#include "renderer/core/VulkanContext.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
