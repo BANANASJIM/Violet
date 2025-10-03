@@ -66,8 +66,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
         config.lineWidth = 1.0f;  // Default line width
     }
 
-    // Use global uniforms from the main renderer
-    debugPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
+    // Use global uniforms from the main renderer (already set in config.globalDescriptorSetLayout)
+    debugPipeline->init(context, renderPass, debugMaterial.get(),
                        violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
                        violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), config);
 
@@ -83,7 +83,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
         wireframeConfig.polygonMode = vk::PolygonMode::eFill;
     }
 
-    wireframePipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
+    wireframePipeline->init(context, renderPass, debugMaterial.get(),
                            violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
                            violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), wireframeConfig);
 
@@ -94,7 +94,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
     solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects
 
-    solidPipeline->init(context, renderPass, globalUniforms->getDescriptorSet(), debugMaterial.get(),
+    solidPipeline->init(context, renderPass, debugMaterial.get(),
                        violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
                        violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), solidConfig);
 

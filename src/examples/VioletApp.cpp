@@ -51,8 +51,16 @@ VioletApp::~VioletApp() {
 void VioletApp::createResources() {
     createTestResources();
 
-    // Initialize renderers with new Pass system
-    renderer.init(getContext(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+    // Initialize renderer first to set up DescriptorManager (but don't create materials yet)
+    // MaterialManager is passed but not used until after MaterialManager.init()
+    renderer.init(getContext(), &materialManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+
+    // Initialize MaterialManager with the renderer's DescriptorManager
+    materialManager.init(getContext(), &renderer.getDescriptorManager(), MAX_FRAMES_IN_FLIGHT);
+    materialManager.createDefaultResources();
+
+    // Now create renderer materials after MaterialManager is initialized
+    renderer.createMaterials();
     debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
 

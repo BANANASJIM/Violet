@@ -9,14 +9,14 @@
 
 namespace violet {
 
-void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDescriptorSet,
-                            Material* material, const eastl::string& vertPath, const eastl::string& fragPath) {
+void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* material,
+                            const eastl::string& vertPath, const eastl::string& fragPath) {
     PipelineConfig defaultConfig;
-    init(ctx, rp, globalDescriptorSet, material, vertPath, fragPath, defaultConfig);
+    init(ctx, rp, material, vertPath, fragPath, defaultConfig);
 }
 
-void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, DescriptorSet* globalDescriptorSet,
-                            Material* material, const eastl::string& vertPath, const eastl::string& fragPath,
+void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* material,
+                            const eastl::string& vertPath, const eastl::string& fragPath,
                             const PipelineConfig& config) {
     context = ctx;
 

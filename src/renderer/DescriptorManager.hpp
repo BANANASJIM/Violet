@@ -4,6 +4,7 @@
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
 #include <EASTL/hash_map.h>
+#include <glm/glm.hpp>
 #include "ResourceFactory.hpp"
 
 namespace violet {
@@ -11,6 +12,13 @@ namespace violet {
 class VulkanContext;
 class UniformBuffer;
 class Texture;
+
+// Bindless push constants for PBR rendering
+struct BindlessPushConstants {
+    glm::mat4 model;
+    uint32_t materialID;
+    uint32_t padding[3];  // Align to 16 bytes
+};
 
 // Descriptor update frequency determines pool allocation strategy
 enum class UpdateFrequency {

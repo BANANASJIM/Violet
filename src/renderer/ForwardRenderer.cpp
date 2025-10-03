@@ -27,8 +27,9 @@ ForwardRenderer::~ForwardRenderer() {
     cleanup();
 }
 
-void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint32_t framesInFlight) {
+void ForwardRenderer::init(VulkanContext* ctx, MaterialManager* matMgr, vk::Format swapchainFormat, uint32_t framesInFlight) {
     context = ctx;
+    materialManager = matMgr;
     maxFramesInFlight = framesInFlight;
 
     // Initialize descriptor manager first
@@ -73,50 +74,17 @@ void ForwardRenderer::init(VulkanContext* ctx, vk::Format swapchainFormat, uint3
         violet::Log::info("Renderer", "Registered default white texture at bindless index {}", whiteTexIndex);
     }
 
-    // Create PBR bindless material (uses bindless texture array + material data SSBO)
-    RenderPass* mainPass = getRenderPass(0);
-    if (mainPass) {
-        PipelineConfig bindlessConfig;
-        bindlessConfig.pushConstantRanges.push_back(vk::PushConstantRange{
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0,
-            sizeof(BindlessPushConstants)
-        });
-
-        // Add bindless descriptor set layouts (set 1: bindless textures, set 2: material data SSBO)
-        bindlessConfig.additionalDescriptorSets.push_back(descriptorManager.getLayout("Bindless"));
-        bindlessConfig.additionalDescriptorSets.push_back(descriptorManager.getLayout("MaterialData"));
-
-        pbrBindlessMaterial = createMaterial(
-            FileSystem::resolveRelativePath("build/shaders/pbr_bindless.vert.spv"),
-            FileSystem::resolveRelativePath("build/shaders/pbr_bindless.frag.spv"),
-            "",  // No traditional material layout needed
-            bindlessConfig,
-            mainPass
-        );
-
-        if (pbrBindlessMaterial) {
-            violet::Log::info("Renderer", "PBR bindless material created successfully");
-        }
+void ForwardRenderer::createMaterials() {
+    // Get PBR bindless material from MaterialManager
+    if (materialManager) {
+        pbrBindlessMaterial = materialManager->createPBRBindlessMaterial(getRenderPass(0));
     }
 
-    // Create post-process material (uses PostProcess pass for pipeline)
+    // Create post-process material using MaterialManager
     RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
-    if (postProcessPass) {
-        PipelineConfig postProcessPipelineConfig;
-        postProcessPipelineConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for fullscreen quad
-        postProcessPipelineConfig.enableDepthTest = true;   // Enable depth test for depth writes to work
-        postProcessPipelineConfig.enableDepthWrite = true;  // Write sampled depth to swapchain
-        postProcessPipelineConfig.depthCompareOp = vk::CompareOp::eAlways;  // Always pass depth test
-        postProcessPipelineConfig.useVertexInput = false;  // No vertex buffer for fullscreen quad
-
-        postProcessMaterial = createMaterial(
-            FileSystem::resolveRelativePath("build/shaders/postprocess.vert.spv"),
-            FileSystem::resolveRelativePath("build/shaders/postprocess.frag.spv"),
-            "PostProcess",
-            postProcessPipelineConfig,
-            postProcessPass
-        );
+    if (postProcessPass && materialManager) {
+        Material* postProcMat = materialManager->createPostProcessMaterial(postProcessPass);
+        postProcessMaterial = eastl::unique_ptr<Material>(postProcMat);
 
         // Create descriptor set for post-process material
         auto sets = descriptorManager.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
@@ -134,7 +102,6 @@ void ForwardRenderer::cleanup() {
     isCleanedUp = true;
 
     // Step 1: Clear containers with raw pointers first
-    globalMaterialIndex.clear();  // Contains raw pointers to MaterialInstance objects
     renderables.clear();
     renderableCache.clear();
 
@@ -160,11 +127,8 @@ void ForwardRenderer::cleanup() {
     // Step 5: Cleanup global uniforms (may reference textures)
     globalUniforms.cleanup();
 
-    // Step 6: Clear materials and textures
-    // Materials need to free bindless texture indices during destruction
-    materialInstances.clear();
-    materials.clear();
-    textures.clear();
+    // Step 6: Materials and textures are now managed by MaterialManager
+    // (No cleanup needed here)
 
     // Step 7: Finally cleanup descriptor manager after all resources are destroyed
     descriptorManager.cleanup();  // Safe to cleanup after materials/textures are gone
@@ -666,130 +630,7 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     }
 }
 
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader) {
-    // Default to PBR material
-    return createMaterial(vertexShader, fragmentShader, "PBRMaterial");
-}
-
-// Core implementation with all parameters
-Material* ForwardRenderer::createMaterial(
-    const eastl::string& vertexShader,
-    const eastl::string& fragmentShader,
-    const eastl::string& materialLayoutName,
-    const PipelineConfig& config,
-    RenderPass* renderPass
-) {
-    auto material = eastl::make_unique<Material>();
-
-    try {
-        material->create(context);
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to create material: {}", e.what());
-        return nullptr;
-    }
-
-    // Get material descriptor set layout from DescriptorManager
-    PipelineConfig finalConfig = config;  // Copy config to add material layout
-    if (!materialLayoutName.empty() && descriptorManager.hasLayout(materialLayoutName)) {
-        finalConfig.materialDescriptorSetLayout = descriptorManager.getLayout(materialLayoutName);
-    }
-
-    // Set global descriptor set layout from DescriptorManager
-    finalConfig.globalDescriptorSetLayout = descriptorManager.getLayout("Global");
-
-    if (!finalConfig.globalDescriptorSetLayout) {
-        violet::Log::error("ForwardRenderer", "Failed to get 'Global' layout from DescriptorManager");
-    } else {
-        violet::Log::debug("Renderer", "Set global descriptor set layout for material");
-    }
-
-    auto pipeline = new GraphicsPipeline();
-    try {
-        pipeline->init(context, renderPass, globalUniforms.getDescriptorSet(), material.get(), vertexShader, fragmentShader, finalConfig);
-    } catch (const std::exception& e) {
-        violet::Log::error("ForwardRenderer", "Failed to initialize pipeline with shaders: '{}', '{}' - Error: {}",
-            vertexShader.c_str(), fragmentShader.c_str(), e.what());
-        delete pipeline;
-        return nullptr;
-    }
-
-    if (!pipeline->getPipeline()) {
-        violet::Log::error("ForwardRenderer", "Pipeline creation failed - null pipeline object");
-        delete pipeline;
-        return nullptr;
-    }
-
-    material->pipeline = pipeline;
-
-    Material* ptr = material.get();
-    materials.push_back(eastl::move(material));
-
-    return ptr;
-}
-
-// Convenience overload: default config and render pass
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, const eastl::string& materialLayoutName) {
-    PipelineConfig defaultConfig;
-    return createMaterial(vertexShader, fragmentShader, materialLayoutName, defaultConfig, getRenderPass(0));
-}
-
-// Convenience overload: custom config, default render pass
-Material* ForwardRenderer::createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader, const eastl::string& materialLayoutName, const PipelineConfig& config) {
-    return createMaterial(vertexShader, fragmentShader, materialLayoutName, config, getRenderPass(0));
-}
-
-MaterialInstance* ForwardRenderer::createMaterialInstance(Material* material) {
-    // 默认创建PBR材质实例
-    return createPBRMaterialInstance(material);
-}
-
-MaterialInstance* ForwardRenderer::createPBRMaterialInstance(Material* material) {
-    auto instance = eastl::make_unique<PBRMaterialInstance>();
-    instance->create(context, material, &descriptorManager);
-
-    // Set default PBR textures if available (automatically registers in bindless)
-    if (defaultMetallicRoughnessTexture) {
-        instance->setMetallicRoughnessTexture(defaultMetallicRoughnessTexture);
-    }
-    if (defaultNormalTexture) {
-        instance->setNormalTexture(defaultNormalTexture);
-    }
-
-    MaterialInstance* ptr = instance.get();
-    materialInstances.push_back(eastl::move(instance));
-
-    return ptr;
-}
-
-MaterialInstance* ForwardRenderer::createUnlitMaterialInstance(Material* material) {
-    if (!material) {
-        violet::Log::error("ForwardRenderer", "Cannot create material instance - null material provided");
-        return nullptr;
-    }
-
-    auto instance = eastl::make_unique<UnlitMaterialInstance>();
-    instance->create(context, material, &descriptorManager);
-
-    MaterialInstance* ptr = instance.get();
-    materialInstances.push_back(eastl::move(instance));
-
-    return ptr;
-}
-
-void ForwardRenderer::registerMaterialInstance(uint32_t index, MaterialInstance* instance) {
-    globalMaterialIndex[index] = instance;
-}
-
-MaterialInstance* ForwardRenderer::getMaterialInstanceByIndex(uint32_t index) const {
-    auto it = globalMaterialIndex.find(index);
-    return it != globalMaterialIndex.end() ? it->second : nullptr;
-}
-
-Texture* ForwardRenderer::addTexture(eastl::unique_ptr<Texture> texture) {
-    Texture* ptr = texture.get();
-    textures.push_back(eastl::move(texture));
-    return ptr;
-}
+// All material creation methods removed - use MaterialManager instead
 
 // GlobalUniforms implementation
 GlobalUniforms::~GlobalUniforms() {
@@ -1012,51 +853,6 @@ void ForwardRenderer::registerDescriptorLayouts() {
 
     violet::Log::info("Renderer", "Registered all descriptor layouts declaratively");
 }
-
-void ForwardRenderer::createDefaultPBRTextures() {
-    // Create basic white and black textures
-    defaultWhiteTexture = addTexture(ResourceFactory::createWhiteTexture(context));
-    defaultBlackTexture = addTexture(ResourceFactory::createBlackTexture(context));
-
-    // Create default metallic-roughness texture (G=roughness=0.8, B=metallic=0.0)
-    {
-        auto metallicRoughnessTexture = eastl::make_unique<Texture>();
-        constexpr uint32_t width = 4;
-        constexpr uint32_t height = 4;
-        constexpr uint32_t channels = 4;
-        eastl::vector<uint8_t> pixels(width * height * channels);
-
-        for (uint32_t i = 0; i < width * height; ++i) {
-            pixels[i * 4 + 0] = 255;  // R: unused
-            pixels[i * 4 + 1] = 204;  // G: roughness = 0.8 (204/255)
-            pixels[i * 4 + 2] = 0;    // B: metallic = 0.0
-            pixels[i * 4 + 3] = 255;  // A: alpha = 1.0
-        }
-
-        metallicRoughnessTexture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
-        defaultMetallicRoughnessTexture = addTexture(eastl::move(metallicRoughnessTexture));
-    }
-
-    // Create default normal texture (flat normal: 128,128,255)
-    {
-        auto normalTexture = eastl::make_unique<Texture>();
-        constexpr uint32_t width = 4;
-        constexpr uint32_t height = 4;
-        constexpr uint32_t channels = 4;
-        eastl::vector<uint8_t> pixels(width * height * channels);
-
-        for (uint32_t i = 0; i < width * height; ++i) {
-            pixels[i * 4 + 0] = 128;  // R: normal.x = 0
-            pixels[i * 4 + 1] = 128;  // G: normal.y = 0
-            pixels[i * 4 + 2] = 255;  // B: normal.z = 1
-            pixels[i * 4 + 3] = 255;  // A: alpha = 1.0
-        }
-
-        normalTexture->loadFromMemory(context, pixels.data(), pixels.size(), width, height, channels, false);
-        defaultNormalTexture = addTexture(eastl::move(normalTexture));
-    }
-}
-
 
 void ForwardRenderer::updatePostProcessDescriptors() {
     if (!postProcessDescriptorSet || passes.size() < 2) {

@@ -8,6 +8,7 @@
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include "renderer/Material.hpp"
+#include "renderer/MaterialManager.hpp"
 #include "renderer/Mesh.hpp"
 #include "renderer/ForwardRenderer.hpp"
 #include "renderer/Texture.hpp"

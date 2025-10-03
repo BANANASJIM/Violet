@@ -15,6 +15,7 @@
 #include "renderer/DescriptorSet.hpp"
 #include "renderer/DescriptorManager.hpp"
 #include "renderer/Material.hpp"
+#include "renderer/MaterialManager.hpp"
 #include "renderer/Renderable.hpp"
 #include "renderer/Texture.hpp"
 #include "renderer/UniformBuffer.hpp"
@@ -97,8 +98,8 @@ public:
     ForwardRenderer(ForwardRenderer&&)            = delete;
     ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
-    void init(VulkanContext* context, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
-
+    void init(VulkanContext* context, MaterialManager* matMgr, vk::Format wapchainFormat, uint32_t maxFramesInFlight);
+    void createMaterials();  // Create materials after MaterialManager is initialized
     // Get final pass RenderPass for swapchain framebuffer creation
     vk::RenderPass getFinalPassRenderPass() const;
 
@@ -113,42 +114,9 @@ public:
 
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
 
-    // Modern API: Use DescriptorManager layout names (e.g., "PBRMaterial", "UnlitMaterial", "PostProcess")
-    Material* createMaterial(const eastl::string& vertexShader, const eastl::string& fragmentShader);
-    Material* createMaterial(
-        const eastl::string& vertexShader,
-        const eastl::string& fragmentShader,
-        const eastl::string& materialLayoutName
-    );
-    Material* createMaterial(
-        const eastl::string& vertexShader,
-        const eastl::string& fragmentShader,
-        const eastl::string&  materialLayoutName,
-        const PipelineConfig& config
-    );
-    Material* createMaterial(
-        const eastl::string& vertexShader,
-        const eastl::string& fragmentShader,
-        const eastl::string&  materialLayoutName,
-        const PipelineConfig& config,
-        RenderPass*          renderPass
-    );
-    MaterialInstance* createMaterialInstance(Material* material);
-    MaterialInstance* createPBRMaterialInstance(Material* material);
-    MaterialInstance* createUnlitMaterialInstance(Material* material);
-
-    // Global material instance management
-    void              registerMaterialInstance(uint32_t index, MaterialInstance* instance);
-    MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const;
-
-    // Texture management for scene loading
-    Texture* addTexture(eastl::unique_ptr<Texture> texture);
-
-    // Default PBR texture access
-    Texture* getDefaultWhiteTexture() const { return defaultWhiteTexture; }
-    Texture* getDefaultBlackTexture() const { return defaultBlackTexture; }
-    Texture* getDefaultMetallicRoughnessTexture() const { return defaultMetallicRoughnessTexture; }
-    Texture* getDefaultNormalTexture() const { return defaultNormalTexture; }
+    // Material manager access - all material operations go through here
+    MaterialManager* getMaterialManager() { return materialManager; }
+    const MaterialManager* getMaterialManager() const { return materialManager; }
 
     void                             clearRenderables() { renderables.clear(); }
     const eastl::vector<Renderable>& getRenderables() const { return renderables; }
@@ -176,11 +144,19 @@ public:
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
     // PostProcess access
-    Material* getPostProcessMaterial() const { return postProcessMaterial; }
+    Material* getPostProcessMaterial() const { return postProcessMaterial.get(); }
     void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
+
+    // PBR Bindless Material access (shared material for all PBR instances)
+    Material* getPBRBindlessMaterial() const { return pbrBindlessMaterial; }
 
     // Descriptor manager access
     DescriptorManager& getDescriptorManager() { return descriptorManager; }
+
+    // Compatibility layer - delegates to MaterialManager
+    MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const {
+        return materialManager ? materialManager->getGlobalMaterial(index) : nullptr;
+    }
 
 private:
     void cleanup();  // Private cleanup function called from destructor
@@ -207,22 +183,13 @@ private:
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
 
-    Texture* defaultWhiteTexture = nullptr;
-    Texture* defaultBlackTexture = nullptr;
-    Texture* defaultMetallicRoughnessTexture = nullptr;
-    Texture* defaultNormalTexture = nullptr;
-
-    Material* postProcessMaterial = nullptr;
-    Material* pbrBindlessMaterial = nullptr;
-
+    // Render pipeline specific materials (owned by renderer)
+    eastl::unique_ptr<Material> postProcessMaterial;
+    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
     vk::Sampler postProcessSampler = VK_NULL_HANDLE;
 
-    eastl::vector<eastl::unique_ptr<Texture>>          textures;
-
-    eastl::vector<eastl::unique_ptr<MaterialInstance>> materialInstances;
-    eastl::vector<eastl::unique_ptr<Material>>         materials;
-    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
-    eastl::hash_map<uint32_t, MaterialInstance*> globalMaterialIndex;
+    // Reference to PBR material from MaterialManager
+    Material* pbrBindlessMaterial = nullptr;
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
@@ -230,6 +197,7 @@ private:
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
     DescriptorManager descriptorManager;
+    MaterialManager* materialManager = nullptr;  // Injected dependency
 
 };
 

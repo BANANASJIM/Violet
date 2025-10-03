@@ -31,11 +31,15 @@ public:
     GraphicsPipeline() = default;
     ~GraphicsPipeline() override = default;
 
-    void init(VulkanContext* context, RenderPass* renderPass, DescriptorSet* globalDescriptorSet,
-              Material* material, const eastl::string& vertPath, const eastl::string& fragPath);
-    void init(VulkanContext* context, RenderPass* renderPass, DescriptorSet* globalDescriptorSet,
-              Material* material, const eastl::string& vertPath, const eastl::string& fragPath,
+    // Generic init method - all configuration through PipelineConfig
+    void init(VulkanContext* context, RenderPass* renderPass, Material* material,
+              const eastl::string& vertPath, const eastl::string& fragPath,
               const PipelineConfig& config);
+
+    // Convenience init with default config
+    void init(VulkanContext* context, RenderPass* renderPass, Material* material,
+              const eastl::string& vertPath, const eastl::string& fragPath);
+
     void cleanup() override;
 
     void bind(vk::CommandBuffer commandBuffer) override;
