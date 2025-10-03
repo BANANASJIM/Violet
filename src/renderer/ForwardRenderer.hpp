@@ -34,6 +34,7 @@ constexpr uint32_t CAMERA_UBO_BINDING         = 0; // Global set binding 0: 相�
 constexpr uint32_t BASE_COLOR_TEXTURE_BINDING = 0; // Material set binding 0: 基础颜色纹理
 
 class Camera;
+class ResourceManager;
 
 // Rendering statistics structure
 struct RenderStats {
@@ -91,7 +92,7 @@ public:
     ForwardRenderer(ForwardRenderer&&)            = delete;
     ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
-    void init(VulkanContext* context, MaterialManager* matMgr, vk::Format wapchainFormat, uint32_t maxFramesInFlight);
+    void init(VulkanContext* context, ResourceManager* resMgr, vk::Format wapchainFormat, uint32_t maxFramesInFlight);
     void createMaterials();  // Create materials after MaterialManager is initialized
     // Get final pass RenderPass for swapchain framebuffer creation
     vk::RenderPass getFinalPassRenderPass() const;
@@ -107,9 +108,13 @@ public:
 
     DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
 
-    // Material manager access - all material operations go through here
-    MaterialManager* getMaterialManager() { return materialManager; }
-    const MaterialManager* getMaterialManager() const { return materialManager; }
+    // Resource manager access
+    ResourceManager* getResourceManager() { return resourceManager; }
+    const ResourceManager* getResourceManager() const { return resourceManager; }
+
+    // Material manager access (convenience wrapper)
+    MaterialManager* getMaterialManager();
+    const MaterialManager* getMaterialManager() const;
 
     void                             clearRenderables() { renderables.clear(); }
     const eastl::vector<Renderable>& getRenderables() const { return renderables; }
@@ -148,9 +153,7 @@ public:
     DescriptorManager& getDescriptorManager() { return descriptorManager; }
 
     // Compatibility layer - delegates to MaterialManager
-    MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const {
-        return materialManager ? materialManager->getGlobalMaterial(index) : nullptr;
-    }
+    MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const;
 
 private:
     void cleanup();  // Private cleanup function called from destructor
@@ -190,7 +193,7 @@ private:
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
     DescriptorManager descriptorManager;
-    MaterialManager* materialManager = nullptr;  // Injected dependency
+    ResourceManager* resourceManager = nullptr;  // Injected dependency
 
 };
 

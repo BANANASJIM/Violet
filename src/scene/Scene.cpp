@@ -1,6 +1,13 @@
 #include "Scene.hpp"
 #include "ecs/Components.hpp"
 #include "core/Log.hpp"
+#include "asset/AssetLoader.hpp"
+#include "asset/GLTFAsset.hpp"
+#include "renderer/ResourceManager.hpp"
+#include "renderer/Mesh.hpp"
+#include "renderer/Texture.hpp"
+#include "renderer/Material.hpp"
+
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
@@ -9,6 +16,73 @@ namespace violet {
 
 Scene::~Scene() {
     cleanup();
+}
+
+// Load scene from glTF file using simplified architecture
+eastl::unique_ptr<Scene> Scene::loadFromGLTF(
+    const eastl::string& filePath,
+    ResourceManager& resourceMgr,
+    entt::registry& world
+) {
+    // Step 1: Parse glTF file (no Vulkan dependencies)
+    auto asset = AssetLoader::loadGLTF(filePath);
+    if (!asset) {
+        violet::Log::error("Scene", "Failed to load glTF asset: {}", filePath.c_str());
+        return nullptr;
+    }
+
+    auto scene = eastl::make_unique<Scene>();
+
+    // Step 2-4: Resource creation will be handled by SceneLoader compatibility layer
+    // This is a simplified implementation showing the architecture
+
+    violet::Log::warn("Scene", "Scene::loadFromGLTF is not fully implemented yet");
+    violet::Log::warn("Scene", "Use SceneLoader::loadFromGLTF for now");
+
+    // Placeholder vectors
+    eastl::vector<Mesh*> meshes(asset->meshes.size(), nullptr);
+
+    // Step 5: Build scene graph and create ECS entities
+    // Helper to recursively create nodes
+    eastl::function<uint32_t(uint32_t, uint32_t)> createNodeRecursive =
+        [&](uint32_t assetNodeIdx, uint32_t parentId) -> uint32_t {
+
+        const auto& nodeData = asset->nodes[assetNodeIdx];
+
+        // Create scene node
+        Node node;
+        node.name = nodeData.name;
+        node.parentId = parentId;
+        uint32_t nodeId = scene->addNode(node);
+        Node* sceneNode = scene->getNode(nodeId);
+
+        // Create ECS entity
+        entt::entity entity = world.create();
+        sceneNode->entity = entity;
+
+        // Add transform component
+        world.emplace<TransformComponent>(entity, nodeData.transform);
+
+        // Mesh and material components will be added by SceneLoader compatibility layer
+        // TODO: Implement full resource creation in Scene::loadFromGLTF
+
+        // Recursively create children
+        for (uint32_t childIdx : nodeData.children) {
+            createNodeRecursive(childIdx, nodeId);
+        }
+
+        return nodeId;
+    };
+
+    // Create nodes from root nodes
+    for (uint32_t rootIdx : asset->rootNodes) {
+        createNodeRecursive(rootIdx, 0);
+    }
+
+    violet::Log::info("Scene", "Loaded scene with {} nodes from {}",
+        scene->getNodeCount(), filePath.c_str());
+
+    return scene;
 }
 
 void Scene::cleanup() {

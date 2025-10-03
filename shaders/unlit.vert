@@ -24,5 +24,5 @@ void main() {
 
     // Pass through vertex color and texture coordinates
     fragColor = inColor;
-    fragTexCoord = vec2(inTexCoord.x, 1.0 - inTexCoord.y);
+    fragTexCoord = inTexCoord;
 }

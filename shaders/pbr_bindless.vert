@@ -50,8 +50,8 @@ void main() {
     fragTangent = normalize(normalMatrix * inTangent.xyz);
     fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
 
-    // Flip Y coordinate for Vulkan texture coordinates
-    fragTexCoord = vec2(inTexCoord.x, 1.0 - inTexCoord.y);
+    // Pass through texture coordinates directly
+    fragTexCoord = inTexCoord;
 
     gl_Position = global.proj * viewPos;
 }

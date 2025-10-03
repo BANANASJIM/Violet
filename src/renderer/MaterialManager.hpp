@@ -8,7 +8,7 @@
 #include <EASTL/fixed_vector.h>
 
 #include "renderer/GraphicsPipeline.hpp"
-#include "renderer/MaterialManager.hpp"
+#include "renderer/TextureManager.hpp"
 
 namespace violet {
 
@@ -17,15 +17,8 @@ class DescriptorManager;
 class Material;
 class MaterialInstance;
 class Texture;
+class TextureManager;
 class RenderPass;
-
-// Default texture types
-enum class DefaultTextureType {
-    White,
-    Black,
-    Normal,
-    MetallicRoughness
-};
 
 // Material types
 enum class MaterialType {
@@ -67,7 +60,7 @@ public:
     MaterialManager& operator=(MaterialManager&&) = delete;
 
     // === Initialization ===
-    void init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
+    void init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t maxFramesInFlight);
     void cleanup();
 
     // === Material Management (using vector for stable storage) ===
@@ -108,14 +101,9 @@ public:
     void unregisterGlobalMaterial(uint32_t globalId);
     void clearGlobalMaterials();
 
-    // === Texture Management ===
+    // === Texture Management (delegated to TextureManager) ===
     Texture* addTexture(eastl::unique_ptr<Texture> texture);
     Texture* getDefaultTexture(DefaultTextureType type) const;
-    const eastl::vector<eastl::unique_ptr<Texture>>& getTextures() const { return textures; }
-
-    // === Default Resources ===
-    void createDefaultResources();
-    bool hasDefaultResources() const { return defaultResourcesCreated; }
 
     // === Statistics ===
     struct Stats {
@@ -151,22 +139,11 @@ private:
     // Global material registry (glTF: fileId << 16 | materialIndex -> instanceId)
     eastl::hash_map<uint32_t, uint32_t> globalMaterialMap;
 
-    // Texture storage
-    eastl::vector<eastl::unique_ptr<Texture>> textures;
-
-    // Default textures - use fixed_vector for small, known set
-    struct DefaultTextures {
-        Texture* white = nullptr;
-        Texture* black = nullptr;
-        Texture* normal = nullptr;
-        Texture* metallicRoughness = nullptr;
-    } defaultTextures;
-
     // === Dependencies ===
     VulkanContext* context = nullptr;
     DescriptorManager* descriptorManager = nullptr;
+    TextureManager* textureManager = nullptr;
     uint32_t maxFramesInFlight = 0;
-    bool defaultResourcesCreated = false;
 
     // === Helper Methods ===
     uint32_t allocateInstanceId();
@@ -175,12 +152,6 @@ private:
     uint32_t getInstanceIndex(uint32_t id) const;
     uint32_t getInstanceGeneration(uint32_t id) const;
     uint32_t makeInstanceId(uint32_t index, uint32_t generation) const;
-
-    // Default texture creation helpers
-    void createDefaultWhiteTexture();
-    void createDefaultBlackTexture();
-    void createDefaultNormalTexture();
-    void createDefaultMetallicRoughnessTexture();
 };
 
 } // namespace violet

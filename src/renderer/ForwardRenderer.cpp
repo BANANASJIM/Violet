@@ -6,6 +6,7 @@
 
 #include "renderer/ResourceFactory.hpp"
 #include "renderer/Buffer.hpp"
+#include "renderer/ResourceManager.hpp"
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
@@ -23,13 +24,28 @@
 
 namespace violet {
 
+// Material manager access
+MaterialManager* ForwardRenderer::getMaterialManager() {
+    return resourceManager ? &resourceManager->getMaterialManager() : nullptr;
+}
+
+const MaterialManager* ForwardRenderer::getMaterialManager() const {
+    return resourceManager ? &resourceManager->getMaterialManager() : nullptr;
+}
+
+MaterialInstance* ForwardRenderer::getMaterialInstanceByIndex(uint32_t index) const {
+    auto* matMgr = getMaterialManager();
+    return matMgr ? const_cast<MaterialInstance*>(matMgr->getGlobalMaterial(index)) : nullptr;
+}
+
+
 ForwardRenderer::~ForwardRenderer() {
     cleanup();
 }
 
-void ForwardRenderer::init(VulkanContext* ctx, MaterialManager* matMgr, vk::Format swapchainFormat, uint32_t framesInFlight) {
+void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Format swapchainFormat, uint32_t framesInFlight) {
     context = ctx;
-    materialManager = matMgr;
+    resourceManager = resMgr;
     maxFramesInFlight = framesInFlight;
 
     // Initialize descriptor manager first
@@ -73,14 +89,15 @@ void ForwardRenderer::init(VulkanContext* ctx, MaterialManager* matMgr, vk::Form
 
 void ForwardRenderer::createMaterials() {
     // Get PBR bindless material from MaterialManager
-    if (materialManager) {
-        pbrBindlessMaterial = materialManager->createPBRBindlessMaterial(getRenderPass(0));
+    auto* matMgr = getMaterialManager();
+    if (matMgr) {
+        pbrBindlessMaterial = matMgr->createPBRBindlessMaterial(getRenderPass(0));
     }
 
     // Create post-process material using MaterialManager
     RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
-    if (postProcessPass && materialManager) {
-        Material* postProcMat = materialManager->createPostProcessMaterial(postProcessPass);
+    if (postProcessPass && matMgr) {
+        Material* postProcMat = matMgr->createPostProcessMaterial(postProcessPass);
         postProcessMaterial = eastl::unique_ptr<Material>(postProcMat);
 
         // Create descriptor set for post-process material

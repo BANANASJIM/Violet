@@ -17,16 +17,16 @@ MaterialManager::~MaterialManager() {
     cleanup();
 }
 
-void MaterialManager::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t framesInFlight) {
+void MaterialManager::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t framesInFlight) {
     context = ctx;
     descriptorManager = descMgr;
+    textureManager = texMgr;
     maxFramesInFlight = framesInFlight;
 
     // Reserve space for common use cases
     materials.reserve(32);
     instanceSlots.reserve(256);
     freeInstanceIds.reserve(64);
-    textures.reserve(128);
 
     violet::Log::info("MaterialManager", "Initialized with {} frames in flight", maxFramesInFlight);
 }
@@ -52,13 +52,6 @@ void MaterialManager::cleanup() {
         }
     }
     materials.clear();
-
-    // Clear textures (they handle their own cleanup in destructors)
-    textures.clear();
-
-    // Clear default texture pointers
-    defaultTextures = {};
-    defaultResourcesCreated = false;
 
     violet::Log::info("MaterialManager", "Cleaned up all resources");
 }
@@ -343,85 +336,23 @@ void MaterialManager::clearGlobalMaterials() {
 
 // === Texture Management ===
 
+// === Texture Management (delegated to TextureManager) ===
+
 Texture* MaterialManager::addTexture(eastl::unique_ptr<Texture> texture) {
-    if (!texture) {
+    if (!textureManager) {
+        violet::Log::error("MaterialManager", "TextureManager not initialized");
         return nullptr;
     }
-
-    Texture* texturePtr = texture.get();
-    textures.push_back(eastl::move(texture));
-    return texturePtr;
+    TextureHandle handle = textureManager->addTexture(eastl::move(texture));
+    return textureManager->getTexture(handle);
 }
 
 Texture* MaterialManager::getDefaultTexture(DefaultTextureType type) const {
-    switch (type) {
-        case DefaultTextureType::White:
-            return defaultTextures.white;
-        case DefaultTextureType::Black:
-            return defaultTextures.black;
-        case DefaultTextureType::Normal:
-            return defaultTextures.normal;
-        case DefaultTextureType::MetallicRoughness:
-            return defaultTextures.metallicRoughness;
-        default:
-            return nullptr;
+    if (!textureManager) {
+        violet::Log::error("MaterialManager", "TextureManager not initialized");
+        return nullptr;
     }
-}
-
-// === Default Resources ===
-
-void MaterialManager::createDefaultResources() {
-    if (defaultResourcesCreated) {
-        return;
-    }
-
-    createDefaultWhiteTexture();
-    createDefaultBlackTexture();
-    createDefaultNormalTexture();
-    createDefaultMetallicRoughnessTexture();
-
-    // Register default textures in bindless array if enabled
-    if (descriptorManager->isBindlessEnabled()) {
-        if (defaultTextures.white) {
-            uint32_t whiteTexIndex = descriptorManager->allocateBindlessTexture(defaultTextures.white);
-            violet::Log::info("MaterialManager", "Registered default white texture at bindless index {}", whiteTexIndex);
-        }
-    }
-
-    defaultResourcesCreated = true;
-    violet::Log::info("MaterialManager", "Created default resources");
-}
-
-void MaterialManager::createDefaultWhiteTexture() {
-    const uint8_t white[] = {255, 255, 255, 255};
-    auto texture = eastl::make_unique<Texture>();
-    texture->loadFromMemory(context, white, sizeof(white), 1, 1, 4, false);
-    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
-    defaultTextures.white = addTexture(eastl::move(texture));
-}
-
-void MaterialManager::createDefaultBlackTexture() {
-    const uint8_t black[] = {0, 0, 0, 255};
-    auto texture = eastl::make_unique<Texture>();
-    texture->loadFromMemory(context, black, sizeof(black), 1, 1, 4, false);
-    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
-    defaultTextures.black = addTexture(eastl::move(texture));
-}
-
-void MaterialManager::createDefaultNormalTexture() {
-    const uint8_t normal[] = {128, 128, 255, 255};  // R=0.5, G=0.5, B=1.0
-    auto texture = eastl::make_unique<Texture>();
-    texture->loadFromMemory(context, normal, sizeof(normal), 1, 1, 4, false);
-    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
-    defaultTextures.normal = addTexture(eastl::move(texture));
-}
-
-void MaterialManager::createDefaultMetallicRoughnessTexture() {
-    const uint8_t metallicRoughness[] = {255, 128, 0, 255};  // R=1.0 (roughness), G=0.5 (metallic)
-    auto texture = eastl::make_unique<Texture>();
-    texture->loadFromMemory(context, metallicRoughness, sizeof(metallicRoughness), 1, 1, 4, false);
-    texture->setSampler(descriptorManager->getSampler(SamplerType::Default));
-    defaultTextures.metallicRoughness = addTexture(eastl::move(texture));
+    return textureManager->getDefaultTexture(type);
 }
 
 // === Statistics ===
@@ -438,7 +369,7 @@ MaterialManager::Stats MaterialManager::getStats() const {
         }
     }
 
-    stats.textureCount = textures.size();
+    stats.textureCount = textureManager ? textureManager->getTextureCount() : 0;
     stats.globalMaterialCount = globalMaterialMap.size();
 
     return stats;

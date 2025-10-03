@@ -7,6 +7,7 @@
 #include <EASTL/unordered_map.h>
 #include <EASTL/hash_map.h>
 #include <EASTL/vector.h>
+#include <EASTL/unique_ptr.h>
 
 #include <entt/entt.hpp>
 
@@ -14,10 +15,20 @@
 
 namespace violet {
 
+class ResourceManager;
+struct GLTFAsset;
+
 class Scene {
 public:
     Scene() = default;
     ~Scene();
+
+    // Load scene from glTF file using AssetLoader and ResourceManager
+    static eastl::unique_ptr<Scene> loadFromGLTF(
+        const eastl::string& filePath,
+        ResourceManager& resourceMgr,
+        entt::registry& world
+    );
 
     void cleanup();
 

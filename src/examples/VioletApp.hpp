@@ -3,7 +3,7 @@
 #include "core/App.hpp"
 #include "ecs/World.hpp"
 #include "renderer/ForwardRenderer.hpp"
-#include "renderer/MaterialManager.hpp"
+#include "renderer/ResourceManager.hpp"
 #include "renderer/DebugRenderer.hpp"
 #include "renderer/Texture.hpp"
 #include "scene/Scene.hpp"
@@ -35,7 +35,7 @@ private:
 
 private:
     World world;
-    MaterialManager materialManager;  // Must be created before renderer
+    ResourceManager resourceManager;  // Unified resource management
     ForwardRenderer renderer;
     DebugRenderer debugRenderer;
 
