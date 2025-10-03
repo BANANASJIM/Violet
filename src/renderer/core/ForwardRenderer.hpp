@@ -93,6 +93,8 @@ public:
     ForwardRenderer& operator=(ForwardRenderer&&) = delete;
 
     void init(VulkanContext* context, ResourceManager* resMgr, vk::Format wapchainFormat, uint32_t maxFramesInFlight);
+    void cleanup();
+
     void createMaterials();  // Create materials after MaterialManager is initialized
     // Get final pass RenderPass for swapchain framebuffer creation
     vk::RenderPass getFinalPassRenderPass() const;
@@ -143,7 +145,7 @@ public:
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
     // PostProcess access
-    Material* getPostProcessMaterial() const { return postProcessMaterial.get(); }
+    Material* getPostProcessMaterial() const { return postProcessMaterial; }
     void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
 
     // PBR Bindless Material access (shared material for all PBR instances)
@@ -156,7 +158,6 @@ public:
     MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const;
 
 private:
-    void cleanup();  // Private cleanup function called from destructor
     void collectFromEntity(entt::entity entity, entt::registry& world);
 
     // Declarative descriptor layouts registration
@@ -179,12 +180,12 @@ private:
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
 
-    // Render pipeline specific materials (owned by renderer)
-    eastl::unique_ptr<Material> postProcessMaterial;
-    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
-
-    // Reference to PBR material from MaterialManager
+    // Material references from MaterialManager (not owned by renderer)
+    Material* postProcessMaterial = nullptr;
     Material* pbrBindlessMaterial = nullptr;
+
+    // Descriptor sets owned by renderer
+    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;

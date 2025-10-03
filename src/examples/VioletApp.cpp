@@ -45,7 +45,8 @@ VioletApp::~VioletApp() {
     sceneDebug.reset();
     assetBrowser.reset();
 
-    cleanup();
+    resourceManager.cleanup();
+    // NOTE: Do NOT call cleanup() here - App::~App() already calls it via internalCleanup()
 }
 
 void VioletApp::createResources() {
@@ -337,8 +338,10 @@ void VioletApp::cleanup() {
     if (currentScene) {
         currentScene->cleanup();
     }
-    // renderer 会在析构函数中自动 cleanup
-    // defaultTexture removed - using MaterialManager default textures instead
+
+    // Cleanup renderers (ResourceManager already cleaned in destructor)
+    renderer.cleanup();
+    debugRenderer.cleanup();
 }
 
 } // namespace violet

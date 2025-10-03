@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
+#include <EASTL/unique_ptr.h>
 #include "renderer/DescriptorSet.hpp"
 
 namespace violet {

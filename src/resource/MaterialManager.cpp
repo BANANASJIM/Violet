@@ -92,7 +92,7 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
         finalConfig
     );
 
-    material->pipeline = pipeline.release();
+    material->pipeline = eastl::move(pipeline);
 
     Material* materialPtr = material.get();
     materials.push_back(eastl::move(material));

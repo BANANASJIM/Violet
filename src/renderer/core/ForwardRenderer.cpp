@@ -97,8 +97,8 @@ void ForwardRenderer::createMaterials() {
     // Create post-process material using MaterialManager
     RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
     if (postProcessPass && matMgr) {
-        Material* postProcMat = matMgr->createPostProcessMaterial(postProcessPass);
-        postProcessMaterial = eastl::unique_ptr<Material>(postProcMat);
+        // MaterialManager owns the material, we just keep a reference
+        postProcessMaterial = matMgr->createPostProcessMaterial(postProcessPass);
 
         // Create descriptor set for post-process material
         auto sets = descriptorManager.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
@@ -138,10 +138,14 @@ void ForwardRenderer::cleanup() {
     // Step 5: Cleanup global uniforms (may reference textures)
     globalUniforms.cleanup();
 
-    // Step 6: Materials and textures are now managed by MaterialManager
+    // Step 6: Clear material references (MaterialManager owns and cleans them)
+    postProcessMaterial = nullptr;
+    pbrBindlessMaterial = nullptr;
+
+    // Step 7: Materials and textures managed by MaterialManager are cleaned in ResourceManager
     // (No cleanup needed here)
 
-    // Step 7: Finally cleanup descriptor manager after all resources are destroyed
+    // Step 8: Finally cleanup descriptor manager after all resources are destroyed
     descriptorManager.cleanup();  // Safe to cleanup after materials/textures are gone
 }
 

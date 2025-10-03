@@ -27,8 +27,7 @@ void Material::cleanup() {
 
     if (pipeline) {
         pipeline->cleanup();
-        delete pipeline;
-        pipeline = nullptr;
+        pipeline.reset();
     }
 }
 
