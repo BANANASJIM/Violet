@@ -43,13 +43,6 @@ struct RenderStats {
     uint32_t skippedRenderables = 0;
 };
 
-// Bindless push constants (includes material ID)
-struct BindlessPushConstants {
-    glm::mat4 model;
-    uint32_t materialID;
-    uint32_t padding[3];  // Align to 16 bytes
-};
-
 class GlobalUniforms {
 public:
     ~GlobalUniforms();
@@ -140,7 +133,8 @@ public:
     RenderPass* getRenderPass(size_t index);  // Helper to get RenderPass specifically
 
     // Skybox access
-    EnvironmentMap& getEnvironmentMap() { return environmentMap; }
+    // TODO: Re-enable after EnvironmentMap redesign
+    // EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
     // PostProcess access
@@ -161,7 +155,6 @@ public:
 private:
     void cleanup();  // Private cleanup function called from destructor
     void collectFromEntity(entt::entity entity, entt::registry& world);
-    void createDefaultPBRTextures();
 
     // Declarative descriptor layouts registration
     void registerDescriptorLayouts();
@@ -193,7 +186,8 @@ private:
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
-    EnvironmentMap environmentMap;
+    // TODO: Redesign EnvironmentMap with bindless architecture
+    // EnvironmentMap environmentMap;
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
     DescriptorManager descriptorManager;

@@ -312,7 +312,8 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
             try {
                 // Load HDR file as environment map (skybox)
                 violet::Log::info("App", "Loading HDR environment map: {}", path.c_str());
-                renderer.getEnvironmentMap().loadHDR(path);
+               // todo temp remove after refactor
+                // renderer.getEnvironmentMap().loadHDR(path);
                 violet::Log::info("App", "HDR environment map loaded successfully: {}", path.c_str());
             } catch (const violet::Exception& e) {
                 violet::Log::error("App", "Failed to load HDR environment map {}: {}", path.c_str(), e.what_c_str());

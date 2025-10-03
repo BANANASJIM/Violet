@@ -66,10 +66,10 @@ void Skybox::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* fwdRender
     skyboxConfig.enableDepthWrite = false;  // Don't write to depth buffer
     skyboxConfig.cullMode = vk::CullModeFlagBits::eFront;  // Cull front faces for inside view
 
-    material = renderer->createMaterial(
-        FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        "Global", skyboxConfig);
+    // material = renderer->createMaterial(
+    //     FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
+    //     FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
+    //     "Global", skyboxConfig);
 
     violet::Log::info("Renderer", "Skybox initialized with material");
 }

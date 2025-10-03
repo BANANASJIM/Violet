@@ -24,7 +24,6 @@ EnvironmentMap::~EnvironmentMap() {
 EnvironmentMap::EnvironmentMap(EnvironmentMap&& other) noexcept
     : context(other.context)
     , renderPass(other.renderPass)
-    , renderer(other.renderer)
     , environmentTexture(eastl::move(other.environmentTexture))
     , irradianceMap(eastl::move(other.irradianceMap))
     , prefilteredMap(eastl::move(other.prefilteredMap))
@@ -34,7 +33,6 @@ EnvironmentMap::EnvironmentMap(EnvironmentMap&& other) noexcept
     , currentType(other.currentType) {
     other.context = nullptr;
     other.renderPass = nullptr;
-    other.renderer = nullptr;
     other.skyboxMaterial = nullptr;
     other.params = {};
     other.currentType = Type::Cubemap;
@@ -45,7 +43,6 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
         cleanup();
         context = other.context;
         renderPass = other.renderPass;
-        renderer = other.renderer;
         environmentTexture = eastl::move(other.environmentTexture);
         irradianceMap = eastl::move(other.irradianceMap);
         prefilteredMap = eastl::move(other.prefilteredMap);
@@ -56,7 +53,6 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
 
         other.context = nullptr;
         other.renderPass = nullptr;
-        other.renderer = nullptr;
         other.skyboxMaterial = nullptr;
         other.params = {};
         other.currentType = Type::Cubemap;
@@ -64,22 +60,14 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     return *this;
 }
 
-void EnvironmentMap::init(VulkanContext* ctx, RenderPass* rp, ForwardRenderer* fwdRenderer) {
+void EnvironmentMap::init(VulkanContext* ctx, RenderPass* rp, MaterialManager* matMgr, DescriptorManager* descMgr) {
     context = ctx;
     renderPass = rp;
-    renderer = fwdRenderer;
+    materialManager = matMgr;
+    descriptorManager = descMgr;
 
-    // Create skybox material with no vertex input
-    PipelineConfig skyboxConfig;
-    skyboxConfig.useVertexInput = false;  // Skybox generates vertices procedurally
-    skyboxConfig.enableDepthTest = false;  // Skybox should be in background
-    skyboxConfig.enableDepthWrite = false;  // Don't write to depth buffer
-    skyboxConfig.cullMode = vk::CullModeFlagBits::eFront;  // Cull front faces for inside view
-
-    skyboxMaterial = renderer->createMaterial(
-        FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        "Global", skyboxConfig);
+    // Create skybox material through MaterialManager
+    skyboxMaterial = materialManager->createSkyboxMaterial(renderPass);
 
     // Create compute pipeline for equirectangular to cubemap conversion
     equirectToCubemapPipeline = eastl::make_unique<ComputePipeline>();
@@ -117,7 +105,6 @@ void EnvironmentMap::cleanup() {
     brdfLUT.reset();
     context = nullptr;
     renderPass = nullptr;
-    renderer = nullptr;
 }
 
 void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
@@ -161,16 +148,17 @@ void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
     currentType = Type::Cubemap;  // Output is cubemap
     params.enabled = true;
 
-    // Step 4: Update the global descriptor set with the new environment texture
-    if (renderer && environmentTexture) {
-        // Ensure texture is fully initialized before setting it
-        if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
-            renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
-            violet::Log::info("Renderer", "Successfully set HDR environment cubemap in global uniforms");
-        } else {
-            violet::Log::error("Renderer", "HDR environment cubemap not fully initialized - cannot set in descriptor set");
-        }
-    }
+    // todo refactor
+    // // Step 4: Update the global descriptor set with the new environment texture
+    // if (renderer && environmentTexture) {
+    //     // Ensure texture is fully initialized before setting it
+    //     if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
+    //         renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
+    //         violet::Log::info("Renderer", "Successfully set HDR environment cubemap in global uniforms");
+    //     } else {
+    //         violet::Log::error("Renderer", "HDR environment cubemap not fully initialized - cannot set in descriptor set");
+    //     }
+    // }
 
     violet::Log::info("Renderer", "HDR environment map loaded and converted to cubemap via compute shader");
 }
@@ -180,16 +168,17 @@ void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths
     params.enabled = (environmentTexture != nullptr);
     currentType = Type::Cubemap;
 
-    // Update the global descriptor set with the new environment texture
-    if (renderer && environmentTexture) {
-        // Ensure texture is fully initialized before setting it
-        if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
-            renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
-            violet::Log::info("Renderer", "Successfully set cubemap environment texture in global uniforms");
-        } else {
-            violet::Log::error("Renderer", "Cubemap environment texture not fully initialized - cannot set in descriptor set");
-        }
-    }
+
+    // // Update the global descriptor set with the new environment texture
+    // if (renderer && environmentTexture) {
+    //     // Ensure texture is fully initialized before setting it
+    //     if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
+    //         renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
+    //         violet::Log::info("Renderer", "Successfully set cubemap environment texture in global uniforms");
+    //     } else {
+    //         violet::Log::error("Renderer", "Cubemap environment texture not fully initialized - cannot set in descriptor set");
+    //     }
+    // }
 
     if (environmentTexture) {
         violet::Log::info("Renderer", "Environment cubemap loaded successfully");

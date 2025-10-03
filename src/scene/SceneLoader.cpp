@@ -304,7 +304,7 @@ void SceneLoader::loadTextures(GLTFLoadContext& loadCtx, const void* modelPtr) {
             }
 
             // Transfer ownership to Renderer for persistent storage
-            Texture* texturePtr = loadCtx.renderer->addTexture(eastl::move(texture));
+            Texture* texturePtr = loadCtx.renderer->getMaterialManager()->addTexture(eastl::move(texture));
             loadCtx.textures[i] = texturePtr;
         }
     }
@@ -315,14 +315,26 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
 
     loadCtx.materials.resize(gltfModel->materials.size());
 
+    // Get shared PBR bindless material (all instances share this)
+    Material* pbrMaterial = loadCtx.renderer->getPBRBindlessMaterial();
+    if (!pbrMaterial) {
+        violet::Log::error("Scene", "PBR bindless material not initialized");
+        return;
+    }
+
     for (size_t i = 0; i < gltfModel->materials.size(); i++) {
         const tinygltf::Material& gltfMaterial = gltfModel->materials[i];
 
-        // Create material and instance
-        Material* material = loadCtx.renderer->createMaterial(
-            violet::FileSystem::resolveRelativePath("build/shaders/pbr.vert.spv"),
-            violet::FileSystem::resolveRelativePath("build/shaders/pbr.frag.spv"));
-        PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(loadCtx.renderer->createPBRMaterialInstance(material));
+        // Create material instance using MaterialManager
+        MaterialInstanceDesc instanceDesc{
+            .material = pbrMaterial,
+            .type = MaterialType::PBR,
+            .name = gltfMaterial.name.empty() ? "Material" : eastl::string(gltfMaterial.name.c_str())
+        };
+        uint32_t instanceId = loadCtx.renderer->getMaterialManager()->createMaterialInstance(instanceDesc);
+        PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(
+            loadCtx.renderer->getMaterialManager()->getMaterialInstance(instanceId)
+        );
 
         // Extract PBR material data
         PBRMaterialData& data = instance->getData();
@@ -365,17 +377,17 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             data.alphaCutoff = static_cast<float>(gltfMaterial.alphaCutoff);
         }
 
-        // Set alpha mode
+        // Set alpha mode on shared material
         if (gltfMaterial.alphaMode == "OPAQUE") {
-            material->setAlphaMode(Material::AlphaMode::Opaque);
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Opaque);
         } else if (gltfMaterial.alphaMode == "MASK") {
-            material->setAlphaMode(Material::AlphaMode::Mask);
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Mask);
         } else if (gltfMaterial.alphaMode == "BLEND") {
-            material->setAlphaMode(Material::AlphaMode::Blend);
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Blend);
         }
 
         // Double sided
-        material->setDoubleSided(gltfMaterial.doubleSided);
+        pbrMaterial->setDoubleSided(gltfMaterial.doubleSided);
 
         // Assign textures
         // Base color texture
@@ -397,11 +409,11 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setMetallicRoughnessTexture(loadCtx.textures[texIndex]);
             } else {
-                instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
+                instance->setMetallicRoughnessTexture(loadCtx.renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::MetallicRoughness));
                 violet::Log::warn("Scene", "Material {} using default metallicRoughness texture (invalid index {})", i, texIndex);
             }
         } else {
-            instance->setMetallicRoughnessTexture(loadCtx.renderer->getDefaultMetallicRoughnessTexture());
+            instance->setMetallicRoughnessTexture(loadCtx.renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::MetallicRoughness));
         }
 
         // Normal texture
@@ -410,11 +422,11 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
             if (texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
                 instance->setNormalTexture(loadCtx.textures[texIndex]);
             } else {
-                instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
+                instance->setNormalTexture(loadCtx.renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::Normal));
                 violet::Log::warn("Scene", "Material {} using default normal texture (invalid index {})", i, texIndex);
             }
         } else {
-            instance->setNormalTexture(loadCtx.renderer->getDefaultNormalTexture());
+            instance->setNormalTexture(loadCtx.renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::Normal));
         }
 
         // Occlusion texture
@@ -462,8 +474,8 @@ void SceneLoader::loadMaterials(GLTFLoadContext& loadCtx, const void* modelPtr, 
         // Create unique material ID: fileId << 16 | materialIndex
         uint32_t materialId = (fileId << 16) | static_cast<uint32_t>(i);
 
-        // Register material instance globally
-        loadCtx.renderer->registerMaterialInstance(materialId, instance);
+        // Register material instance globally using MaterialManager
+        loadCtx.renderer->getMaterialManager()->registerGlobalMaterial(materialId, instanceId);
 
         loadCtx.materials[i] = instance;
         loadCtx.materialIds.push_back(materialId);

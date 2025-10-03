@@ -11,9 +11,10 @@ class VulkanContext;
 class RenderPass;
 class Material;
 class Texture;
-class ForwardRenderer;
+class MaterialManager;
 class ComputePipeline;
 class DescriptorSet;
+class DescriptorManager;
 
 class EnvironmentMap {
 public:
@@ -34,7 +35,7 @@ public:
     EnvironmentMap& operator=(EnvironmentMap&& other) noexcept;
 
     // Initialization
-    void init(VulkanContext* context, RenderPass* renderPass, ForwardRenderer* renderer);
+    void init(VulkanContext* context, RenderPass* renderPass, MaterialManager* matMgr, DescriptorManager* descMgr);
     void cleanup();
 
     // Loading methods
@@ -73,7 +74,8 @@ private:
     // Core resources
     VulkanContext* context = nullptr;
     RenderPass* renderPass = nullptr;
-    ForwardRenderer* renderer = nullptr;
+    MaterialManager* materialManager = nullptr;
+    DescriptorManager* descriptorManager = nullptr;
 
     // Textures
     eastl::unique_ptr<Texture> environmentTexture;  // Main environment map (cubemap or 2D)

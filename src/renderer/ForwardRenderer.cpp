@@ -48,19 +48,19 @@ void ForwardRenderer::init(VulkanContext* ctx, MaterialManager* matMgr, vk::Form
     RenderPass* firstRenderPass = getRenderPass(0);
     if (firstRenderPass) {
         debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, swapchainFormat, maxFramesInFlight);
-        environmentMap.init(context, firstRenderPass, this);
+        // TODO: Redesign EnvironmentMap with bindless architecture
+        // environmentMap.init(context, firstRenderPass, materialManager, &descriptorManager);
     }
 
-    // Load HDR environment map
-    environmentMap.loadHDR("assets/textures/skybox.hdr");
-
-    // Set the environment texture in the global uniforms
-    if (environmentMap.getEnvironmentTexture()) {
-        globalUniforms.setSkyboxTexture(environmentMap.getEnvironmentTexture());
-        environmentMap.setEnabled(true);
-    }
-
-    createDefaultPBRTextures();
+    // TODO: Re-enable after EnvironmentMap redesign
+    // // Load HDR environment map
+    // environmentMap.loadHDR("assets/textures/skybox.hdr");
+    //
+    // // Set the environment texture in the global uniforms
+    // if (environmentMap.getEnvironmentTexture()) {
+    //     globalUniforms.setSkyboxTexture(environmentMap.getEnvironmentTexture());
+    //     environmentMap.setEnabled(true);
+    // }
 
     // Initialize bindless through DescriptorManager
     descriptorManager.initBindless(1024);
@@ -68,11 +68,8 @@ void ForwardRenderer::init(VulkanContext* ctx, MaterialManager* matMgr, vk::Form
     // Initialize material data SSBO for bindless architecture
     descriptorManager.initMaterialDataBuffer(1024);
 
-    // Register default textures in bindless array
-    if (defaultWhiteTexture) {
-        uint32_t whiteTexIndex = descriptorManager.allocateBindlessTexture(defaultWhiteTexture);
-        violet::Log::info("Renderer", "Registered default white texture at bindless index {}", whiteTexIndex);
-    }
+    // Materials will be created later via createMaterials() after MaterialManager is initialized
+}
 
 void ForwardRenderer::createMaterials() {
     // Get PBR bindless material from MaterialManager
@@ -107,7 +104,8 @@ void ForwardRenderer::cleanup() {
 
     // Step 2: Cleanup high-level rendering components
     // These may still reference materials/textures, so clean them before destroying resources
-    environmentMap.cleanup();
+    // TODO: Re-enable after EnvironmentMap redesign
+    // environmentMap.cleanup();
     debugRenderer.cleanup();
 
     // Step 3: Cleanup render passes
@@ -230,12 +228,13 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
         if (currentWorld) {
             this->setViewport(cmd, currentExtent);
 
-            // First render skybox (depth testing disabled, renders to background)
-            Material* envMaterial = environmentMap.getMaterial();
-            if (envMaterial) {
-                environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
-                                          globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
-            }
+            // TODO: Re-enable skybox after redesigning EnvironmentMap with bindless architecture
+            // // First render skybox (depth testing disabled, renders to background)
+            // Material* envMaterial = environmentMap.getMaterial();
+            // if (envMaterial) {
+            //     environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
+            //                               globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
+            // }
 
             // Then render scene geometry (depth testing enabled)
             renderScene(cmd, frame, *currentWorld);
@@ -311,7 +310,9 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 }
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
-    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
+    // TODO: Re-enable after EnvironmentMap redesign
+    // globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
+    globalUniforms.update(world, frameIndex, 1.0f, 0.0f, false);  // Default values for now
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {

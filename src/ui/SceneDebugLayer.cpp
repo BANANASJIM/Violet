@@ -1520,64 +1520,64 @@ void SceneDebugLayer::renderEnvironmentPanel() {
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Renderer not available");
             return;
         }
-
-        EnvironmentMap& environmentMap = renderer->getEnvironmentMap();
-
-        // Environment map enable/disable
-        bool enabled = environmentMap.isEnabled();
-        if (ImGui::Checkbox("Enable Environment Map", &enabled)) {
-            environmentMap.setEnabled(enabled);
-        }
-
-        ImGui::Separator();
-
-        // Environment map parameters
-        float exposure = environmentMap.getExposure();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
-            environmentMap.setExposure(exposure);
-        }
-
-        float rotation = environmentMap.getRotation();
-        if (ImGui::SliderFloat("Rotation", &rotation, 0.0f, 6.28318f, "%.2f rad")) {
-            environmentMap.setRotation(rotation);
-        }
-
-        float intensity = environmentMap.getIntensity();
-        if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 3.0f, "%.2f")) {
-            environmentMap.setIntensity(intensity);
-        }
-
-        ImGui::Separator();
-
-        // HDR file selector with improved functionality
-        if (ImGui::Button("Load HDR...")) {
-            ImGui::OpenPopup("HDR File Selector");
-        }
-
-        // Use the new HDR file selector
-        renderHDRFileSelector(environmentMap);
-
-        ImGui::Text("Current texture: %s",
-                   environmentMap.getEnvironmentTexture() ?
-                   (environmentMap.getEnvironmentTexture()->isHDR() ? "HDR Loaded" : "LDR Loaded") :
-                   "None");
-
-        if (environmentMap.getEnvironmentTexture()) {
-            ImGui::SameLine();
-            if (ImGui::Button("Clear")) {
-                environmentMap.setTexture(nullptr);
-            }
-        }
-
-        // Usage instructions
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "💡 Instructions:");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-            "  • Enable skybox to see environment");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-            "  • Adjust exposure for brightness");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-            "  • Rotate skybox around Y-axis");
+        //todo temp remove
+        // EnvironmentMap& environmentMap = renderer->getEnvironmentMap();
+        //
+        // // Environment map enable/disable
+        // bool enabled = environmentMap.isEnabled();
+        // if (ImGui::Checkbox("Enable Environment Map", &enabled)) {
+        //     environmentMap.setEnabled(enabled);
+        // }
+        //
+        // ImGui::Separator();
+        //
+        // // Environment map parameters
+        // float exposure = environmentMap.getExposure();
+        // if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
+        //     environmentMap.setExposure(exposure);
+        // }
+        //
+        // float rotation = environmentMap.getRotation();
+        // if (ImGui::SliderFloat("Rotation", &rotation, 0.0f, 6.28318f, "%.2f rad")) {
+        //     environmentMap.setRotation(rotation);
+        // }
+        //
+        // float intensity = environmentMap.getIntensity();
+        // if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 3.0f, "%.2f")) {
+        //     environmentMap.setIntensity(intensity);
+        // }
+        //
+        // ImGui::Separator();
+        //
+        // // HDR file selector with improved functionality
+        // if (ImGui::Button("Load HDR...")) {
+        //     ImGui::OpenPopup("HDR File Selector");
+        // }
+        //
+        // // Use the new HDR file selector
+        // renderHDRFileSelector(environmentMap);
+        //
+        // ImGui::Text("Current texture: %s",
+        //            environmentMap.getEnvironmentTexture() ?
+        //            (environmentMap.getEnvironmentTexture()->isHDR() ? "HDR Loaded" : "LDR Loaded") :
+        //            "None");
+        //
+        // if (environmentMap.getEnvironmentTexture()) {
+        //     ImGui::SameLine();
+        //     if (ImGui::Button("Clear")) {
+        //         environmentMap.setTexture(nullptr);
+        //     }
+        // }
+        //
+        // // Usage instructions
+        // ImGui::Separator();
+        // ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "💡 Instructions:");
+        // ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+        //     "  • Enable skybox to see environment");
+        // ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+        //     "  • Adjust exposure for brightness");
+        // ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+        //     "  • Rotate skybox around Y-axis");
     }
 }
 
