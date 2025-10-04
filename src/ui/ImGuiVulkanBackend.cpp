@@ -1,11 +1,16 @@
 #include "ImGuiVulkanBackend.hpp"
 #include "renderer/core/VulkanContext.hpp"
-#include "resource/gpu/Buffer.hpp"
+#include "resource/gpu/ResourceFactory.hpp"
+#include "core/FileSystem.hpp"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <GLFW/glfw3.h>
 #include "core/Log.hpp"
+
+#define JSON_HAS_CPP_17
+#include <nlohmann/json.hpp>
+#include <fstream>
 
 namespace violet {
 
@@ -39,6 +44,21 @@ void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Render
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
+
+    // Load font scale from config
+    float fontScale = 1.0f;
+    eastl::string resolvedPath = violet::FileSystem::resolveRelativePath("config.json");
+    std::ifstream configFile(resolvedPath.c_str());
+    if (configFile.is_open()) {
+        nlohmann::json config;
+        configFile >> config;
+        if (config.contains("ui") && config["ui"].contains("fontScale")) {
+            fontScale = config["ui"]["fontScale"].get<float>();
+            violet::Log::info("UI", "Loaded font scale from config: {:.1f}x", fontScale);
+        }
+    }
+
+    io.FontGlobalScale = fontScale;
 
     // Create descriptor pool for ImGui
     createDescriptorPool();

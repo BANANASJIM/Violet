@@ -133,6 +133,8 @@ public:
     // Scene state management
     void markSceneDirty() { sceneDirty = true; }
 
+    void onSwapchainRecreate(vk::Extent2D newExtent) override;
+
     // Multi-pass system
     void setupPasses(vk::Format swapchainFormat);
     const eastl::vector<eastl::unique_ptr<Pass>>& getPasses() const { return passes; }

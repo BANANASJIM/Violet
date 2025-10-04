@@ -193,6 +193,16 @@ void ForwardRenderer::endFrame() {
     currentWorld = nullptr;
 }
 
+void ForwardRenderer::onSwapchainRecreate(vk::Extent2D newExtent) {
+    currentExtent = newExtent;
+    for (auto& pass : passes) {
+        if (pass->getType() == PassType::Graphics) {
+            static_cast<RenderPass*>(pass.get())->onSwapchainRecreate(newExtent);
+        }
+    }
+    updatePostProcessDescriptors();
+}
+
 vk::RenderPass ForwardRenderer::getFinalPassRenderPass() const {
     // Find the last graphics pass
     for (auto it = passes.rbegin(); it != passes.rend(); ++it) {

@@ -1,4 +1,11 @@
 {
+  "window": {
+    "width": 1920,
+    "height": 1080
+  },
+  "ui": {
+    "fontScale": 1.5
+  },
   "renderer": {
     "anisotropicFiltering": {
       "enabled": true,

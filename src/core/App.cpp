@@ -4,12 +4,37 @@
 #include "renderer/core/ForwardRenderer.hpp"
 #include "renderer/core/DebugRenderer.hpp"
 #include "Exception.hpp"
+#include "core/FileSystem.hpp"
+#include "core/Log.hpp"
 #include <imgui.h>
 #include <EASTL/array.h>
 
+#define JSON_HAS_CPP_17
+#include <nlohmann/json.hpp>
+#include <fstream>
+
 namespace violet {
 
-App::App() : window(1280, 720, "Violet Engine") {
+static Window createWindow() {
+    int width = 1920, height = 1080;
+
+    eastl::string resolvedPath = violet::FileSystem::resolveRelativePath("config.json");
+    std::ifstream configFile(resolvedPath.c_str());
+    if (configFile.is_open()) {
+        nlohmann::json config;
+        configFile >> config;
+        if (config.contains("window")) {
+            auto& windowConfig = config["window"];
+            if (windowConfig.contains("width")) width = windowConfig["width"].get<int>();
+            if (windowConfig.contains("height")) height = windowConfig["height"].get<int>();
+            violet::Log::info("App", "Loaded window size from config: {}x{}", width, height);
+        }
+    }
+
+    return Window(width, height, "Violet Engine");
+}
+
+App::App() : window(createWindow()) {
     window.setResizeCallback([this](int width, int height) {
         recreateSwapchain();
     });
@@ -87,17 +112,21 @@ void App::createCommandBuffers() {
 }
 
 void App::createSyncObjects() {
-    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    uint32_t imageCount = static_cast<uint32_t>(swapchain.getImageCount());
+    imageAvailableSemaphores.resize(imageCount);
+    renderFinishedSemaphores.resize(imageCount);
     inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
     vk::SemaphoreCreateInfo semaphoreInfo;
     vk::FenceCreateInfo fenceInfo;
     fenceInfo.flags = vk::FenceCreateFlagBits::eSignaled;
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    for (size_t i = 0; i < imageCount; i++) {
         imageAvailableSemaphores[i] = context.getDevice().createSemaphore(semaphoreInfo);
         renderFinishedSemaphores[i] = context.getDevice().createSemaphore(semaphoreInfo);
+    }
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         inFlightFences[i] = context.getDevice().createFence(fenceInfo);
     }
 }
@@ -140,10 +169,14 @@ void App::internalCleanup() {
 
     imguiBackend.cleanup();
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        context.getDevice().destroySemaphore(imageAvailableSemaphores[i]);
-        context.getDevice().destroySemaphore(renderFinishedSemaphores[i]);
-        context.getDevice().destroyFence(inFlightFences[i]);
+    for (auto& semaphore : imageAvailableSemaphores) {
+        context.getDevice().destroySemaphore(semaphore);
+    }
+    for (auto& semaphore : renderFinishedSemaphores) {
+        context.getDevice().destroySemaphore(semaphore);
+    }
+    for (auto& fence : inFlightFences) {
+        context.getDevice().destroyFence(fence);
     }
 
     swapchain.cleanup();
@@ -172,7 +205,8 @@ void App::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t frame
 
 bool App::acquireNextImage(uint32_t& imageIndex) {
     try {
-        imageIndex = swapchain.acquireNextImage(imageAvailableSemaphores[currentFrame]);
+        auto result = context.getDevice().acquireNextImageKHR(swapchain.getSwapchain(), UINT64_MAX, imageAvailableSemaphores[currentFrame]);
+        imageIndex = result.value;
         return true;
     } catch (const vk::OutOfDateKHRError&) {
         recreateSwapchain();
@@ -183,7 +217,7 @@ bool App::acquireNextImage(uint32_t& imageIndex) {
 void App::submitAndPresent(uint32_t imageIndex) {
     vk::Semaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
     vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
-    vk::Semaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+    vk::Semaphore signalSemaphores[] = {renderFinishedSemaphores[imageIndex]};
 
     vk::SubmitInfo submitInfo;
     submitInfo.waitSemaphoreCount = 1;
@@ -194,8 +228,15 @@ void App::submitAndPresent(uint32_t imageIndex) {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    auto submitResult = context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
-    swapchain.present(imageIndex, renderFinishedSemaphores[currentFrame]);
+    context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
+
+    vk::SwapchainKHR swapchainHandle = swapchain.getSwapchain();
+    vk::PresentInfoKHR presentInfo(1, &signalSemaphores[0], 1, &swapchainHandle, &imageIndex);
+
+    VkResult result = vkQueuePresentKHR(context.getPresentQueue(), reinterpret_cast<const VkPresentInfoKHR*>(&presentInfo));
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        recreateSwapchain();
+    }
 }
 
 void App::recreateSwapchain() {
@@ -211,9 +252,10 @@ void App::recreateSwapchain() {
     context.getDevice().waitIdle();
     swapchain.recreate();
 
-    // Recreate swapchain framebuffers
+    vk::Extent2D newExtent = swapchain.getExtent();
+
     if (forwardRenderer) {
-        // Use final pass RenderPass for framebuffer creation
+        forwardRenderer->onSwapchainRecreate(newExtent);
         swapchain.createFramebuffers(forwardRenderer->getFinalPassRenderPass());
     }
 

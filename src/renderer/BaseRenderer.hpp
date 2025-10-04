@@ -19,6 +19,7 @@ public:
     BaseRenderer() = default;
     virtual ~BaseRenderer() = default;
 
+    virtual void onSwapchainRecreate(vk::Extent2D newExtent) {}
 
     // Common public methods
     void setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& extent);

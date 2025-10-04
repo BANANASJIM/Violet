@@ -70,6 +70,13 @@ void VulkanContext::createInstance() {
     violet::Log::info("Renderer", "Enabled MoltenVK Metal argument buffers for bindless support");
 #endif
 
+    // Check if GLFW supports Vulkan
+    if (!glfwVulkanSupported()) {
+        violet::Log::error("Renderer", "GLFW reports that Vulkan is not supported on this system");
+        violet::Log::error("Renderer", "Please ensure Vulkan drivers are installed and VK_ICD_FILENAMES is set correctly");
+        throw RuntimeError("Vulkan not supported by GLFW");
+    }
+
     vk::ApplicationInfo appInfo;
     appInfo.pApplicationName = "Violet Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -79,6 +86,17 @@ void VulkanContext::createInstance() {
 
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+    if (glfwExtensions == nullptr) {
+        violet::Log::error("Renderer", "GLFW failed to get required Vulkan extensions. GLFW may not be compiled with Vulkan support.");
+        throw RuntimeError("GLFW does not support Vulkan");
+    }
+
+    violet::Log::info("Renderer", "GLFW requires {} Vulkan extensions:", glfwExtensionCount);
+    for (uint32_t i = 0; i < glfwExtensionCount; i++) {
+        violet::Log::info("Renderer", "  - {}", glfwExtensions[i]);
+    }
+
     eastl::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
     if (enableValidationLayers) {
