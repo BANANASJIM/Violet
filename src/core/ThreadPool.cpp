@@ -4,11 +4,10 @@
 namespace violet {
 
 ThreadPool::ThreadPool(size_t numThreads) {
-    // If numThreads is 0, use hardware concurrency
     if (numThreads == 0) {
         numThreads = std::thread::hardware_concurrency();
         if (numThreads == 0) {
-            numThreads = 4; // Fallback to 4 threads
+            numThreads = 4;
         }
     }
 
@@ -37,9 +36,17 @@ ThreadPool::~ThreadPool() {
     Log::info("ThreadPool", "Thread pool shutdown complete");
 }
 
+void ThreadPool::submit(eastl::function<void()> task) {
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        tasks.push(eastl::move(task));
+    }
+    condition.notify_one();
+}
+
 void ThreadPool::workerThread() {
     while (true) {
-        Task task;
+        eastl::function<void()> task;
 
         {
             std::unique_lock<std::mutex> lock(queueMutex);
@@ -50,16 +57,15 @@ void ThreadPool::workerThread() {
             }
 
             if (!tasks.empty()) {
-                task = eastl::move(const_cast<Task&>(tasks.top()));
+                task = eastl::move(tasks.front());
                 tasks.pop();
                 ++activeTasks;
             }
         }
 
-        // Execute task outside the lock
-        if (task.func) {
+        if (task) {
             try {
-                task.func();
+                task();
             } catch (const std::exception& e) {
                 Log::error("ThreadPool", "Task execution failed: {}", e.what());
             } catch (...) {
