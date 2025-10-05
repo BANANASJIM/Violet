@@ -134,12 +134,23 @@ void App::createSyncObjects() {
 void App::drawFrame() {
     // Wait for previous frame
     auto waitResult = context.getDevice().waitForFences(1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-    auto resetResult = context.getDevice().resetFences(1, &inFlightFences[currentFrame]);
 
-    // Acquire next image
+    // Check wait result
+    if (waitResult != vk::Result::eSuccess) {
+        violet::Log::error("App", "Failed to wait for fence");
+        return;
+    }
+
+    // Acquire next image (do this BEFORE resetting fence)
     uint32_t imageIndex;
     if (!acquireNextImage(imageIndex)) {
-        return; // Swapchain needs recreation
+        return; // Swapchain needs recreation, fence still signaled for next frame
+    }
+
+    // Only reset fence after successfully acquiring image
+    if (context.getDevice().resetFences(1, &inFlightFences[currentFrame]) != vk::Result::eSuccess) {
+        violet::Log::error("App", "Failed to reset fence");
+        return;
     }
 
     // Record command buffer
@@ -228,7 +239,10 @@ void App::submitAndPresent(uint32_t imageIndex) {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
+    if (context.getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]) != vk::Result::eSuccess) {
+        violet::Log::error("App", "Failed to submit command buffer");
+        return;
+    }
 
     vk::SwapchainKHR swapchainHandle = swapchain.getSwapchain();
     vk::PresentInfoKHR presentInfo(1, &signalSemaphores[0], 1, &swapchainHandle, &imageIndex);

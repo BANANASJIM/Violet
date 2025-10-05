@@ -1,4 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
+
+# Set Clang as default compiler if not already specified
+if(NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+    find_program(CLANG_C_COMPILER NAMES clang)
+    if(CLANG_C_COMPILER)
+        set(CMAKE_C_COMPILER ${CLANG_C_COMPILER})
+    endif()
+endif()
+
+if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    find_program(CLANG_CXX_COMPILER NAMES clang++)
+    if(CLANG_CXX_COMPILER)
+        set(CMAKE_CXX_COMPILER ${CLANG_CXX_COMPILER})
+    endif()
+endif()
+
 project(VioletEngine VERSION 0.1.0 LANGUAGES CXX)
 
 # Generate compile_commands.json for clangd
@@ -20,6 +36,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Find packages
+# On Linux, prefer system Vulkan over vcpkg to avoid ICD driver issues
+if(UNIX AND NOT APPLE)
+    set(Vulkan_LIBRARY "/usr/lib/libvulkan.so")
+endif()
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
@@ -74,6 +94,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     imguizmo::imguizmo
 )
 
+# Explicitly link C++ standard library on Linux when using Clang
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_link_libraries(${PROJECT_NAME} PRIVATE stdc++)
+endif()
+
 # Precompiled headers for faster compilation
 target_precompile_headers(${PROJECT_NAME} PRIVATE
     <vulkan/vulkan.hpp>
@@ -99,17 +124,13 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE
 
 # Platform specific settings
 if(APPLE)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE VK_USE_PLATFORM_METAL_EXT)
     # MoltenVK configuration
-    target_compile_definitions(${PROJECT_NAME} PRIVATE 
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
         VK_ENABLE_BETA_EXTENSIONS
         MVK_MACOS=1
     )
-elseif(WIN32)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE VK_USE_PLATFORM_WIN32_KHR)
-elseif(UNIX)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE VK_USE_PLATFORM_XCB_KHR)
 endif()
+# Note: GLFW automatically handles platform surface extensions (Wayland/XCB/Win32/etc)
 
 # Debug/Release configurations
 target_compile_definitions(${PROJECT_NAME} PRIVATE
