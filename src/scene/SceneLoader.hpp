@@ -17,6 +17,7 @@ class Texture;
 class Material;
 class MaterialInstance;
 class ForwardRenderer;
+struct GLTFAsset;
 
 struct GLTFLoadContext {
     VulkanContext* vulkanContext;
@@ -32,6 +33,11 @@ public:
     static eastl::unique_ptr<Scene> loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
                                                  entt::registry* world, ForwardRenderer* renderer, Texture* defaultTexture);
 
+    // Create scene from pre-loaded GLTFAsset (for async loading)
+    static eastl::unique_ptr<Scene> createSceneFromAsset(VulkanContext* context, const GLTFAsset* asset,
+                                                         const eastl::string& filePath, entt::registry* world,
+                                                         ForwardRenderer* renderer, Texture* defaultTexture);
+
 private:
     static void loadNode(GLTFLoadContext& loadCtx, Scene* scene, void* nodePtr, const void* modelPtr, uint32_t parentId,
                          entt::registry* world);
@@ -40,6 +46,10 @@ private:
 
     static Transform extractTransform(const void* nodePtr);
     static uint32_t createNodeFromGLTF(Scene* scene, void* nodePtr, uint32_t parentId);
+
+    // Create nodes from GLTFAsset
+    static void createNodesFromAsset(Scene* scene, const GLTFAsset* asset, uint32_t nodeIndex,
+                                     uint32_t parentId, entt::registry* world, GLTFLoadContext& loadCtx);
 };
 
 } // namespace violet

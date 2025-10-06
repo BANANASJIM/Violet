@@ -2,7 +2,9 @@
 #include "core/Log.hpp"
 #include "core/Exception.hpp"
 #include "resource/Mesh.hpp"
+#include "resource/ResourceManager.hpp"
 
+#include <EASTL/shared_ptr.h>
 #include <tiny_gltf.h>
 #include <EASTL/algorithm.h>
 
@@ -48,6 +50,37 @@ eastl::unique_ptr<GLTFAsset> AssetLoader::loadGLTF(const eastl::string& filePath
     loadNodes(&gltfModel, asset.get());
 
     return asset;
+}
+
+void AssetLoader::loadGLTFAsync(
+    const eastl::string& filePath,
+    ResourceManager* resourceManager,
+    eastl::function<void(eastl::unique_ptr<GLTFAsset>, eastl::string)> callback
+) {
+    // Shared data for passing between threads
+    auto assetPtr = eastl::make_shared<eastl::unique_ptr<GLTFAsset>>();
+    auto errorMsg = eastl::make_shared<eastl::string>();
+
+    auto task = eastl::make_shared<AsyncLoadTask>(
+        // CPU work: file IO + parsing (runs on worker thread)
+        [filePath, assetPtr, errorMsg]() {
+            try {
+                *assetPtr = loadGLTF(filePath);
+            } catch (const Exception& e) {
+                *errorMsg = e.what_c_str();
+            } catch (const std::exception& e) {
+                *errorMsg = eastl::string(e.what());
+            } catch (...) {
+                *errorMsg = "Unknown error loading glTF";
+            }
+        },
+        // Main thread work: callback with result
+        [assetPtr, errorMsg, callback]() {
+            callback(eastl::move(*assetPtr), *errorMsg);
+        }
+    );
+
+    resourceManager->submitAsyncTask(task);
 }
 
 void AssetLoader::loadMeshes(void* modelPtr, GLTFAsset* asset) {

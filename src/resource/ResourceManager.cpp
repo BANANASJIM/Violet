@@ -33,4 +33,44 @@ void ResourceManager::createDefaultResources() {
     textureManager.createDefaultResources();
 }
 
+void ResourceManager::submitAsyncTask(eastl::shared_ptr<AsyncLoadTask> task) {
+    // Submit CPU work to thread pool
+    threadPool.submit([task]() {
+        if (task->cpuWork) {
+            task->cpuWork();
+        }
+        task->cpuReady = true;
+    });
+
+    // Add to pending tasks for main thread processing
+    {
+        std::lock_guard<std::mutex> lock(taskMutex);
+        pendingTasks.push_back(task);
+    }
+}
+
+void ResourceManager::processAsyncTasks() {
+    eastl::vector<eastl::shared_ptr<AsyncLoadTask>> completedTasks;
+
+    // Find completed tasks
+    {
+        std::lock_guard<std::mutex> lock(taskMutex);
+        for (auto it = pendingTasks.begin(); it != pendingTasks.end();) {
+            if ((*it)->cpuReady) {
+                completedTasks.push_back(*it);
+                it = pendingTasks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Execute main thread work for completed tasks
+    for (auto& task : completedTasks) {
+        if (task->mainThreadWork) {
+            task->mainThreadWork();
+        }
+    }
+}
+
 } // namespace violet

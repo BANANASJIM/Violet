@@ -14,6 +14,7 @@
 #include "resource/Texture.hpp"
 #include "resource/Vertex.hpp"
 #include "renderer/core/VulkanContext.hpp"
+#include "asset/GLTFAsset.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
@@ -90,6 +91,174 @@ SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath,
     violet::Log::info("Scene", "Scene loaded successfully: {} nodes", scene->getNodeCount());
 
     // Build BVH for the loaded scene
+    renderer->collectRenderables(*world);
+    renderer->buildSceneBVH(*world);
+
+    return scene;
+}
+
+eastl::unique_ptr<Scene> SceneLoader::createSceneFromAsset(
+    VulkanContext* context,
+    const GLTFAsset* asset,
+    const eastl::string& filePath,
+    entt::registry* world,
+    ForwardRenderer* renderer,
+    Texture* defaultTexture
+) {
+    auto scene = eastl::make_unique<Scene>();
+
+    violet::Log::info("Scene", "Creating scene from GLTFAsset: {}", filePath.c_str());
+    violet::Log::info("Scene",
+        "Nodes: {}, Meshes: {}, Materials: {}, Textures: {}",
+        asset->nodes.size(),
+        asset->meshes.size(),
+        asset->materials.size(),
+        asset->textures.size()
+    );
+
+    // Create loading context
+    GLTFLoadContext loadCtx;
+    loadCtx.vulkanContext = context;
+    loadCtx.renderer = renderer;
+    loadCtx.defaultTexture = defaultTexture;
+
+    // Create GPU textures from asset data
+    loadCtx.textures.resize(asset->textures.size());
+    for (size_t i = 0; i < asset->textures.size(); i++) {
+        const auto& texData = asset->textures[i];
+        auto texture = eastl::make_unique<Texture>();
+
+        if (!texData.pixels.empty()) {
+            // Load from embedded data
+            texture->loadFromMemory(
+                context,
+                texData.pixels.data(),
+                texData.pixels.size(),
+                texData.width,
+                texData.height,
+                texData.channels,
+                true
+            );
+        } else if (!texData.uri.empty()) {
+            // Load from external file
+            texture->loadFromFile(context, texData.uri);
+        }
+
+        texture->setSampler(renderer->getDescriptorManager().getSampler(SamplerType::Default));
+        Texture* texturePtr = renderer->getMaterialManager()->addTexture(eastl::move(texture));
+        loadCtx.textures[i] = texturePtr;
+    }
+
+    // Create materials
+    Material* pbrMaterial = renderer->getPBRBindlessMaterial();
+    if (!pbrMaterial) {
+        violet::Log::error("Scene", "PBR bindless material not initialized");
+        return scene;
+    }
+
+    loadCtx.materials.resize(asset->materials.size());
+    loadCtx.materialIds.resize(asset->materials.size());
+
+    for (size_t i = 0; i < asset->materials.size(); i++) {
+        const auto& matData = asset->materials[i];
+
+        // Create material instance
+        MaterialInstanceDesc instanceDesc{
+            .material = pbrMaterial,
+            .type = MaterialType::PBR,
+            .name = matData.name
+        };
+        uint32_t instanceId = renderer->getMaterialManager()->createMaterialInstance(instanceDesc);
+        PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(
+            renderer->getMaterialManager()->getMaterialInstance(instanceId)
+        );
+
+        // Set material data
+        PBRMaterialData& data = instance->getData();
+        data.baseColorFactor = matData.baseColorFactor;
+        data.metallicFactor = matData.metallicFactor;
+        data.roughnessFactor = matData.roughnessFactor;
+        data.normalScale = matData.normalScale;
+        data.occlusionStrength = matData.occlusionStrength;
+        data.emissiveFactor = matData.emissiveFactor;
+        data.alphaCutoff = matData.alphaCutoff;
+
+        // Set alpha mode
+        if (matData.alphaMode == "OPAQUE") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Opaque);
+        } else if (matData.alphaMode == "MASK") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Mask);
+        } else if (matData.alphaMode == "BLEND") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Blend);
+        }
+        pbrMaterial->setDoubleSided(matData.doubleSided);
+
+        // Assign textures
+        auto getTexture = [&](int texIndex) -> Texture* {
+            if (texIndex >= 0 && texIndex < loadCtx.textures.size() && loadCtx.textures[texIndex]) {
+                return loadCtx.textures[texIndex];
+            }
+            return defaultTexture;
+        };
+
+        instance->setBaseColorTexture(getTexture(matData.baseColorTexIndex));
+        instance->setMetallicRoughnessTexture(matData.metallicRoughnessTexIndex >= 0
+            ? getTexture(matData.metallicRoughnessTexIndex)
+            : renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::MetallicRoughness));
+        instance->setNormalTexture(matData.normalTexIndex >= 0
+            ? getTexture(matData.normalTexIndex)
+            : renderer->getMaterialManager()->getDefaultTexture(DefaultTextureType::Normal));
+        instance->setOcclusionTexture(getTexture(matData.occlusionTexIndex));
+        instance->setEmissiveTexture(getTexture(matData.emissiveTexIndex));
+
+        instance->updateMaterialData();
+
+        // Generate unique material ID
+        static uint32_t fileIdCounter = 0;
+        static eastl::hash_map<eastl::string, uint32_t> fileIdMap;
+
+        uint32_t fileId = 0;
+        auto it = fileIdMap.find(filePath);
+        if (it == fileIdMap.end()) {
+            fileId = ++fileIdCounter;
+            fileIdMap[filePath] = fileId;
+        } else {
+            fileId = it->second;
+        }
+
+        uint32_t materialId = (fileId << 16) | static_cast<uint32_t>(i);
+        renderer->getMaterialManager()->registerGlobalMaterial(materialId, instanceId);
+
+        loadCtx.materials[i] = instance;
+        loadCtx.materialIds[i] = materialId;
+    }
+
+    // Create scene nodes from asset
+    size_t lastSlash = filePath.find_last_of("/\\");
+    size_t lastDot = filePath.find_last_of(".");
+    eastl::string modelName = filePath.substr(
+        lastSlash != eastl::string::npos ? lastSlash + 1 : 0,
+        lastDot != eastl::string::npos ? lastDot - (lastSlash != eastl::string::npos ? lastSlash + 1 : 0) : eastl::string::npos
+    );
+
+    uint32_t parentNodeId = 0;
+    if (asset->rootNodes.size() > 1 || !modelName.empty()) {
+        Node parentNode;
+        parentNode.name = modelName.empty() ? "Imported Model" : modelName;
+        parentNode.parentId = 0;
+        parentNode.entity = entt::null;
+        parentNodeId = scene->addNode(parentNode);
+        violet::Log::info("Scene", "Created parent node '{}' for imported model", parentNode.name.c_str());
+    }
+
+    // Create nodes and meshes
+    for (uint32_t rootNodeIdx : asset->rootNodes) {
+        createNodesFromAsset(scene.get(), asset, rootNodeIdx, parentNodeId, world, loadCtx);
+    }
+
+    violet::Log::info("Scene", "Scene created successfully: {} nodes", scene->getNodeCount());
+
+    // Build BVH
     renderer->collectRenderables(*world);
     renderer->buildSceneBVH(*world);
 
@@ -546,6 +715,76 @@ Transform SceneLoader::extractTransform(const void* nodePtr) {
 
 
     return transform;
+}
+
+void SceneLoader::createNodesFromAsset(
+    Scene* scene,
+    const GLTFAsset* asset,
+    uint32_t nodeIndex,
+    uint32_t parentId,
+    entt::registry* world,
+    GLTFLoadContext& loadCtx
+) {
+    if (nodeIndex >= asset->nodes.size()) {
+        return;
+    }
+
+    const auto& nodeData = asset->nodes[nodeIndex];
+
+    // Create node
+    Node node;
+    node.name = nodeData.name;
+    node.parentId = parentId;
+    uint32_t nodeId = scene->addNode(node);
+    Node* sceneNode = scene->getNode(nodeId);
+
+    // Create ECS entity
+    entt::entity entity = world->create();
+    sceneNode->entity = entity;
+
+    // Add transform component
+    TransformComponent transformComp;
+    transformComp.local = nodeData.transform;
+    world->emplace<TransformComponent>(entity, transformComp);
+
+    // Create mesh if node has one
+    if (nodeData.meshIndex >= 0 && nodeData.meshIndex < asset->meshes.size()) {
+        const auto& meshData = asset->meshes[nodeData.meshIndex];
+
+        if (!meshData.vertices.empty()) {
+            // Create GPU mesh
+            auto meshPtr = eastl::make_unique<Mesh>();
+            meshPtr->create(loadCtx.vulkanContext, meshData.vertices, meshData.indices, meshData.submeshes);
+            world->emplace<MeshComponent>(entity, eastl::move(meshPtr));
+
+            // Create material component
+            eastl::vector<uint32_t> meshMaterialIds;
+            for (const auto& subMesh : meshData.submeshes) {
+                uint32_t gltfMatIndex = subMesh.materialIndex;
+                if (gltfMatIndex < loadCtx.materialIds.size()) {
+                    meshMaterialIds.push_back(loadCtx.materialIds[gltfMatIndex]);
+                } else {
+                    meshMaterialIds.push_back(!loadCtx.materialIds.empty() ? loadCtx.materialIds[0] : 0);
+                }
+            }
+
+            if (!meshMaterialIds.empty()) {
+                MaterialComponent matComp;
+                for (const auto& subMesh : meshData.submeshes) {
+                    uint32_t gltfMatIndex = subMesh.materialIndex;
+                    if (gltfMatIndex < loadCtx.materialIds.size()) {
+                        matComp.materialIndexToId[gltfMatIndex] = loadCtx.materialIds[gltfMatIndex];
+                    }
+                }
+                world->emplace<MaterialComponent>(entity, eastl::move(matComp));
+            }
+        }
+    }
+
+    // Recursively create child nodes
+    for (uint32_t childIdx : nodeData.children) {
+        createNodesFromAsset(scene, asset, childIdx, nodeId, world, loadCtx);
+    }
 }
 
 uint32_t SceneLoader::createNodeFromGLTF(Scene* scene, void* nodePtr, uint32_t parentId) {

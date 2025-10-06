@@ -13,6 +13,7 @@
 #include "examples/TestTexture.hpp"
 #include "resource/Mesh.hpp"
 #include "scene/SceneLoader.hpp"
+#include "asset/AssetLoader.hpp"
 
 namespace violet {
 
@@ -138,6 +139,9 @@ void VioletApp::initializeScene() {
 }
 
 void VioletApp::update(float deltaTime) {
+    // Process completed async loading tasks
+    resourceManager.processAsyncTasks();
+
     auto controllerView = world.view<CameraControllerComponent>();
     for (auto entity : controllerView) {
         auto& controllerComp = controllerView.get<CameraControllerComponent>(entity);
@@ -152,59 +156,75 @@ void VioletApp::update(float deltaTime) {
 }
 
 void VioletApp::loadAsset(const eastl::string& path) {
-    violet::Log::info("App", "Loading asset: {}", path.c_str());
+    violet::Log::info("App", "Loading asset asynchronously: {}", path.c_str());
 
     size_t dotPos = path.find_last_of('.');
     if (dotPos != eastl::string::npos) {
         eastl::string ext = path.substr(dotPos);
 
         if (ext == ".gltf") {
-            try {
-                if (currentScene) {
-                    currentScene->clear();
+            // Use async loading
+            AssetLoader::loadGLTFAsync(path, &resourceManager, [this, path](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+                if (!error.empty()) {
+                    violet::Log::error("App", "Failed to load glTF {}: {}", path.c_str(), error.c_str());
+                    return;
                 }
 
-                // Clear old renderables before loading new scene
-                renderer.clearRenderables();
-
-                currentScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White));
-                currentScene->updateWorldTransforms(world.getRegistry());
-
-                // Update world bounds for all MeshComponents after world transforms are computed
-                auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
-                for (auto&& [entity, transformComp, meshComp] : view.each()) {
-                    meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                if (!asset) {
+                    violet::Log::error("App", "Failed to load glTF {}: null asset", path.c_str());
+                    return;
                 }
 
-                // Give SceneDebugLayer access to the scene for proper hierarchy handling
-                sceneDebug->setScene(currentScene.get());
+                try {
+                    if (currentScene) {
+                        currentScene->clear();
+                    }
 
-                // Add default directional light to the scene
-                auto lightEntity = world.getRegistry().create();
+                    // Clear old renderables before loading new scene
+                    renderer.clearRenderables();
 
-                // Properly initialize TransformComponent with world transform
-                TransformComponent lightTransform;
-                lightTransform.local.position = glm::vec3(0.0f, 100.0f, 0.0f);
-                lightTransform.world = lightTransform.local;  // Initialize world transform
-                lightTransform.dirty = false;
-                world.getRegistry().emplace<TransformComponent>(lightEntity, lightTransform);
+                    // Create scene from asset (GPU resource creation on main thread)
+                    currentScene = SceneLoader::createSceneFromAsset(
+                        getContext(),
+                        asset.get(),
+                        path,
+                        &world.getRegistry(),
+                        &renderer,
+                        resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
+                    );
 
-                auto light = LightComponent::createDirectionalLight(
-                    glm::vec3(-0.3f, -1.0f, -0.3f),  // Direction (from sun)
-                    glm::vec3(1.0f, 0.95f, 0.8f),     // Warm white color
-                    3.0f                              // Intensity
-                );
-                world.getRegistry().emplace<LightComponent>(lightEntity, light);
-                violet::Log::info("App", "Added default directional light to scene");
+                    currentScene->updateWorldTransforms(world.getRegistry());
 
-                // Mark scene dirty for BVH rebuild
-                renderer.markSceneDirty();
+                    // Update world bounds for all MeshComponents
+                    auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
+                    for (auto&& [entity, transformComp, meshComp] : view.each()) {
+                        meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                    }
 
-                violet::Log::info("App", "Scene loaded: {}", path.c_str());
-            } catch (const violet::Exception& e) {
-                // Failed to load model
-                violet::Log::error("App", "Failed to load model {}: {}", path.c_str(), e.what_c_str());
-            }
+                    sceneDebug->setScene(currentScene.get());
+
+                    // Add default directional light
+                    auto lightEntity = world.getRegistry().create();
+                    TransformComponent lightTransform;
+                    lightTransform.local.position = glm::vec3(0.0f, 100.0f, 0.0f);
+                    lightTransform.world = lightTransform.local;
+                    lightTransform.dirty = false;
+                    world.getRegistry().emplace<TransformComponent>(lightEntity, lightTransform);
+
+                    auto light = LightComponent::createDirectionalLight(
+                        glm::vec3(-0.3f, -1.0f, -0.3f),
+                        glm::vec3(1.0f, 0.95f, 0.8f),
+                        3.0f
+                    );
+                    world.getRegistry().emplace<LightComponent>(lightEntity, light);
+
+                    renderer.markSceneDirty();
+
+                    violet::Log::info("App", "Scene loaded asynchronously: {}", path.c_str());
+                } catch (const violet::Exception& e) {
+                    violet::Log::error("App", "Failed to create scene from asset {}: {}", path.c_str(), e.what_c_str());
+                }
+            });
         } else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg") {
             // Texture loading not implemented
         }
