@@ -112,12 +112,35 @@ void TextureManager::createDefaultResources() {
     createDefaultNormalTexture();
     createDefaultMetallicRoughnessTexture();
 
-    // Register default textures in bindless array if enabled
+    // 注册所有默认纹理到bindless数组的固定索引
+    // Index 0保留为nullptr（shader中的"无纹理"标记）
     if (descriptorManager->isBindlessEnabled()) {
+        // Index 1: White texture (255,255,255,255)
         Texture* white = getTexture(defaultTextures.white);
         if (white) {
-            uint32_t whiteTexIndex = descriptorManager->allocateBindlessTexture(white);
-            violet::Log::info("TextureManager", "Registered default white texture at bindless index {}", whiteTexIndex);
+            uint32_t idx = descriptorManager->allocateBindlessTextureAt(white, 1);
+            violet::Log::info("TextureManager", "Registered default white texture at bindless index {}", idx);
+        }
+
+        // Index 2: Black texture (0,0,0,255)
+        Texture* black = getTexture(defaultTextures.black);
+        if (black) {
+            uint32_t idx = descriptorManager->allocateBindlessTextureAt(black, 2);
+            violet::Log::info("TextureManager", "Registered default black texture at bindless index {}", idx);
+        }
+
+        // Index 3: Normal texture (128,128,255,255) - 默认法线(0,0,1)
+        Texture* normal = getTexture(defaultTextures.normal);
+        if (normal) {
+            uint32_t idx = descriptorManager->allocateBindlessTextureAt(normal, 3);
+            violet::Log::info("TextureManager", "Registered default normal texture at bindless index {}", idx);
+        }
+
+        // Index 4: MetallicRoughness texture (0,255,255,255) - G=1.0(roughness), B=1.0(metallic)
+        Texture* metallicRoughness = getTexture(defaultTextures.metallicRoughness);
+        if (metallicRoughness) {
+            uint32_t idx = descriptorManager->allocateBindlessTextureAt(metallicRoughness, 4);
+            violet::Log::info("TextureManager", "Registered default metallicRoughness texture at bindless index {}", idx);
         }
     }
 

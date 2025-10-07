@@ -47,7 +47,7 @@ public:
         return *this;
     }
 
-    void loadFromFile(VulkanContext* context, const eastl::string& filePath, bool enableMipmaps = false);
+    void loadFromFile(VulkanContext* context, const eastl::string& filePath, bool srgb = true, bool enableMipmaps = false);
     void loadFromKTX2(VulkanContext* context, const eastl::string& filePath, bool enableMipmaps = false);
     void loadFromMemory(VulkanContext* context, const unsigned char* data, size_t size, int width, int height, int channels, bool srgb = true, bool enableMipmaps = false);
 

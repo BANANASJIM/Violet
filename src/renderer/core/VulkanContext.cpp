@@ -8,6 +8,15 @@ namespace violet {
 
 void VulkanContext::init(GLFWwindow* win) {
     window = win;
+
+    // Check environment variable for validation layers
+    const char* debugEnv = std::getenv("VIOLET_DEBUG");
+    enableValidationLayers = (debugEnv != nullptr && std::string(debugEnv) == "1");
+
+    if (enableValidationLayers) {
+        violet::Log::info("Renderer", "Validation layers enabled (VIOLET_DEBUG=1)");
+    }
+
     createInstance();
     setupDebugMessenger();
     createSurface(window);

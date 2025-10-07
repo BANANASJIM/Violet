@@ -337,13 +337,34 @@ eastl::unique_ptr<Scene> Scene::createFromAsset(
     MaterialManager* materialManager = renderer.getMaterialManager();
 
     // Step 1: Create GPU textures from asset data
+    // 根据glTF 2.0规范，需要判断纹理用途来决定是否使用sRGB：
+    // - baseColorTexture, emissiveTexture → sRGB (颜色数据)
+    // - normalTexture, metallicRoughnessTexture, occlusionTexture → Linear (数值数据)
     eastl::vector<Texture*> textures(asset->textures.size());
+
+    // 建立texture index到sRGB标志的映射
+    eastl::vector<bool> isSRGB(asset->textures.size(), false);
+
+    // 扫描所有材质，标记哪些纹理应该用sRGB
+    for (const auto& matData : asset->materials) {
+        // baseColorTexture → sRGB
+        if (matData.baseColorTexIndex >= 0 && matData.baseColorTexIndex < (int)isSRGB.size()) {
+            isSRGB[matData.baseColorTexIndex] = true;
+        }
+        // emissiveTexture → sRGB
+        if (matData.emissiveTexIndex >= 0 && matData.emissiveTexIndex < (int)isSRGB.size()) {
+            isSRGB[matData.emissiveTexIndex] = true;
+        }
+        // normalTexture, metallicRoughnessTexture, occlusionTexture → Linear (默认false)
+    }
+
+    // 根据映射加载纹理
     for (size_t i = 0; i < asset->textures.size(); i++) {
         const auto& texData = asset->textures[i];
         auto texture = eastl::make_unique<Texture>();
 
         if (!texData.pixels.empty()) {
-            // Load from embedded data
+            // Load from embedded data，根据用途使用正确的色彩空间
             texture->loadFromMemory(
                 context,
                 texData.pixels.data(),
@@ -351,16 +372,18 @@ eastl::unique_ptr<Scene> Scene::createFromAsset(
                 texData.width,
                 texData.height,
                 texData.channels,
-                true
+                isSRGB[i]  // ✅ 根据纹理用途决定sRGB
             );
         } else if (!texData.uri.empty()) {
-            // Load from external file
-            texture->loadFromFile(context, texData.uri);
+            // Load from external file，根据纹理用途决定sRGB
+            texture->loadFromFile(context, texData.uri, isSRGB[i]);
         }
 
         texture->setSampler(renderer.getDescriptorManager().getSampler(SamplerType::Default));
         Texture* texturePtr = materialManager->addTexture(eastl::move(texture));
         textures[i] = texturePtr;
+
+        violet::Log::debug("Scene", "Loaded texture {}: sRGB={}", i, isSRGB[i]);
     }
 
     // Step 2: Create materials
@@ -414,14 +437,25 @@ eastl::unique_ptr<Scene> Scene::createFromAsset(
         };
 
         instance->setBaseColorTexture(getTexture(matData.baseColorTexIndex));
+
+        // Bindless策略：没有metallicRoughnessTexture时使用默认纹理（bindless index 4）
+        // 默认纹理值为(R=0, G=255, B=255)，配合factor使用：
+        // metallic = 1.0 * metallicFactor, roughness = 1.0 * roughnessFactor
         instance->setMetallicRoughnessTexture(matData.metallicRoughnessTexIndex >= 0
             ? getTexture(matData.metallicRoughnessTexIndex)
             : materialManager->getDefaultTexture(DefaultTextureType::MetallicRoughness));
+
+        // 没有normalTexture时使用默认法线纹理（bindless index 3）
         instance->setNormalTexture(matData.normalTexIndex >= 0
             ? getTexture(matData.normalTexIndex)
             : materialManager->getDefaultTexture(DefaultTextureType::Normal));
-        instance->setOcclusionTexture(getTexture(matData.occlusionTexIndex));
-        instance->setEmissiveTexture(getTexture(matData.emissiveTexIndex));
+
+        instance->setOcclusionTexture(matData.occlusionTexIndex >= 0
+            ? getTexture(matData.occlusionTexIndex)
+            : nullptr);
+        instance->setEmissiveTexture(matData.emissiveTexIndex >= 0
+            ? getTexture(matData.emissiveTexIndex)
+            : nullptr);
 
         instance->updateMaterialData();
 

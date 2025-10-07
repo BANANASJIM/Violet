@@ -49,7 +49,7 @@ public:
     ~GlobalUniforms();
     void           init(VulkanContext* context, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
     void           cleanup();
-    void           update(entt::registry& world, uint32_t frameIndex, float skyboxExposure = 1.0f, float skyboxRotation = 0.0f, bool skyboxEnabled = false);
+    void           update(entt::registry& world, uint32_t frameIndex, float skyboxExposure = 1.0f, float skyboxRotation = 0.0f, bool skyboxEnabled = false, float iblIntensity = 1.0f);
     DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
     Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
     void setSkyboxTexture(Texture* texture);
@@ -85,7 +85,7 @@ private:
         alignas(4) float skyboxExposure;
         alignas(4) float skyboxRotation;
         alignas(4) int skyboxEnabled;
-        alignas(4) float padding1;
+        alignas(4) float iblIntensity;
 
         // IBL bindless texture indices
         alignas(4) uint32_t environmentMapIndex;

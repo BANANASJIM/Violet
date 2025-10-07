@@ -355,7 +355,7 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
     // Update global uniforms with environment map parameters
-    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
+    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled(), environmentMap.getIntensity());
 
     // Update IBL bindless indices in global uniforms
     globalUniforms.setIBLIndices(
@@ -714,7 +714,7 @@ Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
     return nullptr;
 }
 
-void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float skyboxExposure, float skyboxRotation, bool skyboxEnabled) {
+void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float skyboxExposure, float skyboxRotation, bool skyboxEnabled, float iblIntensity) {
     Camera* activeCamera = findActiveCamera(world);
     if (!activeCamera) {
         violet::Log::warn("Renderer", "No active camera found!");
@@ -784,6 +784,7 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
     cachedUBO.skyboxExposure = skyboxExposure;
     cachedUBO.skyboxRotation = skyboxRotation;
     cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
+    cachedUBO.iblIntensity = iblIntensity;
 
     // Update IBL bindless indices
     cachedUBO.environmentMapIndex = iblEnvironmentMapIndex;

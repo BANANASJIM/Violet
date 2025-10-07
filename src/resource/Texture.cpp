@@ -16,7 +16,7 @@
 
 namespace violet {
 
-void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath, bool enableMipmaps) {
+void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath, bool srgb, bool enableMipmaps) {
     context = ctx;
 
     eastl::string resolvedPath = FileSystem::resolveRelativePath(filePath);
@@ -28,8 +28,8 @@ void Texture::loadFromFile(VulkanContext* ctx, const eastl::string& filePath, bo
         throw RuntimeError("Failed to load texture image!");
     }
 
-    // Calculate mip levels
-    format = vk::Format::eR8G8B8A8Srgb;
+    // Calculate mip levels and set format based on srgb parameter
+    format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     if (enableMipmaps) {
         mipLevels = calculateMipLevels(texWidth, texHeight);
     } else {

@@ -19,7 +19,7 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     float skyboxExposure;
     float skyboxRotation;
     int skyboxEnabled;
-    float padding1;
+    float iblIntensity;
 
     // IBL bindless texture indices
     uint environmentMapIndex;
@@ -257,8 +257,8 @@ void main() {
         vec2 envBRDF = texture(textures[nonuniformEXT(global.brdfLUTIndex)], vec2(max(dot(N, V), 0.0), roughness)).rg;
         vec3 specular = prefilteredColor * (F * envBRDF.x + envBRDF.y);
 
-        // Combine diffuse and specular IBL
-        ambient = (kD * diffuse + specular) * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength);
+        // Combine diffuse and specular IBL with intensity control
+        ambient = (kD * diffuse + specular) * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength) * global.iblIntensity;
     } else {
         // Fallback to simple ambient if IBL not available
         ambient = global.ambientLight * albedo * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength);

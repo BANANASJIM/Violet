@@ -144,6 +144,7 @@ public:
     // Bindless texture management integration
     void initBindless(uint32_t maxTextures);
     uint32_t allocateBindlessTexture(Texture* texture);  // For 2D textures (binding 0)
+    uint32_t allocateBindlessTextureAt(Texture* texture, uint32_t index);  // Allocate at specific index (for default textures)
     uint32_t allocateBindlessCubemap(Texture* cubemapTexture);  // For cubemaps (binding 1)
     void freeBindlessTexture(uint32_t index);
     void freeBindlessCubemap(uint32_t index);

@@ -73,7 +73,7 @@ void VioletApp::createResources() {
     initializeScene();
 
     // Load default scene asynchronously (non-blocking)
-    eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/MetalRoughSpheres/glTF/MetalRoughSpheres.gltf");
+    eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");
     violet::Log::info("App", "Loading default scene asynchronously: {}", scenePath.c_str());
 
     Scene::loadFromGLTFAsync(
@@ -129,14 +129,14 @@ void VioletApp::initializeScene() {
     cameraComp.isActive = true;
 
     auto controller = eastl::make_unique<CameraController>(cameraComp.camera.get());
-    // Position camera for MetalRoughSpheres viewing (sphere grid scene)
-    controller->setPosition(glm::vec3(0.0f, 2.0f, 10.0f));
-    controller->setMovementSpeed(5.0f);  // Slower movement for small scene
+    // Position camera for Sponza viewing (large indoor scene)
+    controller->setPosition(glm::vec3(-10.0f, 5.0f, 0.0f));
+    controller->setMovementSpeed(10.0f);  // Faster movement for large scene
     controller->setSensitivity(0.002f);
 
     // Look towards scene center
-    glm::vec3 camPos = glm::vec3(0.0f, 2.0f, 10.0f);
-    glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::vec3 camPos = glm::vec3(-10.0f, 5.0f, 0.0f);
+    glm::vec3 sceneCenter = glm::vec3(0.0f, 5.0f, 0.0f);
     glm::vec3 direction = glm::normalize(sceneCenter - camPos);
 
     float yaw = glm::degrees(atan2(direction.z, direction.x));

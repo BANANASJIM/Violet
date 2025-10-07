@@ -132,7 +132,7 @@ void App::createSyncObjects() {
 }
 
 void App::drawFrame() {
-    // Wait for previous frame
+// Wait for previous frame
     auto waitResult = context.getDevice().waitForFences(1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
     // Check wait result

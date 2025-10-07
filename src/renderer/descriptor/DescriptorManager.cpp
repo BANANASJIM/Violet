@@ -6,6 +6,7 @@
 #include "resource/gpu/Buffer.hpp"
 #include "core/Log.hpp"
 #include <functional>
+#include <EASTL/algorithm.h>
 
 namespace violet {
 
@@ -437,8 +438,16 @@ void DescriptorManager::initBindless(uint32_t maxTextures) {
 
     bindlessMaxTextures = maxTextures;
     bindlessTextureSlots.resize(maxTextures, nullptr);
-    bindlessFreeIndices.reserve(maxTextures);
-    for (uint32_t i = 0; i < maxTextures; ++i) {
+
+    // 预留前5个索引给默认纹理:
+    // Index 0: 保留为nullptr标记（shader中的"无纹理"检测）
+    // Index 1: White texture
+    // Index 2: Black texture
+    // Index 3: Normal texture
+    // Index 4: MetallicRoughness texture
+    // Index 5+: 动态分配
+    bindlessFreeIndices.reserve(maxTextures - 5);
+    for (uint32_t i = 5; i < maxTextures; ++i) {
         bindlessFreeIndices.push_back(i);
     }
 
@@ -490,6 +499,49 @@ uint32_t DescriptorManager::allocateBindlessTexture(Texture* texture) {
     context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 
     violet::Log::debug("Renderer", "Allocated bindless texture at index {}", index);
+    return index;
+}
+
+uint32_t DescriptorManager::allocateBindlessTextureAt(Texture* texture, uint32_t index) {
+    if (!bindlessEnabled) {
+        violet::Log::error("Renderer", "Bindless not enabled - call initBindless() first");
+        return 0;
+    }
+
+    if (index >= bindlessMaxTextures) {
+        violet::Log::error("Renderer", "Invalid bindless texture index: {}", index);
+        return 0;
+    }
+
+    if (bindlessTextureSlots[index] != nullptr) {
+        violet::Log::warn("Renderer", "Bindless texture slot {} already occupied, overwriting", index);
+    }
+
+    bindlessTextureSlots[index] = texture;
+
+    // 从freeIndices中移除这个索引（如果存在）
+    auto it = eastl::find(bindlessFreeIndices.begin(), bindlessFreeIndices.end(), index);
+    if (it != bindlessFreeIndices.end()) {
+        bindlessFreeIndices.erase(it);
+    }
+
+    // 更新descriptor set
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    imageInfo.imageView = texture->getImageView();
+    imageInfo.sampler = texture->getSampler();
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = bindlessSet;
+    write.dstBinding = 0;
+    write.dstArrayElement = index;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
+
+    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+
+    violet::Log::debug("Renderer", "Allocated bindless texture at fixed index {}", index);
     return index;
 }
 

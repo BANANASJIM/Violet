@@ -1,7 +1,34 @@
 #include "Log.hpp"
+#include "FileSystem.hpp"
 #include <cstdlib>
 
 namespace violet {
+
+void Log::init() {
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    console_sink->set_level(spdlog::level::trace);
+    console_sink->set_pattern("[%H:%M:%S.%e] [%^%l%$] [thread %t] %v");
+
+    // Use FileSystem to resolve log path relative to project root
+    // Rotating file sink: max 5MB per file, keep 3 files
+    eastl::string logPath = FileSystem::resolveRelativePath("violet.log");
+    constexpr size_t max_file_size = 1024 * 1024 * 5;  // 5MB
+    constexpr size_t max_files = 3;  // Keep last 3 log files
+    auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logPath.c_str(), max_file_size, max_files);
+    file_sink->set_level(spdlog::level::trace);
+    file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] [%s:%#] %v");
+
+    std::vector<spdlog::sink_ptr> sinks{console_sink, file_sink};
+
+    s_logger = std::make_shared<spdlog::logger>("VIOLET", sinks.begin(), sinks.end());
+    s_logger->set_level(spdlog::level::trace);
+    s_logger->flush_on(spdlog::level::err);
+
+    spdlog::register_logger(s_logger);
+
+    // Load configuration from environment
+    loadConfigFromEnvironment();
+}
 
 void Log::setModuleEnabled(const eastl::string& module, bool enabled) {
     if (enabled) {

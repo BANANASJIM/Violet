@@ -1,6 +1,6 @@
 #pragma once
 
-#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
@@ -15,26 +15,7 @@ namespace violet {
 
 class Log {
 public:
-    static void init() {
-        auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        console_sink->set_level(spdlog::level::trace);
-        console_sink->set_pattern("[%H:%M:%S.%e] [%^%l%$] [thread %t] %v");
-
-        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("violet.log", true);
-        file_sink->set_level(spdlog::level::trace);
-        file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] [%s:%#] %v");
-
-        std::vector<spdlog::sink_ptr> sinks{console_sink, file_sink};
-
-        s_logger = std::make_shared<spdlog::logger>("VIOLET", sinks.begin(), sinks.end());
-        s_logger->set_level(spdlog::level::trace);
-        s_logger->flush_on(spdlog::level::err);
-
-        spdlog::register_logger(s_logger);
-
-        // Load configuration from environment
-        loadConfigFromEnvironment();
-    }
+    static void init();
 
     static auto getLogger() -> std::shared_ptr<spdlog::logger>& { return s_logger; }
 

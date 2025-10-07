@@ -243,19 +243,22 @@ void AssetLoader::loadMaterials(void* modelPtr, GLTFAsset* asset) {
 
         matData.name = eastl::string(gltfMat.name.c_str());
 
-        // Base color
-        if (gltfMat.values.find("baseColorFactor") != gltfMat.values.end()) {
-            const auto& factor = gltfMat.values.at("baseColorFactor").ColorFactor();
-            matData.baseColorFactor = glm::vec4(factor[0], factor[1], factor[2], factor[3]);
+        // PBR Metallic Roughness properties
+        const auto& pbr = gltfMat.pbrMetallicRoughness;
+
+        // Base color factor
+        if (pbr.baseColorFactor.size() == 4) {
+            matData.baseColorFactor = glm::vec4(
+                static_cast<float>(pbr.baseColorFactor[0]),
+                static_cast<float>(pbr.baseColorFactor[1]),
+                static_cast<float>(pbr.baseColorFactor[2]),
+                static_cast<float>(pbr.baseColorFactor[3])
+            );
         }
 
-        // Metallic/roughness
-        if (gltfMat.values.find("metallicFactor") != gltfMat.values.end()) {
-            matData.metallicFactor = static_cast<float>(gltfMat.values.at("metallicFactor").Factor());
-        }
-        if (gltfMat.values.find("roughnessFactor") != gltfMat.values.end()) {
-            matData.roughnessFactor = static_cast<float>(gltfMat.values.at("roughnessFactor").Factor());
-        }
+        // Metallic/roughness factors
+        matData.metallicFactor = static_cast<float>(pbr.metallicFactor);
+        matData.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
 
         // Normal scale
         if (gltfMat.normalTexture.scale != 0) {
@@ -285,13 +288,9 @@ void AssetLoader::loadMaterials(void* modelPtr, GLTFAsset* asset) {
         matData.alphaMode = eastl::string(gltfMat.alphaMode.c_str());
         matData.doubleSided = gltfMat.doubleSided;
 
-        // Texture indices
-        if (gltfMat.values.find("baseColorTexture") != gltfMat.values.end()) {
-            matData.baseColorTexIndex = gltfMat.values.at("baseColorTexture").TextureIndex();
-        }
-        if (gltfMat.values.find("metallicRoughnessTexture") != gltfMat.values.end()) {
-            matData.metallicRoughnessTexIndex = gltfMat.values.at("metallicRoughnessTexture").TextureIndex();
-        }
+        // Texture indices from PBR properties
+        matData.baseColorTexIndex = pbr.baseColorTexture.index;
+        matData.metallicRoughnessTexIndex = pbr.metallicRoughnessTexture.index;
         if (gltfMat.normalTexture.index >= 0) {
             matData.normalTexIndex = gltfMat.normalTexture.index;
         }
