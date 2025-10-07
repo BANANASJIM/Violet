@@ -16,6 +16,8 @@
 namespace violet {
 
 class ResourceManager;
+class ForwardRenderer;
+class Texture;
 struct GLTFAsset;
 
 class Scene {
@@ -23,11 +25,23 @@ public:
     Scene() = default;
     ~Scene();
 
-    // Load scene from glTF file using AssetLoader and ResourceManager
+    // Synchronous loading (blocks main thread) - use async version for production
     static eastl::unique_ptr<Scene> loadFromGLTF(
         const eastl::string& filePath,
         ResourceManager& resourceMgr,
-        entt::registry& world
+        ForwardRenderer& renderer,
+        entt::registry& world,
+        Texture* defaultTexture
+    );
+
+    // Async loading (preferred) - loads on worker thread, callback on main thread
+    static void loadFromGLTFAsync(
+        const eastl::string& filePath,
+        ResourceManager& resourceMgr,
+        ForwardRenderer& renderer,
+        entt::registry& world,
+        Texture* defaultTexture,
+        eastl::function<void(eastl::unique_ptr<Scene>, eastl::string)> callback
     );
 
     void cleanup();
@@ -73,6 +87,28 @@ private:
 
     void removeFromParent(uint32_t nodeId);
     void updateWorldTransformRecursive(uint32_t nodeId, const glm::mat4& parentTransform, entt::registry& world);
+
+    // Helper for creating scene from pre-loaded GLTFAsset
+    static eastl::unique_ptr<Scene> createFromAsset(
+        const GLTFAsset* asset,
+        ResourceManager& resourceMgr,
+        ForwardRenderer& renderer,
+        entt::registry& world,
+        const eastl::string& filePath,
+        Texture* defaultTexture
+    );
+
+    // Helper for creating nodes from asset data
+    static void createNodesFromAsset(
+        Scene* scene,
+        const GLTFAsset* asset,
+        ResourceManager& resourceMgr,
+        ForwardRenderer& renderer,
+        entt::registry& world,
+        uint32_t nodeIndex,
+        uint32_t parentId,
+        const eastl::vector<uint32_t>& materialIds
+    );
 };
 
 } // namespace violet

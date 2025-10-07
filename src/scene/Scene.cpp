@@ -7,6 +7,9 @@
 #include "resource/Mesh.hpp"
 #include "resource/Texture.hpp"
 #include "resource/Material.hpp"
+#include "resource/MaterialManager.hpp"
+#include "renderer/core/ForwardRenderer.hpp"
+#include "renderer/core/VulkanContext.hpp"
 
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -18,71 +21,50 @@ Scene::~Scene() {
     cleanup();
 }
 
-// Load scene from glTF file using simplified architecture
+// Synchronous loading - blocks main thread
 eastl::unique_ptr<Scene> Scene::loadFromGLTF(
     const eastl::string& filePath,
     ResourceManager& resourceMgr,
-    entt::registry& world
+    ForwardRenderer& renderer,
+    entt::registry& world,
+    Texture* defaultTexture
 ) {
-    // Step 1: Parse glTF file (no Vulkan dependencies)
+    // Parse glTF file synchronously
     auto asset = AssetLoader::loadGLTF(filePath);
     if (!asset) {
         violet::Log::error("Scene", "Failed to load glTF asset: {}", filePath.c_str());
         return nullptr;
     }
 
-    auto scene = eastl::make_unique<Scene>();
+    // Create scene from loaded asset
+    return createFromAsset(asset.get(), resourceMgr, renderer, world, filePath, defaultTexture);
+}
 
-    // Step 2-4: Resource creation will be handled by SceneLoader compatibility layer
-    // This is a simplified implementation showing the architecture
+// Async loading - preferred method
+void Scene::loadFromGLTFAsync(
+    const eastl::string& filePath,
+    ResourceManager& resourceMgr,
+    ForwardRenderer& renderer,
+    entt::registry& world,
+    Texture* defaultTexture,
+    eastl::function<void(eastl::unique_ptr<Scene>, eastl::string)> callback
+) {
+    AssetLoader::loadGLTFAsync(filePath, &resourceMgr,
+        [&resourceMgr, &renderer, &world, defaultTexture, filePath, callback]
+        (eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+            if (!error.empty()) {
+                callback(nullptr, error);
+                return;
+            }
 
-    violet::Log::warn("Scene", "Scene::loadFromGLTF is not fully implemented yet");
-    violet::Log::warn("Scene", "Use SceneLoader::loadFromGLTF for now");
-
-    // Placeholder vectors
-    eastl::vector<Mesh*> meshes(asset->meshes.size(), nullptr);
-
-    // Step 5: Build scene graph and create ECS entities
-    // Helper to recursively create nodes
-    eastl::function<uint32_t(uint32_t, uint32_t)> createNodeRecursive =
-        [&](uint32_t assetNodeIdx, uint32_t parentId) -> uint32_t {
-
-        const auto& nodeData = asset->nodes[assetNodeIdx];
-
-        // Create scene node
-        Node node;
-        node.name = nodeData.name;
-        node.parentId = parentId;
-        uint32_t nodeId = scene->addNode(node);
-        Node* sceneNode = scene->getNode(nodeId);
-
-        // Create ECS entity
-        entt::entity entity = world.create();
-        sceneNode->entity = entity;
-
-        // Add transform component
-        world.emplace<TransformComponent>(entity, nodeData.transform);
-
-        // Mesh and material components will be added by SceneLoader compatibility layer
-        // TODO: Implement full resource creation in Scene::loadFromGLTF
-
-        // Recursively create children
-        for (uint32_t childIdx : nodeData.children) {
-            createNodeRecursive(childIdx, nodeId);
+            try {
+                auto scene = createFromAsset(asset.get(), resourceMgr, renderer, world, filePath, defaultTexture);
+                callback(eastl::move(scene), "");
+            } catch (const std::exception& e) {
+                callback(nullptr, eastl::string(e.what()));
+            }
         }
-
-        return nodeId;
-    };
-
-    // Create nodes from root nodes
-    for (uint32_t rootIdx : asset->rootNodes) {
-        createNodeRecursive(rootIdx, 0);
-    }
-
-    violet::Log::info("Scene", "Loaded scene with {} nodes from {}",
-        scene->getNodeCount(), filePath.c_str());
-
-    return scene;
+    );
 }
 
 void Scene::cleanup() {
@@ -329,6 +311,244 @@ uint32_t Scene::findNodeIdForEntity(entt::entity entity) const {
         }
     }
     return 0; // Return 0 if not found (invalid node ID)
+}
+
+// Create scene from pre-loaded GLTFAsset
+eastl::unique_ptr<Scene> Scene::createFromAsset(
+    const GLTFAsset* asset,
+    ResourceManager& resourceMgr,
+    ForwardRenderer& renderer,
+    entt::registry& world,
+    const eastl::string& filePath,
+    Texture* defaultTexture
+) {
+    auto scene = eastl::make_unique<Scene>();
+
+    violet::Log::info("Scene", "Creating scene from GLTFAsset: {}", filePath.c_str());
+    violet::Log::info("Scene",
+        "Nodes: {}, Meshes: {}, Materials: {}, Textures: {}",
+        asset->nodes.size(),
+        asset->meshes.size(),
+        asset->materials.size(),
+        asset->textures.size()
+    );
+
+    VulkanContext* context = renderer.getContext();
+    MaterialManager* materialManager = renderer.getMaterialManager();
+
+    // Step 1: Create GPU textures from asset data
+    eastl::vector<Texture*> textures(asset->textures.size());
+    for (size_t i = 0; i < asset->textures.size(); i++) {
+        const auto& texData = asset->textures[i];
+        auto texture = eastl::make_unique<Texture>();
+
+        if (!texData.pixels.empty()) {
+            // Load from embedded data
+            texture->loadFromMemory(
+                context,
+                texData.pixels.data(),
+                texData.pixels.size(),
+                texData.width,
+                texData.height,
+                texData.channels,
+                true
+            );
+        } else if (!texData.uri.empty()) {
+            // Load from external file
+            texture->loadFromFile(context, texData.uri);
+        }
+
+        texture->setSampler(renderer.getDescriptorManager().getSampler(SamplerType::Default));
+        Texture* texturePtr = materialManager->addTexture(eastl::move(texture));
+        textures[i] = texturePtr;
+    }
+
+    // Step 2: Create materials
+    Material* pbrMaterial = renderer.getPBRBindlessMaterial();
+    if (!pbrMaterial) {
+        violet::Log::error("Scene", "PBR bindless material not initialized");
+        return scene;
+    }
+
+    eastl::vector<uint32_t> materialIds(asset->materials.size());
+    for (size_t i = 0; i < asset->materials.size(); i++) {
+        const auto& matData = asset->materials[i];
+
+        // Create material instance
+        MaterialInstanceDesc instanceDesc{
+            .material = pbrMaterial,
+            .type = MaterialType::PBR,
+            .name = matData.name
+        };
+        uint32_t instanceId = materialManager->createMaterialInstance(instanceDesc);
+        PBRMaterialInstance* instance = static_cast<PBRMaterialInstance*>(
+            materialManager->getMaterialInstance(instanceId)
+        );
+
+        // Set material data
+        PBRMaterialData& data = instance->getData();
+        data.baseColorFactor = matData.baseColorFactor;
+        data.metallicFactor = matData.metallicFactor;
+        data.roughnessFactor = matData.roughnessFactor;
+        data.normalScale = matData.normalScale;
+        data.occlusionStrength = matData.occlusionStrength;
+        data.emissiveFactor = matData.emissiveFactor;
+        data.alphaCutoff = matData.alphaCutoff;
+
+        // Set alpha mode
+        if (matData.alphaMode == "OPAQUE") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Opaque);
+        } else if (matData.alphaMode == "MASK") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Mask);
+        } else if (matData.alphaMode == "BLEND") {
+            pbrMaterial->setAlphaMode(Material::AlphaMode::Blend);
+        }
+        pbrMaterial->setDoubleSided(matData.doubleSided);
+
+        // Assign textures
+        auto getTexture = [&](int texIndex) -> Texture* {
+            if (texIndex >= 0 && texIndex < static_cast<int>(textures.size()) && textures[texIndex]) {
+                return textures[texIndex];
+            }
+            return defaultTexture;
+        };
+
+        instance->setBaseColorTexture(getTexture(matData.baseColorTexIndex));
+        instance->setMetallicRoughnessTexture(matData.metallicRoughnessTexIndex >= 0
+            ? getTexture(matData.metallicRoughnessTexIndex)
+            : materialManager->getDefaultTexture(DefaultTextureType::MetallicRoughness));
+        instance->setNormalTexture(matData.normalTexIndex >= 0
+            ? getTexture(matData.normalTexIndex)
+            : materialManager->getDefaultTexture(DefaultTextureType::Normal));
+        instance->setOcclusionTexture(getTexture(matData.occlusionTexIndex));
+        instance->setEmissiveTexture(getTexture(matData.emissiveTexIndex));
+
+        instance->updateMaterialData();
+
+        // Generate unique material ID
+        static uint32_t fileIdCounter = 0;
+        static eastl::hash_map<eastl::string, uint32_t> fileIdMap;
+
+        uint32_t fileId = 0;
+        auto it = fileIdMap.find(filePath);
+        if (it == fileIdMap.end()) {
+            fileId = ++fileIdCounter;
+            fileIdMap[filePath] = fileId;
+        } else {
+            fileId = it->second;
+        }
+
+        uint32_t materialId = (fileId << 16) | static_cast<uint32_t>(i);
+        materialManager->registerGlobalMaterial(materialId, instanceId);
+        materialIds[i] = materialId;
+    }
+
+    // Step 3: Create scene nodes with optional parent grouping
+    size_t lastSlash = filePath.find_last_of("/\\");
+    size_t lastDot = filePath.find_last_of(".");
+    eastl::string modelName = filePath.substr(
+        lastSlash != eastl::string::npos ? lastSlash + 1 : 0,
+        lastDot != eastl::string::npos ? lastDot - (lastSlash != eastl::string::npos ? lastSlash + 1 : 0) : eastl::string::npos
+    );
+
+    uint32_t parentNodeId = 0;
+    if (asset->rootNodes.size() > 1 || !modelName.empty()) {
+        Node parentNode;
+        parentNode.name = modelName.empty() ? "Imported Model" : modelName;
+        parentNode.parentId = 0;
+
+        // Create entity with transform for parent node (scale = 1.0)
+        auto parentEntity = world.create();
+        TransformComponent parentTransform;
+        parentTransform.local.position = glm::vec3(0.0f);
+        parentTransform.local.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        parentTransform.local.scale = glm::vec3(1.0f);
+        parentTransform.world = parentTransform.local;
+        parentTransform.dirty = false;
+        world.emplace<TransformComponent>(parentEntity, parentTransform);
+
+        parentNode.entity = parentEntity;
+        parentNodeId = scene->addNode(parentNode);
+        violet::Log::info("Scene", "Created parent node '{}' for imported model", parentNode.name.c_str());
+    }
+
+    // Step 4: Create nodes and meshes
+    for (uint32_t rootNodeIdx : asset->rootNodes) {
+        createNodesFromAsset(scene.get(), asset, resourceMgr, renderer, world, rootNodeIdx, parentNodeId, materialIds);
+    }
+
+    violet::Log::info("Scene", "Scene created successfully: {} nodes", scene->getNodeCount());
+
+    // Step 5: Build BVH
+    renderer.collectRenderables(world);
+    renderer.buildSceneBVH(world);
+
+    return scene;
+}
+
+// Helper for creating nodes from asset data
+void Scene::createNodesFromAsset(
+    Scene* scene,
+    const GLTFAsset* asset,
+    ResourceManager& resourceMgr,
+    ForwardRenderer& renderer,
+    entt::registry& world,
+    uint32_t nodeIndex,
+    uint32_t parentId,
+    const eastl::vector<uint32_t>& materialIds
+) {
+    if (nodeIndex >= asset->nodes.size()) {
+        return;
+    }
+
+    const auto& nodeData = asset->nodes[nodeIndex];
+
+    // Create node
+    Node node;
+    node.name = nodeData.name;
+    node.parentId = parentId;
+    uint32_t nodeId = scene->addNode(node);
+    Node* sceneNode = scene->getNode(nodeId);
+
+    // Create ECS entity
+    entt::entity entity = world.create();
+    sceneNode->entity = entity;
+
+    // Add transform component
+    TransformComponent transformComp;
+    transformComp.local = nodeData.transform;
+    world.emplace<TransformComponent>(entity, transformComp);
+
+    // Create mesh if node has one
+    if (nodeData.meshIndex >= 0 && nodeData.meshIndex < static_cast<int>(asset->meshes.size())) {
+        const auto& meshData = asset->meshes[nodeData.meshIndex];
+
+        if (!meshData.vertices.empty()) {
+            VulkanContext* context = renderer.getContext();
+
+            // Create GPU mesh
+            auto meshPtr = eastl::make_unique<Mesh>();
+            meshPtr->create(context, meshData.vertices, meshData.indices, meshData.submeshes);
+            world.emplace<MeshComponent>(entity, eastl::move(meshPtr));
+
+            // Create material component
+            MaterialComponent matComp;
+            for (const auto& subMesh : meshData.submeshes) {
+                uint32_t gltfMatIndex = subMesh.materialIndex;
+                if (gltfMatIndex < materialIds.size()) {
+                    matComp.materialIndexToId[gltfMatIndex] = materialIds[gltfMatIndex];
+                }
+            }
+            if (!matComp.materialIndexToId.empty()) {
+                world.emplace<MaterialComponent>(entity, eastl::move(matComp));
+            }
+        }
+    }
+
+    // Recursively create child nodes
+    for (uint32_t childIdx : nodeData.children) {
+        createNodesFromAsset(scene, asset, resourceMgr, renderer, world, childIdx, nodeId, materialIds);
+    }
 }
 
 }

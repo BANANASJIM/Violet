@@ -24,6 +24,9 @@ public:
     // Common public methods
     void setViewport(vk::CommandBuffer commandBuffer, const vk::Extent2D& extent);
 
+    // Context access
+    VulkanContext* getContext() const { return context; }
+
 protected:
     // Common renderer state
     VulkanContext* context = nullptr;

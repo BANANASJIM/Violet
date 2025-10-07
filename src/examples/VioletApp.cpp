@@ -12,8 +12,7 @@
 #include "examples/TestData.hpp"
 #include "examples/TestTexture.hpp"
 #include "resource/Mesh.hpp"
-#include "scene/SceneLoader.hpp"
-#include "asset/AssetLoader.hpp"
+#include "scene/Scene.hpp"
 
 namespace violet {
 
@@ -77,19 +76,20 @@ void VioletApp::createResources() {
     eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/MetalRoughSpheres/glTF/MetalRoughSpheres.gltf");
     violet::Log::info("App", "Loading default scene asynchronously: {}", scenePath.c_str());
 
-    AssetLoader::loadGLTFAsync(scenePath, &resourceManager,
-        [this, scenePath](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+    Scene::loadFromGLTFAsync(
+        scenePath,
+        resourceManager,
+        renderer,
+        world.getRegistry(),
+        resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+        [this](eastl::unique_ptr<Scene> scene, eastl::string error) {
             if (!error.empty()) {
                 violet::Log::error("App", "Failed to load scene: {}", error.c_str());
                 return;
             }
 
             try {
-                currentScene = SceneLoader::createSceneFromAsset(
-                    getContext(), asset.get(), scenePath,
-                    &world.getRegistry(), &renderer,
-                    resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
-                );
+                currentScene = eastl::move(scene);
 
                 if (currentScene) {
                     currentScene->updateWorldTransforms(world.getRegistry());
@@ -194,36 +194,30 @@ void VioletApp::loadAsset(const eastl::string& path) {
 
         if (ext == ".gltf") {
             // Use async loading
-            AssetLoader::loadGLTFAsync(path, &resourceManager, [this, path](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
-                if (!error.empty()) {
-                    violet::Log::error("App", "Failed to load glTF {}: {}", path.c_str(), error.c_str());
-                    return;
-                }
-
-                if (!asset) {
-                    violet::Log::error("App", "Failed to load glTF {}: null asset", path.c_str());
-                    return;
-                }
-
-                try {
-                    if (currentScene) {
-                        currentScene->clear();
+            Scene::loadFromGLTFAsync(
+                path,
+                resourceManager,
+                renderer,
+                world.getRegistry(),
+                resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+                [this, path](eastl::unique_ptr<Scene> scene, eastl::string error) {
+                    if (!error.empty()) {
+                        violet::Log::error("App", "Failed to load glTF {}: {}", path.c_str(), error.c_str());
+                        return;
                     }
 
-                    // Clear old renderables before loading new scene
-                    renderer.clearRenderables();
+                    try {
+                        if (currentScene) {
+                            currentScene->clear();
+                        }
 
-                    // Create scene from asset (GPU resource creation on main thread)
-                    currentScene = SceneLoader::createSceneFromAsset(
-                        getContext(),
-                        asset.get(),
-                        path,
-                        &world.getRegistry(),
-                        &renderer,
-                        resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
-                    );
+                        // Clear old renderables before loading new scene
+                        renderer.clearRenderables();
 
-                    currentScene->updateWorldTransforms(world.getRegistry());
+                        // Use loaded scene
+                        currentScene = eastl::move(scene);
+
+                        currentScene->updateWorldTransforms(world.getRegistry());
 
                     // Update world bounds for all MeshComponents
                     auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
@@ -271,21 +265,19 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
 
         if (ext == ".gltf" || ext == ".glb") {
             // Load asset asynchronously
-            AssetLoader::loadGLTFAsync(path, &resourceManager,
-                [this, path, position](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+            Scene::loadFromGLTFAsync(
+                path,
+                resourceManager,
+                renderer,
+                world.getRegistry(),
+                resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+                [this, path, position](eastl::unique_ptr<Scene> tempScene, eastl::string error) {
                     if (!error.empty()) {
                         violet::Log::error("App", "Failed to load asset {}: {}", path.c_str(), error.c_str());
                         return;
                     }
 
                     try {
-                        // Create scene from loaded asset
-                        auto tempScene = SceneLoader::createSceneFromAsset(
-                            getContext(), asset.get(), path,
-                            &world.getRegistry(), &renderer,
-                            resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
-                        );
-
                         if (tempScene) {
                     // Update world transforms for the loaded entities
                     tempScene->updateWorldTransforms(world.getRegistry());
