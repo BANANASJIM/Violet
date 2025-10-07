@@ -10,6 +10,7 @@
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
+#include "core/Exception.hpp"
 #include "core/Timer.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
@@ -64,19 +65,13 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     RenderPass* firstRenderPass = getRenderPass(0);
     if (firstRenderPass) {
         debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, swapchainFormat, maxFramesInFlight);
-        // TODO: Redesign EnvironmentMap with bindless architecture
-        // environmentMap.init(context, firstRenderPass, materialManager, &descriptorManager);
-    }
 
-    // TODO: Re-enable after EnvironmentMap redesign
-    // // Load HDR environment map
-    // environmentMap.loadHDR("assets/textures/skybox.hdr");
-    //
-    // // Set the environment texture in the global uniforms
-    // if (environmentMap.getEnvironmentTexture()) {
-    //     globalUniforms.setSkyboxTexture(environmentMap.getEnvironmentTexture());
-    //     environmentMap.setEnabled(true);
-    // }
+        // Initialize EnvironmentMap with bindless architecture
+        auto* matMgr = getMaterialManager();
+        if (matMgr) {
+            environmentMap.init(context, matMgr, &descriptorManager, &resourceManager->getTextureManager());
+        }
+    }
 
     // Initialize bindless through DescriptorManager
     descriptorManager.initBindless(1024);
@@ -94,6 +89,12 @@ void ForwardRenderer::createMaterials() {
         pbrBindlessMaterial = matMgr->createPBRBindlessMaterial(getRenderPass(0));
     }
 
+    // Create skybox material using MaterialManager
+    RenderPass* mainPass = getRenderPass(0);
+    if (mainPass && matMgr) {
+        skyboxMaterial = matMgr->createSkyboxMaterial(mainPass);
+    }
+
     // Create post-process material using MaterialManager
     RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
     if (postProcessPass && matMgr) {
@@ -108,6 +109,17 @@ void ForwardRenderer::createMaterials() {
         // Update descriptor set with offscreen textures
         updatePostProcessDescriptors();
     }
+
+    // Load default HDR environment map
+    try {
+        eastl::string hdrPath = violet::FileSystem::resolveRelativePath("assets/textures/skybox.hdr");
+        violet::Log::info("Renderer", "Loading default HDR environment map: {}", hdrPath.c_str());
+        environmentMap.loadHDR(hdrPath);
+        environmentMap.generateIBLMaps();
+        violet::Log::info("Renderer", "Default HDR environment map loaded successfully");
+    } catch (const violet::Exception& e) {
+        violet::Log::warn("Renderer", "Failed to load default HDR environment map: {}", e.what_c_str());
+    }
 }
 
 void ForwardRenderer::cleanup() {
@@ -121,8 +133,7 @@ void ForwardRenderer::cleanup() {
 
     // Step 2: Cleanup high-level rendering components
     // These may still reference materials/textures, so clean them before destroying resources
-    // TODO: Re-enable after EnvironmentMap redesign
-    // environmentMap.cleanup();
+    environmentMap.cleanup();
     debugRenderer.cleanup();
 
     // Step 3: Cleanup render passes
@@ -141,6 +152,7 @@ void ForwardRenderer::cleanup() {
     // Step 6: Clear material references (MaterialManager owns and cleans them)
     postProcessMaterial = nullptr;
     pbrBindlessMaterial = nullptr;
+    skyboxMaterial = nullptr;
 
     // Step 7: Materials and textures managed by MaterialManager are cleaned in ResourceManager
     // (No cleanup needed here)
@@ -255,13 +267,18 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
         if (currentWorld) {
             this->setViewport(cmd, currentExtent);
 
-            // TODO: Re-enable skybox after redesigning EnvironmentMap with bindless architecture
-            // // First render skybox (depth testing disabled, renders to background)
-            // Material* envMaterial = environmentMap.getMaterial();
-            // if (envMaterial) {
-            //     environmentMap.renderSkybox(cmd, frame, envMaterial->getPipelineLayout(),
-            //                               globalUniforms.getDescriptorSet()->getDescriptorSet(frame));
-            // }
+            // Render skybox first (if enabled and material exists)
+            if (environmentMap.isEnabled() && skyboxMaterial && skyboxMaterial->getPipeline()) {
+                skyboxMaterial->getPipeline()->bind(cmd);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                    skyboxMaterial->getPipelineLayout(), 0,
+                    globalUniforms.getDescriptorSet()->getDescriptorSet(frame), {});
+                // Bindless descriptor set for cubemap array
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                    skyboxMaterial->getPipelineLayout(), 1,
+                    descriptorManager.getBindlessSet(), {});
+                cmd.draw(3, 1, 0, 0); // Full-screen triangle
+            }
 
             // Then render scene geometry (depth testing enabled)
             renderScene(cmd, frame, *currentWorld);
@@ -337,9 +354,16 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 }
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
-    // TODO: Re-enable after EnvironmentMap redesign
-    // globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
-    globalUniforms.update(world, frameIndex, 1.0f, 0.0f, false);  // Default values for now
+    // Update global uniforms with environment map parameters
+    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled());
+
+    // Update IBL bindless indices in global uniforms
+    globalUniforms.setIBLIndices(
+        environmentMap.getEnvironmentMapIndex(),
+        environmentMap.getIrradianceMapIndex(),
+        environmentMap.getPrefilteredMapIndex(),
+        environmentMap.getBRDFLUTIndex()
+    );
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {
@@ -580,17 +604,6 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
         renderStats.drawCalls++;
     }
 
-    // Log render statistics once per second
-    static Timer statsTimer;
-    static double lastStatsTime = 0.0;
-    double currentTime = statsTimer.getTime();
-    if (currentTime - lastStatsTime >= 1.0) {
-        violet::Log::info("Renderer", "Render stats: Total={}, Visible={}, DrawCalls={}, Skipped={}",
-            renderStats.totalRenderables, renderStats.visibleRenderables,
-            renderStats.drawCalls, renderStats.skippedRenderables);
-        lastStatsTime = currentTime;
-    }
-
     // Debug rendering (after main scene rendering)
     if (debugRenderer.isEnabled()) {
         if (debugRenderer.showFrustum()) {
@@ -772,6 +785,12 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
     cachedUBO.skyboxRotation = skyboxRotation;
     cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
 
+    // Update IBL bindless indices
+    cachedUBO.environmentMapIndex = iblEnvironmentMapIndex;
+    cachedUBO.irradianceMapIndex = iblIrradianceMapIndex;
+    cachedUBO.prefilteredMapIndex = iblPrefilteredMapIndex;
+    cachedUBO.brdfLUTIndex = iblBRDFLUTIndex;
+
     uniformBuffers[frameIndex]->update(&cachedUBO, sizeof(cachedUBO));
     // REMOVED: descriptorSet->updateBuffer() - This was causing the UBO data to be lost!
     // The descriptor set is already bound to the buffer during initialization,
@@ -800,6 +819,24 @@ void GlobalUniforms::setSkyboxTexture(Texture* texture) {
     // Update all frames in flight with the same skybox texture
     for (uint32_t i = 0; i < uniformBuffers.size(); ++i) {
         descriptorSet->updateTexture(i, texture, 1); // Binding 1 for skybox texture
+    }
+}
+
+void GlobalUniforms::setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_t prefiltered, uint32_t brdfLUT) {
+    // Only log if values actually changed
+    bool changed = (iblEnvironmentMapIndex != envMap ||
+                    iblIrradianceMapIndex != irradiance ||
+                    iblPrefilteredMapIndex != prefiltered ||
+                    iblBRDFLUTIndex != brdfLUT);
+
+    iblEnvironmentMapIndex = envMap;
+    iblIrradianceMapIndex = irradiance;
+    iblPrefilteredMapIndex = prefiltered;
+    iblBRDFLUTIndex = brdfLUT;
+
+    if (changed) {
+        violet::Log::info("Renderer", "IBL indices set - Env: {}, Irradiance: {}, Prefiltered: {}, BRDF: {}",
+                         envMap, irradiance, prefiltered, brdfLUT);
     }
 }
 
@@ -858,11 +895,40 @@ void ForwardRenderer::registerDescriptorLayouts() {
         .frequency = UpdateFrequency::Static
     });
 
+    // IBL compute shader layouts
+    descriptorManager.registerLayout({
+        .name = "IrradianceConvolution",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
+            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output irradiance cubemap
+        },
+        .frequency = UpdateFrequency::Static
+    });
+
+    descriptorManager.registerLayout({
+        .name = "PrefilterEnvironment",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
+            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output prefiltered cubemap (mip level)
+        },
+        .frequency = UpdateFrequency::Static
+    });
+
+    descriptorManager.registerLayout({
+        .name = "BRDFLUT",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output BRDF LUT (2D texture)
+        },
+        .frequency = UpdateFrequency::Static
+    });
+
     // Bindless texture array layout - static, rarely updated
+    // Binding 0: 2D textures, Binding 1: Cubemaps
     descriptorManager.registerLayout({
         .name = "Bindless",
         .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment, .count = 1024}
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment, .count = 1024},  // 2D textures
+            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eVertex, .count = 64}    // Cubemaps
         },
         .frequency = UpdateFrequency::Static,
         .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,

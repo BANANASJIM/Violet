@@ -342,9 +342,14 @@ void Texture::loadCubemap(VulkanContext* ctx, const eastl::array<eastl::string, 
 }
 
 void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format fmt, vk::ImageUsageFlags usage) {
+    createEmptyCubemap(ctx, size, fmt, usage, 1);
+}
+
+void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format fmt, vk::ImageUsageFlags usage, uint32_t mips) {
     context = ctx;
     format = fmt;
     isCubemapTexture = true;
+    mipLevels = mips;
 
     // Create empty cubemap image with specified usage
     ImageInfo imageInfo;
@@ -352,6 +357,7 @@ void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format f
     imageInfo.height = size;
     imageInfo.format = format;
     imageInfo.usage = usage;  // Caller specifies usage (e.g., storage + sampled)
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 6;
     imageInfo.flags = vk::ImageCreateFlagBits::eCubeCompatible;
     imageInfo.debugName = "Empty Cubemap";
@@ -362,7 +368,31 @@ void Texture::createEmptyCubemap(VulkanContext* ctx, uint32_t size, vk::Format f
     createCubemapImageView(context);
     // Sampler will be set externally via setSampler()
 
-    violet::Log::info("Renderer", "Empty cubemap created: {}x{}", size, size);
+    violet::Log::info("Renderer", "Empty cubemap created: {}x{} with {} mip levels", size, size, mipLevels);
+}
+
+void Texture::createEmpty2D(VulkanContext* ctx, uint32_t width, uint32_t height, vk::Format fmt, vk::ImageUsageFlags usage) {
+    context = ctx;
+    format = fmt;
+    isCubemapTexture = false;
+    mipLevels = 1;
+
+    // Create empty 2D image with specified usage
+    ImageInfo imageInfo;
+    imageInfo.width = width;
+    imageInfo.height = height;
+    imageInfo.format = format;
+    imageInfo.usage = usage;
+    imageInfo.mipLevels = 1;
+    imageInfo.debugName = "Empty 2D Texture";
+
+    imageResource = ResourceFactory::createImage(context, imageInfo);
+    allocation = imageResource.allocation;
+
+    createImageView(context, format);
+    // Sampler will be set externally via setSampler()
+
+    violet::Log::info("Renderer", "Empty 2D texture created: {}x{}", width, height);
 }
 
 void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
@@ -802,6 +832,20 @@ void Texture::createCubemapImageView(VulkanContext* ctx) {
     viewInfo.subresourceRange.layerCount = 6; // 6 faces for cubemap
 
     imageView = vk::raii::ImageView(ctx->getDeviceRAII(), viewInfo);
+}
+
+vk::raii::ImageView Texture::createMipImageView(VulkanContext* ctx, uint32_t mipLevel) const {
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.image = imageResource.image;
+    viewInfo.viewType = isCubemapTexture ? vk::ImageViewType::eCube : vk::ImageViewType::e2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    viewInfo.subresourceRange.baseMipLevel = mipLevel;
+    viewInfo.subresourceRange.levelCount = 1;  // Single mip level
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = isCubemapTexture ? 6 : 1;
+
+    return vk::raii::ImageView(ctx->getDeviceRAII(), viewInfo);
 }
 
 

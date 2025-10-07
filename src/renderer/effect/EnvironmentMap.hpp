@@ -1,20 +1,18 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
-#include <EASTL/unique_ptr.h>
 #include <EASTL/array.h>
 #include <EASTL/string.h>
+#include "resource/TextureManager.hpp"
 
 namespace violet {
 
 class VulkanContext;
-class RenderPass;
-class Material;
-class Texture;
 class MaterialManager;
-class ComputePipeline;
-class DescriptorSet;
 class DescriptorManager;
+class TextureManager;
+class Texture;
+class DescriptorSet;
 
 class EnvironmentMap {
 public:
@@ -34,65 +32,69 @@ public:
     EnvironmentMap(EnvironmentMap&& other) noexcept;
     EnvironmentMap& operator=(EnvironmentMap&& other) noexcept;
 
-    // Initialization
-    void init(VulkanContext* context, RenderPass* renderPass, MaterialManager* matMgr, DescriptorManager* descMgr);
+    // Initialization (all resources managed by injected managers)
+    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr);
     void cleanup();
 
     // Loading methods
     void loadHDR(const eastl::string& hdrPath);
     void loadCubemap(const eastl::array<eastl::string, 6>& facePaths);
-    void setTexture(eastl::unique_ptr<Texture> texture);
 
-    // IBL generation (future)
+    // IBL generation
     void generateIBLMaps();
 
-    // Rendering
-    void renderSkybox(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
-                     vk::PipelineLayout pipelineLayout, vk::DescriptorSet globalDescriptorSet);
+    // Bindless texture indices for GlobalUBO
+    uint32_t getEnvironmentMapIndex() const { return environmentMapIndex; }
+    uint32_t getIrradianceMapIndex() const { return irradianceMapIndex; }
+    uint32_t getPrefilteredMapIndex() const { return prefilteredMapIndex; }
+    uint32_t getBRDFLUTIndex() const { return brdfLUTIndex; }
 
-    // Parameter management (compatible with old Skybox interface)
+    // Parameter management
     void setExposure(float exposure) { params.exposure = exposure; }
     void setRotation(float rotation) { params.rotation = rotation; }
     void setIntensity(float intensity) { params.intensity = intensity; }
-    void setEnabled(bool enabled) { params.enabled = enabled && (environmentTexture != nullptr); }
+    void setEnabled(bool enabled) { params.enabled = enabled && environmentTextureHandle.isValid(); }
 
     float getExposure() const { return params.exposure; }
     float getRotation() const { return params.rotation; }
     float getIntensity() const { return params.intensity; }
     bool isEnabled() const { return params.enabled; }
 
-    // Texture access
-    Texture* getEnvironmentTexture() const { return environmentTexture.get(); }
-    Texture* getIrradianceMap() const { return irradianceMap.get(); }
-    Texture* getPrefilteredMap() const { return prefilteredMap.get(); }
-    Texture* getBRDFLUT() const { return brdfLUT.get(); }
-
-    // Material access
-    Material* getMaterial() const { return skyboxMaterial; }
+    // Texture access (for inspection/debugging) - returns raw pointers from TextureManager
+    Texture* getEnvironmentTexture() const;
+    Texture* getIrradianceMap() const;
+    Texture* getPrefilteredMap() const;
+    Texture* getBRDFLUT() const;
 
 private:
-    // Core resources
+    // Core resources (injected dependencies)
     VulkanContext* context = nullptr;
-    RenderPass* renderPass = nullptr;
     MaterialManager* materialManager = nullptr;
     DescriptorManager* descriptorManager = nullptr;
+    TextureManager* textureManager = nullptr;
 
-    // Textures
-    eastl::unique_ptr<Texture> environmentTexture;  // Main environment map (cubemap or 2D)
-    eastl::unique_ptr<Texture> equirectTexture;     // Temporary equirectangular texture (for compute shader input)
-    eastl::unique_ptr<Texture> irradianceMap;      // Diffuse irradiance for IBL (future)
-    eastl::unique_ptr<Texture> prefilteredMap;     // Specular prefiltered for IBL (future)
-    eastl::unique_ptr<Texture> brdfLUT;            // BRDF lookup table (future)
+    // Texture handles (references to TextureManager-owned resources)
+    TextureHandle environmentTextureHandle;
+    TextureHandle irradianceMapHandle;
+    TextureHandle prefilteredMapHandle;
+    TextureHandle brdfLUTHandle;
 
-    // Rendering
-    Material* skyboxMaterial = nullptr;
+    // Bindless indices (0 = invalid/not loaded)
+    uint32_t environmentMapIndex = 0;
+    uint32_t irradianceMapIndex = 0;
+    uint32_t prefilteredMapIndex = 0;
+    uint32_t brdfLUTIndex = 0;
 
-    // Compute pipeline for equirectangular to cubemap conversion
-    eastl::unique_ptr<ComputePipeline> equirectToCubemapPipeline;
-    eastl::unique_ptr<DescriptorSet> computeDescriptorSet;
+    // Helper methods (use DescriptorManager for compute pipelines)
+    void generateCubemapFromEquirect(const eastl::string& hdrPath, uint32_t cubemapSize);
+    void generateIrradianceMap();
+    void generatePrefilteredMap();
+    void generateBRDFLUT();
 
-    // Helper method for GPU-based cubemap generation
-    void generateCubemapFromEquirect(Texture* equirectTexture, Texture* cubemapTexture, uint32_t cubemapSize);
+    // Temporary compute resources (kept alive to prevent validation errors)
+    eastl::vector<eastl::unique_ptr<Texture>> tempComputeTextures;
+    eastl::vector<eastl::unique_ptr<DescriptorSet>> tempDescriptorSets;
+    eastl::vector<vk::raii::ImageView> tempImageViews;
 
     // Parameters
     struct Parameters {

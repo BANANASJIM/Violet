@@ -15,86 +15,22 @@
 #include "resource/Vertex.hpp"
 #include "renderer/core/VulkanContext.hpp"
 #include "asset/GLTFAsset.hpp"
+#include "asset/AssetLoader.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
 namespace violet {
 
+// DEPRECATED: This synchronous method blocks the main thread
+// Prefer using AssetLoader::loadGLTFAsync() for non-blocking asset loading
 eastl::unique_ptr<Scene>
 SceneLoader::loadFromGLTF(VulkanContext* context, const eastl::string& filePath, entt::registry* world, ForwardRenderer* renderer, Texture* defaultTexture) {
-    auto scene = eastl::make_unique<Scene>();
+    // Use AssetLoader to parse glTF (handles UV transformations)
+    // Note: This is synchronous and will block - use loadGLTFAsync() for production
+    auto asset = AssetLoader::loadGLTF(filePath);
 
-    tinygltf::Model    gltfModel;
-    tinygltf::TinyGLTF loader;
-    std::string        err;
-    std::string        warn;
-
-    bool ret = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filePath.c_str());
-
-    if (!warn.empty()) {
-        violet::Log::warn("Scene", "glTF warning: {}", warn);
-    }
-
-    if (!err.empty()) {
-        violet::Log::error("Scene", "glTF error: {}", err);
-    }
-
-    if (!ret) {
-        throw RuntimeError("Failed to parse glTF");
-    }
-
-    violet::Log::info("Scene", "Loading glTF scene: {}", filePath.c_str());
-    violet::Log::info("Scene",
-        "Nodes: {}, Meshes: {}, Materials: {}, Textures: {}, Images: {}",
-        gltfModel.nodes.size(),
-        gltfModel.meshes.size(),
-        gltfModel.materials.size(),
-        gltfModel.textures.size(),
-        gltfModel.images.size()
-    );
-
-    // Create loading context
-    GLTFLoadContext loadCtx;
-    loadCtx.vulkanContext = context;
-    loadCtx.renderer = renderer;
-    loadCtx.defaultTexture = defaultTexture;
-
-    loadTextures(loadCtx, &gltfModel);
-    loadMaterials(loadCtx, &gltfModel, filePath);
-
-    const tinygltf::Scene& gltfScene = gltfModel.scenes[gltfModel.defaultScene > -1 ? gltfModel.defaultScene : 0];
-
-    size_t lastSlash = filePath.find_last_of("/\\");
-    size_t lastDot = filePath.find_last_of(".");
-    eastl::string modelName = filePath.substr(
-        lastSlash != eastl::string::npos ? lastSlash + 1 : 0,
-        lastDot != eastl::string::npos ? lastDot - (lastSlash != eastl::string::npos ? lastSlash + 1 : 0) : eastl::string::npos
-    );
-
-    // Create a parent node for the entire imported model
-    uint32_t parentNodeId = 0;
-    if (gltfScene.nodes.size() > 1 || !modelName.empty()) {
-        // Create parent node only if there are multiple root nodes or we want to group the model
-        Node parentNode;
-        parentNode.name = modelName.empty() ? "Imported Model" : modelName;
-        parentNode.parentId = 0;  // Root level node
-        parentNode.entity = entt::null;  // Parent node has no entity/mesh
-        parentNodeId = scene->addNode(parentNode);
-
-        violet::Log::info("Scene", "Created parent node '{}' for imported model", parentNode.name.c_str());
-    }
-
-    for (size_t i = 0; i < gltfScene.nodes.size(); i++) {
-        loadNode(loadCtx, scene.get(), &gltfModel.nodes[gltfScene.nodes[i]], &gltfModel, parentNodeId, world);
-    }
-
-    violet::Log::info("Scene", "Scene loaded successfully: {} nodes", scene->getNodeCount());
-
-    // Build BVH for the loaded scene
-    renderer->collectRenderables(*world);
-    renderer->buildSceneBVH(*world);
-
-    return scene;
+    // Create scene from loaded asset
+    return createSceneFromAsset(context, asset.get(), filePath, world, renderer, defaultTexture);
 }
 
 eastl::unique_ptr<Scene> SceneLoader::createSceneFromAsset(
@@ -246,9 +182,20 @@ eastl::unique_ptr<Scene> SceneLoader::createSceneFromAsset(
         Node parentNode;
         parentNode.name = modelName.empty() ? "Imported Model" : modelName;
         parentNode.parentId = 0;
-        parentNode.entity = entt::null;
+
+        // Create entity with transform for parent node (scale = 1.0)
+        auto parentEntity = world->create();
+        TransformComponent parentTransform;
+        parentTransform.local.position = glm::vec3(0.0f);
+        parentTransform.local.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        parentTransform.local.scale = glm::vec3(1.0f);  // Ensure parent scale is 1.0
+        parentTransform.world = parentTransform.local;
+        parentTransform.dirty = false;
+        world->emplace<TransformComponent>(parentEntity, parentTransform);
+
+        parentNode.entity = parentEntity;
         parentNodeId = scene->addNode(parentNode);
-        violet::Log::info("Scene", "Created parent node '{}' for imported model", parentNode.name.c_str());
+        violet::Log::info("Scene", "Created parent node '{}' for imported model with scale (1.0, 1.0, 1.0)", parentNode.name.c_str());
     }
 
     // Create nodes and meshes
@@ -349,7 +296,13 @@ void SceneLoader::loadNode(
                     reinterpret_cast<const float*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
 
                 for (size_t v = 0; v < accessor.count; v++) {
-                    vertices[vertexStart + v].texCoord = glm::vec2(texCoords[v * 2], texCoords[v * 2 + 1]);
+                    // Swap U and V to fix 90° rotation, then flip Y for Vulkan
+                    float originalU = texCoords[v * 2];
+                    float originalV = texCoords[v * 2 + 1];
+                    vertices[vertexStart + v].texCoord = glm::vec2(
+                        originalV,           // U = original V
+                        1.0f - originalU     // V = 1 - original U
+                    );
                 }
             }
 

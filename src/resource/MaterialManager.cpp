@@ -192,10 +192,13 @@ Material* MaterialManager::createSkyboxMaterial(RenderPass* renderPass) {
     skyboxConfig.cullMode = vk::CullModeFlagBits::eFront;  // Cull front faces for inside view
     skyboxConfig.useVertexInput = false;  // Skybox generates vertices procedurally
 
+    // Add bindless descriptor set (set 1) for cubemap array access
+    skyboxConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
+
     return createMaterialWithConfig(
         FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
         FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        "Global",  // Skybox uses global descriptor set for cubemap
+        "Global",  // Skybox uses global descriptor set (set 0)
         skyboxConfig,
         renderPass,
         "Skybox"

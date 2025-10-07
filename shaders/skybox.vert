@@ -18,6 +18,12 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     float skyboxRotation;
     int skyboxEnabled;
     float padding1;
+
+    // IBL bindless texture indices
+    uint environmentMapIndex;
+    uint irradianceMapIndex;
+    uint prefilteredMapIndex;
+    uint brdfLUTIndex;
 } global;
 
 layout(location = 0) out vec3 fragTexCoord;

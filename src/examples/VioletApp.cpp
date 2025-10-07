@@ -73,30 +73,45 @@ void VioletApp::createResources() {
 
     initializeScene();
 
-    eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/Sponza/glTF/Sponza.gltf");
-    try {
-        violet::Log::info("App", "Loading default scene: {}", scenePath.c_str());
-        currentScene = SceneLoader::loadFromGLTF(getContext(), scenePath, &world.getRegistry(), &renderer, resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White));
+    // Load default scene asynchronously (non-blocking)
+    eastl::string scenePath = violet::FileSystem::resolveRelativePath("assets/Models/MetalRoughSpheres/glTF/MetalRoughSpheres.gltf");
+    violet::Log::info("App", "Loading default scene asynchronously: {}", scenePath.c_str());
 
-        if (currentScene) {
-            currentScene->updateWorldTransforms(world.getRegistry());
-            violet::Log::info("App", "Scene loaded with {} nodes", currentScene->getNodeCount());
-
-            // Update world bounds for all MeshComponents after world transforms are computed
-            auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
-            for (auto&& [entity, transformComp, meshComp] : view.each()) {
-                meshComp.updateWorldBounds(transformComp.world.getMatrix());
+    AssetLoader::loadGLTFAsync(scenePath, &resourceManager,
+        [this, scenePath](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+            if (!error.empty()) {
+                violet::Log::error("App", "Failed to load scene: {}", error.c_str());
+                return;
             }
 
-            // Give SceneDebugLayer access to the scene for proper hierarchy handling
-            sceneDebug->setScene(currentScene.get());
+            try {
+                currentScene = SceneLoader::createSceneFromAsset(
+                    getContext(), asset.get(), scenePath,
+                    &world.getRegistry(), &renderer,
+                    resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
+                );
 
-            // Camera position and orientation are already set correctly in initializeScene()
-            // Don't override them here
+                if (currentScene) {
+                    currentScene->updateWorldTransforms(world.getRegistry());
+                    violet::Log::info("App", "Scene loaded with {} nodes", currentScene->getNodeCount());
+
+                    // Update world bounds for all MeshComponents after world transforms are computed
+                    auto view = world.getRegistry().view<TransformComponent, MeshComponent>();
+                    for (auto&& [entity, transformComp, meshComp] : view.each()) {
+                        meshComp.updateWorldBounds(transformComp.world.getMatrix());
+                    }
+
+                    // Give SceneDebugLayer access to the scene for proper hierarchy handling
+                    sceneDebug->setScene(currentScene.get());
+
+                    // Camera position and orientation are already set correctly in initializeScene()
+                    // Don't override them here
+                }
+            } catch (const violet::Exception& e) {
+                violet::Log::error("App", "Failed to create scene from asset: {}", e.what_c_str());
+            }
         }
-    } catch (const violet::Exception& e) {
-        violet::Log::warn("App", "Failed to load scene: {}", e.what_c_str());
-    }
+    );
 }
 
 // createTestResources removed - using MaterialManager default textures instead
@@ -108,22 +123,20 @@ void VioletApp::initializeScene() {
     int width, height;
     glfwGetFramebufferSize(getWindow(), &width, &height);
     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-    // Increase far plane to cover Sponza's huge range (~3600 units)
-    auto  camera      = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 1.0f, 5000.0f);
+    auto  camera      = eastl::make_unique<PerspectiveCamera>(45.0f, aspectRatio, 0.1f, 5000.0f);
 
     auto& cameraComp    = world.addComponent<CameraComponent>(cameraEntity, eastl::move(camera));
     cameraComp.isActive = true;
 
     auto controller = eastl::make_unique<CameraController>(cameraComp.camera.get());
-    // Position camera at better distance for Sponza scene viewing
-    // Sponza extends from Y:-126 to Y:1347, so position at Y:200 for good overview
-    controller->setPosition(glm::vec3(0.0f, 200.0f, 400.0f));
-    controller->setMovementSpeed(50.0f);  // Faster movement for large scene
+    // Position camera for MetalRoughSpheres viewing (sphere grid scene)
+    controller->setPosition(glm::vec3(0.0f, 2.0f, 10.0f));
+    controller->setMovementSpeed(5.0f);  // Slower movement for small scene
     controller->setSensitivity(0.002f);
 
-    // Look towards scene center (approximately Y:100 based on AABB analysis)
-    glm::vec3 camPos = glm::vec3(0.0f, 200.0f, 800.0f);
-    glm::vec3 sceneCenter = glm::vec3(0.0f, 100.0f, 0.0f);
+    // Look towards scene center
+    glm::vec3 camPos = glm::vec3(0.0f, 2.0f, 10.0f);
+    glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
     glm::vec3 direction = glm::normalize(sceneCenter - camPos);
 
     float yaw = glm::degrees(atan2(direction.z, direction.x));
@@ -136,6 +149,23 @@ void VioletApp::initializeScene() {
     violet::Log::info("App", "Camera yaw: {:.1f}°, pitch: {:.1f}°", yaw, pitch);
 
     auto& controllerComp = world.addComponent<CameraControllerComponent>(cameraEntity, eastl::move(controller));
+
+    // Add default directional light for better material visualization
+    auto lightEntity = world.getRegistry().create();
+    TransformComponent lightTransform;
+    lightTransform.local.position = glm::vec3(0.0f, 100.0f, 0.0f);
+    lightTransform.world = lightTransform.local;
+    lightTransform.dirty = false;
+    world.getRegistry().emplace<TransformComponent>(lightEntity, lightTransform);
+
+    auto light = LightComponent::createDirectionalLight(
+        glm::vec3(-0.3f, -1.0f, -0.3f),  // Direction from upper-left
+        glm::vec3(1.0f, 0.95f, 0.8f),    // Warm white color
+        3.0f                              // Intensity
+    );
+    world.getRegistry().emplace<LightComponent>(lightEntity, light);
+
+    violet::Log::info("App", "Created default directional light");
 }
 
 void VioletApp::update(float deltaTime) {
@@ -240,11 +270,23 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
         eastl::string ext = path.substr(dotPos);
 
         if (ext == ".gltf" || ext == ".glb") {
-            try {
-                // Load the glTF file into a temporary scene to get the entities
-                auto tempScene = SceneLoader::loadFromGLTF(getContext(), path, &world.getRegistry(), &renderer, resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White));
+            // Load asset asynchronously
+            AssetLoader::loadGLTFAsync(path, &resourceManager,
+                [this, path, position](eastl::unique_ptr<GLTFAsset> asset, eastl::string error) {
+                    if (!error.empty()) {
+                        violet::Log::error("App", "Failed to load asset {}: {}", path.c_str(), error.c_str());
+                        return;
+                    }
 
-                if (tempScene) {
+                    try {
+                        // Create scene from loaded asset
+                        auto tempScene = SceneLoader::createSceneFromAsset(
+                            getContext(), asset.get(), path,
+                            &world.getRegistry(), &renderer,
+                            resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White)
+                        );
+
+                        if (tempScene) {
                     // Update world transforms for the loaded entities
                     tempScene->updateWorldTransforms(world.getRegistry());
 
@@ -319,18 +361,21 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                         sceneDebug->setScene(currentScene.get());
                     }
 
-                    violet::Log::info("App", "Asset placed successfully at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+                            violet::Log::info("App", "Asset placed successfully at position ({}, {}, {}): {}", position.x, position.y, position.z, path.c_str());
+                        }
+                    } catch (const violet::Exception& e) {
+                        violet::Log::error("App", "Failed to create scene from asset {}: {}", path.c_str(), e.what_c_str());
+                    }
                 }
-            } catch (const violet::Exception& e) {
-                violet::Log::error("App", "Failed to load asset {}: {}", path.c_str(), e.what_c_str());
-            }
+            );
         } else if (ext == ".hdr") {
             try {
                 // Load HDR file as environment map (skybox)
                 violet::Log::info("App", "Loading HDR environment map: {}", path.c_str());
-               // todo temp remove after refactor
-                // renderer.getEnvironmentMap().loadHDR(path);
-                violet::Log::info("App", "HDR environment map loaded successfully: {}", path.c_str());
+                renderer.getEnvironmentMap().loadHDR(path);
+                // Automatically generate IBL maps after loading
+                renderer.getEnvironmentMap().generateIBLMaps();
+                violet::Log::info("App", "HDR environment map loaded and IBL generated successfully: {}", path.c_str());
             } catch (const violet::Exception& e) {
                 violet::Log::error("App", "Failed to load HDR environment map {}: {}", path.c_str(), e.what_c_str());
             }

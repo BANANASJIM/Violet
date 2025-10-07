@@ -53,12 +53,20 @@ public:
     DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
     Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
     void setSkyboxTexture(Texture* texture);
+    void setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_t prefiltered, uint32_t brdfLUT);
 
 private:
 
     VulkanContext*                                  context = nullptr;
     eastl::unique_ptr<DescriptorSet>                descriptorSet;
     eastl::vector<eastl::unique_ptr<UniformBuffer>> uniformBuffers;
+
+    // IBL bindless indices (cached values)
+    uint32_t iblEnvironmentMapIndex = 0;
+    uint32_t iblIrradianceMapIndex = 0;
+    uint32_t iblPrefilteredMapIndex = 0;
+    uint32_t iblBRDFLUTIndex = 0;
+
     static constexpr uint32_t MAX_LIGHTS = 8;
     struct GlobalUBO {
         alignas(16) glm::mat4 view;
@@ -78,6 +86,12 @@ private:
         alignas(4) float skyboxRotation;
         alignas(4) int skyboxEnabled;
         alignas(4) float padding1;
+
+        // IBL bindless texture indices
+        alignas(4) uint32_t environmentMapIndex;
+        alignas(4) uint32_t irradianceMapIndex;
+        alignas(4) uint32_t prefilteredMapIndex;
+        alignas(4) uint32_t brdfLUTIndex;
     } cachedUBO;
 };
 
@@ -142,8 +156,7 @@ public:
     RenderPass* getRenderPass(size_t index);  // Helper to get RenderPass specifically
 
     // Skybox access
-    // TODO: Re-enable after EnvironmentMap redesign
-    // EnvironmentMap& getEnvironmentMap() { return environmentMap; }
+    EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
     // PostProcess access
@@ -185,14 +198,14 @@ private:
     // Material references from MaterialManager (not owned by renderer)
     Material* postProcessMaterial = nullptr;
     Material* pbrBindlessMaterial = nullptr;
+    Material* skyboxMaterial = nullptr;
 
     // Descriptor sets owned by renderer
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
-    // TODO: Redesign EnvironmentMap with bindless architecture
-    // EnvironmentMap environmentMap;
+    EnvironmentMap environmentMap;
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
     DescriptorManager descriptorManager;

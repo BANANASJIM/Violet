@@ -150,7 +150,8 @@ void TextureManager::createDefaultNormalTexture() {
 }
 
 void TextureManager::createDefaultMetallicRoughnessTexture() {
-    const uint8_t metallicRoughness[] = {255, 128, 0, 255};  // R=1.0 (roughness), G=0.5 (metallic)
+    // glTF 2.0 standard: R=unused, G=roughness, B=metallic
+    const uint8_t metallicRoughness[] = {0, 255, 255, 255};  // R=0 (unused), G=1.0 (roughness), B=1.0 (metallic)
     auto texture = eastl::make_unique<Texture>();
     texture->loadFromMemory(context, metallicRoughness, sizeof(metallicRoughness), 1, 1, 4, false);
     texture->setSampler(descriptorManager->getSampler(SamplerType::Default));

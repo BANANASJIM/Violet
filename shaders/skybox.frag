@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : enable
 
 layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 view;
@@ -18,9 +19,16 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     float skyboxRotation;
     int skyboxEnabled;
     float padding1;
+
+    // IBL bindless texture indices
+    uint environmentMapIndex;
+    uint irradianceMapIndex;
+    uint prefilteredMapIndex;
+    uint brdfLUTIndex;
 } global;
 
-layout(set = 0, binding = 1) uniform samplerCube environmentMap;
+// Bindless cubemap array (set 1, binding 1, separate from 2D textures at binding 0)
+layout(set = 1, binding = 1) uniform samplerCube cubemaps[];
 
 layout(location = 0) in vec3 fragTexCoord;
 layout(location = 0) out vec4 outColor;
@@ -35,9 +43,16 @@ vec3 gammaCorrection(vec3 color) {
 }
 
 void main() {
-    // Sample from the environment cubemap
+    // Sample from the environment cubemap using bindless index
     vec3 direction = normalize(fragTexCoord);
-    vec3 color = texture(environmentMap, direction).rgb;
+
+    // Check if environment map is available
+    if (global.environmentMapIndex == 0) {
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);  // Black if no environment map
+        return;
+    }
+
+    vec3 color = texture(cubemaps[nonuniformEXT(global.environmentMapIndex)], direction).rgb;
 
     // Apply exposure
     color *= global.skyboxExposure;

@@ -1,17 +1,15 @@
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/core/VulkanContext.hpp"
-#include "renderer/core/RenderPass.hpp"
-#include "resource/Material.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
-#include "renderer/pipeline/GraphicsPipeline.hpp"
+#include "resource/MaterialManager.hpp"
+#include "resource/TextureManager.hpp"
+#include "renderer/descriptor/DescriptorManager.hpp"
 #include "renderer/pipeline/ComputePipeline.hpp"
-#include "renderer/core/ForwardRenderer.hpp"
 #include "renderer/DescriptorSet.hpp"
-#include "resource/gpu/Buffer.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
-#include <stb_image.h>
+#include <EASTL/unique_ptr.h>
 
 namespace violet {
 
@@ -23,17 +21,31 @@ EnvironmentMap::~EnvironmentMap() {
 
 EnvironmentMap::EnvironmentMap(EnvironmentMap&& other) noexcept
     : context(other.context)
-    , renderPass(other.renderPass)
-    , environmentTexture(eastl::move(other.environmentTexture))
-    , irradianceMap(eastl::move(other.irradianceMap))
-    , prefilteredMap(eastl::move(other.prefilteredMap))
-    , brdfLUT(eastl::move(other.brdfLUT))
-    , skyboxMaterial(other.skyboxMaterial)
+    , materialManager(other.materialManager)
+    , descriptorManager(other.descriptorManager)
+    , textureManager(other.textureManager)
+    , environmentTextureHandle(other.environmentTextureHandle)
+    , irradianceMapHandle(other.irradianceMapHandle)
+    , prefilteredMapHandle(other.prefilteredMapHandle)
+    , brdfLUTHandle(other.brdfLUTHandle)
+    , environmentMapIndex(other.environmentMapIndex)
+    , irradianceMapIndex(other.irradianceMapIndex)
+    , prefilteredMapIndex(other.prefilteredMapIndex)
+    , brdfLUTIndex(other.brdfLUTIndex)
     , params(other.params)
     , currentType(other.currentType) {
     other.context = nullptr;
-    other.renderPass = nullptr;
-    other.skyboxMaterial = nullptr;
+    other.materialManager = nullptr;
+    other.descriptorManager = nullptr;
+    other.textureManager = nullptr;
+    other.environmentTextureHandle = {};
+    other.irradianceMapHandle = {};
+    other.prefilteredMapHandle = {};
+    other.brdfLUTHandle = {};
+    other.environmentMapIndex = 0;
+    other.irradianceMapIndex = 0;
+    other.prefilteredMapIndex = 0;
+    other.brdfLUTIndex = 0;
     other.params = {};
     other.currentType = Type::Cubemap;
 }
@@ -42,73 +54,102 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     if (this != &other) {
         cleanup();
         context = other.context;
-        renderPass = other.renderPass;
-        environmentTexture = eastl::move(other.environmentTexture);
-        irradianceMap = eastl::move(other.irradianceMap);
-        prefilteredMap = eastl::move(other.prefilteredMap);
-        brdfLUT = eastl::move(other.brdfLUT);
-        skyboxMaterial = other.skyboxMaterial;
+        materialManager = other.materialManager;
+        descriptorManager = other.descriptorManager;
+        textureManager = other.textureManager;
+        environmentTextureHandle = other.environmentTextureHandle;
+        irradianceMapHandle = other.irradianceMapHandle;
+        prefilteredMapHandle = other.prefilteredMapHandle;
+        brdfLUTHandle = other.brdfLUTHandle;
+        environmentMapIndex = other.environmentMapIndex;
+        irradianceMapIndex = other.irradianceMapIndex;
+        prefilteredMapIndex = other.prefilteredMapIndex;
+        brdfLUTIndex = other.brdfLUTIndex;
         params = other.params;
         currentType = other.currentType;
 
         other.context = nullptr;
-        other.renderPass = nullptr;
-        other.skyboxMaterial = nullptr;
+        other.materialManager = nullptr;
+        other.descriptorManager = nullptr;
+        other.textureManager = nullptr;
+        other.environmentTextureHandle = {};
+        other.irradianceMapHandle = {};
+        other.prefilteredMapHandle = {};
+        other.brdfLUTHandle = {};
+        other.environmentMapIndex = 0;
+        other.irradianceMapIndex = 0;
+        other.prefilteredMapIndex = 0;
+        other.brdfLUTIndex = 0;
         other.params = {};
         other.currentType = Type::Cubemap;
     }
     return *this;
 }
 
-void EnvironmentMap::init(VulkanContext* ctx, RenderPass* rp, MaterialManager* matMgr, DescriptorManager* descMgr) {
+void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr) {
     context = ctx;
-    renderPass = rp;
     materialManager = matMgr;
     descriptorManager = descMgr;
+    textureManager = texMgr;
 
-    // Create skybox material through MaterialManager
-    skyboxMaterial = materialManager->createSkyboxMaterial(renderPass);
-
-    // Create compute pipeline for equirectangular to cubemap conversion
-    equirectToCubemapPipeline = eastl::make_unique<ComputePipeline>();
-
-    // Create descriptor set for compute shader
-    computeDescriptorSet = eastl::make_unique<DescriptorSet>();
-    computeDescriptorSet->create(context, 1, DescriptorSetType::EquirectToCubemap);
-
-    // Setup compute pipeline with descriptor set layout
-    ComputePipelineConfig computeConfig;
-    computeConfig.descriptorSetLayouts.push_back(computeDescriptorSet->getLayout());
-
-    // Add push constant for cubemap size and current face
-    vk::PushConstantRange pushConstant;
-    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
-    computeConfig.pushConstantRanges.push_back(pushConstant);
-
-    equirectToCubemapPipeline->init(
-        context,
-        FileSystem::resolveRelativePath("build/shaders/equirect_to_cubemap.comp.spv"),
-        computeConfig
-    );
-
-    violet::Log::info("Renderer", "EnvironmentMap initialized with skybox material and compute pipeline");
+    violet::Log::info("Renderer", "EnvironmentMap initialized (resources managed by TextureManager, MaterialManager, DescriptorManager)");
 }
 
 void EnvironmentMap::cleanup() {
-    // Don't delete material - it's managed by ForwardRenderer
-    skyboxMaterial = nullptr;
-    environmentTexture.reset();
-    irradianceMap.reset();
-    prefilteredMap.reset();
-    brdfLUT.reset();
+    // Clear temporary compute resources (must be done first while device is still valid)
+    // Order matters: image views → descriptor sets → textures (which own the images)
+    tempImageViews.clear();
+    tempDescriptorSets.clear();
+    tempComputeTextures.clear();
+
+    // Free bindless indices if allocated
+    if (descriptorManager) {
+        if (environmentMapIndex != 0) {
+            descriptorManager->freeBindlessTexture(environmentMapIndex);
+            environmentMapIndex = 0;
+        }
+        if (irradianceMapIndex != 0) {
+            descriptorManager->freeBindlessTexture(irradianceMapIndex);
+            irradianceMapIndex = 0;
+        }
+        if (prefilteredMapIndex != 0) {
+            descriptorManager->freeBindlessTexture(prefilteredMapIndex);
+            prefilteredMapIndex = 0;
+        }
+        if (brdfLUTIndex != 0) {
+            descriptorManager->freeBindlessTexture(brdfLUTIndex);
+            brdfLUTIndex = 0;
+        }
+    }
+
+    // Release texture handles (TextureManager owns the actual textures)
+    if (textureManager) {
+        if (environmentTextureHandle.isValid()) {
+            textureManager->removeTexture(environmentTextureHandle);
+            environmentTextureHandle = {};
+        }
+        if (irradianceMapHandle.isValid()) {
+            textureManager->removeTexture(irradianceMapHandle);
+            irradianceMapHandle = {};
+        }
+        if (prefilteredMapHandle.isValid()) {
+            textureManager->removeTexture(prefilteredMapHandle);
+            prefilteredMapHandle = {};
+        }
+        if (brdfLUTHandle.isValid()) {
+            textureManager->removeTexture(brdfLUTHandle);
+            brdfLUTHandle = {};
+        }
+    }
+
     context = nullptr;
-    renderPass = nullptr;
+    materialManager = nullptr;
+    descriptorManager = nullptr;
+    textureManager = nullptr;
 }
 
 void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
-    if (!context) {
+    if (!context || !descriptorManager || !textureManager) {
         violet::Log::error("Renderer", "EnvironmentMap not initialized");
         return;
     }
@@ -116,137 +157,165 @@ void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
     eastl::string resolvedPath = FileSystem::resolveRelativePath(hdrPath);
     violet::Log::info("Renderer", "Loading HDR environment map from: {}", resolvedPath.c_str());
 
-    // Step 1: Load equirectangular HDR texture (2D)
-    // Keep it as member variable to prevent premature destruction
-    equirectTexture = eastl::make_unique<Texture>();
-    equirectTexture->loadHDR(context, resolvedPath);
+    // Generate cubemap from HDR using compute shader (Step 3 implementation)
+    const uint32_t cubemapSize = 512;
+    generateCubemapFromEquirect(resolvedPath, cubemapSize);
 
-    if (!equirectTexture->getImageView() || !equirectTexture->getSampler()) {
+    if (!environmentTextureHandle.isValid()) {
+        violet::Log::error("Renderer", "Failed to generate environment cubemap from HDR");
+        return;
+    }
+
+    // Get texture and register to bindless system
+    Texture* envTexture = textureManager->getTexture(environmentTextureHandle);
+    if (!envTexture) {
+        violet::Log::error("Renderer", "Failed to retrieve environment texture from TextureManager");
+        return;
+    }
+
+    environmentMapIndex = descriptorManager->allocateBindlessCubemap(envTexture);
+    if (environmentMapIndex == 0) {
+        violet::Log::error("Renderer", "Failed to allocate bindless cubemap index for environment map");
+        return;
+    }
+
+    currentType = Type::Cubemap;
+    params.enabled = true;
+
+    violet::Log::info("Renderer", "HDR environment map loaded successfully (bindless index: {})", environmentMapIndex);
+}
+
+void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths) {
+    if (!context || !descriptorManager || !textureManager) {
+        violet::Log::error("Renderer", "EnvironmentMap not initialized");
+        return;
+    }
+
+    auto cubemapTexture = ResourceFactory::createCubemapTexture(context, facePaths);
+    if (!cubemapTexture) {
+        violet::Log::error("Renderer", "Failed to load cubemap from face paths");
+        return;
+    }
+
+    // Set sampler before adding to TextureManager
+    cubemapTexture->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+
+    // Add to TextureManager
+    environmentTextureHandle = textureManager->addTexture(eastl::move(cubemapTexture));
+    if (!environmentTextureHandle.isValid()) {
+        violet::Log::error("Renderer", "Failed to add cubemap to TextureManager");
+        return;
+    }
+
+    // Register to bindless system
+    Texture* envTexture = textureManager->getTexture(environmentTextureHandle);
+    environmentMapIndex = descriptorManager->allocateBindlessCubemap(envTexture);
+    if (environmentMapIndex == 0) {
+        violet::Log::error("Renderer", "Failed to allocate bindless cubemap index for cubemap");
+        return;
+    }
+
+    currentType = Type::Cubemap;
+    params.enabled = true;
+
+    violet::Log::info("Renderer", "Environment cubemap loaded successfully (bindless index: {})", environmentMapIndex);
+}
+
+void EnvironmentMap::generateIBLMaps() {
+    if (!environmentTextureHandle.isValid()) {
+        violet::Log::warn("Renderer", "Cannot generate IBL maps: no environment texture loaded");
+        return;
+    }
+
+    violet::Log::info("Renderer", "Generating IBL maps from environment texture...");
+
+    // Step 5: IBL generation implementation
+    // executeSingleTimeCommands already includes waitIdle for each pass
+    generateIrradianceMap();
+    generatePrefilteredMap();
+    generateBRDFLUT();
+
+    violet::Log::info("Renderer", "IBL maps generated successfully");
+}
+
+// Texture access methods
+Texture* EnvironmentMap::getEnvironmentTexture() const {
+    return textureManager ? textureManager->getTexture(environmentTextureHandle) : nullptr;
+}
+
+Texture* EnvironmentMap::getIrradianceMap() const {
+    return textureManager ? textureManager->getTexture(irradianceMapHandle) : nullptr;
+}
+
+Texture* EnvironmentMap::getPrefilteredMap() const {
+    return textureManager ? textureManager->getTexture(prefilteredMapHandle) : nullptr;
+}
+
+Texture* EnvironmentMap::getBRDFLUT() const {
+    return textureManager ? textureManager->getTexture(brdfLUTHandle) : nullptr;
+}
+
+// ===== Private Helper Methods =====
+
+void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, uint32_t cubemapSize) {
+    violet::Log::info("Renderer", "Generating cubemap from equirectangular HDR (size: {})", cubemapSize);
+
+    // Step 1: Load equirect HDR texture (temporary, 2D)
+    // Keep alive to prevent validation errors from descriptor set reuse
+    auto equirectTexture = eastl::make_unique<Texture>();
+    equirectTexture->loadHDR(context, hdrPath);
+
+    if (!equirectTexture->getImageView()) {
         violet::Log::error("Renderer", "Failed to load equirectangular HDR texture");
         return;
     }
 
-    // Step 2: Create empty cubemap with storage + sampled usage
-    const uint32_t cubemapSize = 512;
-    environmentTexture = eastl::make_unique<Texture>();
-    environmentTexture->createEmptyCubemap(
+    // Set sampler for the equirect texture (needed for compute shader sampling)
+    equirectTexture->setSampler(descriptorManager->getSampler(SamplerType::Default));
+
+    Texture* equirectTexturePtr = equirectTexture.get();  // Get raw pointer before moving
+    tempComputeTextures.push_back(eastl::move(equirectTexture));  // Keep alive
+
+    // Step 2: Create output cubemap
+    auto cubemap = eastl::make_unique<Texture>();
+    cubemap->createEmptyCubemap(
         context,
         cubemapSize,
         vk::Format::eR16G16B16A16Sfloat,
         vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
     );
 
-    // Step 3: Generate cubemap from equirectangular using compute shader
-    generateCubemapFromEquirect(equirectTexture.get(), environmentTexture.get(), cubemapSize);
+    Texture* cubemapPtr = cubemap.get();  // Get raw pointer before using
 
-    // Step 4: IMPORTANT - Free equirect texture immediately after GPU work completes
-    // The compute shader has finished (endSingleTimeCommands waits for GPU),
-    // so we can safely free the equirect texture to prevent validation errors
-    // when loading a new HDR file later
-    equirectTexture.reset();
+    // Step 3: Create compute pipeline
+    ComputePipeline pipeline;
+    ComputePipelineConfig config;
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("EquirectToCubemap"));
 
-    currentType = Type::Cubemap;  // Output is cubemap
-    params.enabled = true;
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
+    config.pushConstantRanges.push_back(pushConstant);
 
-    // todo refactor
-    // // Step 4: Update the global descriptor set with the new environment texture
-    // if (renderer && environmentTexture) {
-    //     // Ensure texture is fully initialized before setting it
-    //     if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
-    //         renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
-    //         violet::Log::info("Renderer", "Successfully set HDR environment cubemap in global uniforms");
-    //     } else {
-    //         violet::Log::error("Renderer", "HDR environment cubemap not fully initialized - cannot set in descriptor set");
-    //     }
-    // }
+    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/equirect_to_cubemap.comp.spv"), config);
 
-    violet::Log::info("Renderer", "HDR environment map loaded and converted to cubemap via compute shader");
-}
+    // Step 4: Allocate descriptor set
+    auto descriptorSets = descriptorManager->allocateSets("EquirectToCubemap", 1);
+    auto descSet = eastl::make_unique<DescriptorSet>();
+    descSet->init(context, descriptorSets);
 
-void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths) {
-    environmentTexture = ResourceFactory::createCubemapTexture(context, facePaths);
-    params.enabled = (environmentTexture != nullptr);
-    currentType = Type::Cubemap;
+    // Update descriptor set
+    descSet->updateTexture(0, equirectTexturePtr, 0);  // Binding 0: input
+    descSet->updateStorageImage(0, cubemapPtr, 1);     // Binding 1: output
 
+    // Keep descriptor set alive to prevent validation errors
+    DescriptorSet* descSetPtr = descSet.get();
+    tempDescriptorSets.push_back(eastl::move(descSet));
 
-    // // Update the global descriptor set with the new environment texture
-    // if (renderer && environmentTexture) {
-    //     // Ensure texture is fully initialized before setting it
-    //     if (environmentTexture->getImageView() && environmentTexture->getSampler()) {
-    //         renderer->getGlobalUniforms().setSkyboxTexture(environmentTexture.get());
-    //         violet::Log::info("Renderer", "Successfully set cubemap environment texture in global uniforms");
-    //     } else {
-    //         violet::Log::error("Renderer", "Cubemap environment texture not fully initialized - cannot set in descriptor set");
-    //     }
-    // }
-
-    if (environmentTexture) {
-        violet::Log::info("Renderer", "Environment cubemap loaded successfully");
-    } else {
-        violet::Log::warn("Renderer", "Failed to load environment cubemap");
-    }
-}
-
-void EnvironmentMap::setTexture(eastl::unique_ptr<Texture> texture) {
-    environmentTexture = eastl::move(texture);
-    params.enabled = (environmentTexture != nullptr);
-}
-
-void EnvironmentMap::generateIBLMaps() {
-    // Future implementation for IBL precomputation
-    // Will generate irradianceMap, prefilteredMap, and brdfLUT
-    violet::Log::info("Renderer", "IBL map generation not yet implemented");
-}
-
-void EnvironmentMap::renderSkybox(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
-                                  vk::PipelineLayout pipelineLayout, vk::DescriptorSet globalDescriptorSet) {
-    if (!params.enabled || !environmentTexture || !skyboxMaterial || !skyboxMaterial->getPipeline()) {
-        return;
-    }
-
-    // Validate environment texture is fully initialized
-    if (!environmentTexture->getImageView() || !environmentTexture->getSampler()) {
-        violet::Log::warn("Renderer", "Skipping skybox render - environment texture not fully initialized");
-        return;
-    }
-
-    // Validate descriptor set
-    if (!globalDescriptorSet) {
-        violet::Log::warn("Renderer", "Skipping skybox render - global descriptor set is invalid");
-        return;
-    }
-
-    // Bind skybox pipeline
-    skyboxMaterial->getPipeline()->bind(commandBuffer);
-
-    // Bind global descriptor set which includes the skybox texture
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelineLayout,
-        0, // set 0 (global set)
-        globalDescriptorSet,
-        {}
-    );
-
-    // Draw full-screen triangle (no vertex buffer needed)
-    commandBuffer.draw(3, 1, 0, 0);
-}
-
-void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Texture* cubemapTexture, uint32_t cubemapSize) {
-    if (!equirectTexture || !cubemapTexture || !equirectToCubemapPipeline || !computeDescriptorSet) {
-        violet::Log::error("Renderer", "Invalid parameters for generateCubemapFromEquirect");
-        return;
-    }
-
-    violet::Log::info("Renderer", "Generating cubemap from equirectangular texture using compute shader (size: {})", cubemapSize);
-
-    // Update descriptor set with input and output textures
-    computeDescriptorSet->updateTexture(0, equirectTexture, 0);  // Binding 0: input sampler2D
-    computeDescriptorSet->updateStorageImage(0, cubemapTexture, 1);  // Binding 1: output imageCube
-
-    // Create command buffer for compute operation
+    // Step 5: Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
-        // Transition cubemap to general layout for storage image writes
+        // Transition cubemap to general layout
         vk::ImageMemoryBarrier barrier;
         barrier.srcAccessMask = {};
         barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
@@ -254,79 +323,60 @@ void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Textu
         barrier.newLayout = vk::ImageLayout::eGeneral;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = cubemapTexture->getImage();
+        barrier.image = cubemapPtr->getImage();
         barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
         barrier.subresourceRange.baseMipLevel = 0;
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 6;  // All 6 cubemap faces
+        barrier.subresourceRange.layerCount = 6;
 
         cmd.pipelineBarrier(
             vk::PipelineStageFlagBits::eTopOfPipe,
             vk::PipelineStageFlagBits::eComputeShader,
-            {},
-            0, nullptr,
-            0, nullptr,
-            1, &barrier
+            {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
-        // Bind compute pipeline
-        equirectToCubemapPipeline->bind(cmd);
-
-        // Bind descriptor set
+        // Bind pipeline and descriptor set
+        pipeline.bind(cmd);
         cmd.bindDescriptorSets(
             vk::PipelineBindPoint::eCompute,
-            equirectToCubemapPipeline->getPipelineLayout(),
-            0,
-            computeDescriptorSet->getDescriptorSet(0),
-            {}
+            pipeline.getPipelineLayout(),
+            0, descSetPtr->getDescriptorSet(0), {}
         );
 
-        // Dispatch compute shader for each cubemap face
+        // Dispatch for each cubemap face
         struct PushConstants {
             uint32_t cubemapSize;
             uint32_t currentFace;
         } pushConstants;
 
         pushConstants.cubemapSize = cubemapSize;
-
-        // Calculate workgroup count (16x16 local size in shader)
         uint32_t workgroupCountX = (cubemapSize + 15) / 16;
         uint32_t workgroupCountY = (cubemapSize + 15) / 16;
 
         for (uint32_t face = 0; face < 6; ++face) {
             pushConstants.currentFace = face;
-
-            // Push constants for current face
             cmd.pushConstants(
-                equirectToCubemapPipeline->getPipelineLayout(),
+                pipeline.getPipelineLayout(),
                 vk::ShaderStageFlagBits::eCompute,
-                0,
-                sizeof(PushConstants),
-                &pushConstants
+                0, sizeof(PushConstants), &pushConstants
             );
 
-            // Dispatch compute workgroups
-            equirectToCubemapPipeline->dispatch(cmd, workgroupCountX, workgroupCountY, 1);
+            pipeline.dispatch(cmd, workgroupCountX, workgroupCountY, 1);
 
-            // Insert barrier between faces to ensure proper ordering
             if (face < 5) {
                 vk::MemoryBarrier memBarrier;
                 memBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
                 memBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-
                 cmd.pipelineBarrier(
                     vk::PipelineStageFlagBits::eComputeShader,
                     vk::PipelineStageFlagBits::eComputeShader,
-                    {},
-                    1, &memBarrier,
-                    0, nullptr,
-                    0, nullptr
+                    {}, 1, &memBarrier, 0, nullptr, 0, nullptr
                 );
             }
         }
 
-        // Transition cubemap to shader read-only optimal for rendering
+        // Transition to shader read-only
         vk::ImageMemoryBarrier finalBarrier;
         finalBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
         finalBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
@@ -334,7 +384,7 @@ void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Textu
         finalBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         finalBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         finalBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        finalBarrier.image = cubemapTexture->getImage();
+        finalBarrier.image = cubemapPtr->getImage();
         finalBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
         finalBarrier.subresourceRange.baseMipLevel = 0;
         finalBarrier.subresourceRange.levelCount = 1;
@@ -344,14 +394,350 @@ void EnvironmentMap::generateCubemapFromEquirect(Texture* equirectTexture, Textu
         cmd.pipelineBarrier(
             vk::PipelineStageFlagBits::eComputeShader,
             vk::PipelineStageFlagBits::eFragmentShader,
-            {},
-            0, nullptr,
-            0, nullptr,
-            1, &finalBarrier
+            {}, 0, nullptr, 0, nullptr, 1, &finalBarrier
         );
     });
 
-    violet::Log::info("Renderer", "Cubemap generation complete");
+    // Step 6: Set sampler before adding to TextureManager
+    cubemapPtr->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+
+    // Step 7: Add to TextureManager
+    environmentTextureHandle = textureManager->addTexture(eastl::move(cubemap));
+
+    violet::Log::info("Renderer", "Cubemap generated successfully from HDR");
+}
+
+void EnvironmentMap::generateIrradianceMap() {
+    if (!environmentTextureHandle.isValid()) {
+        violet::Log::error("Renderer", "Cannot generate irradiance map: no environment texture");
+        return;
+    }
+
+    violet::Log::info("Renderer", "Generating irradiance map...");
+
+    const uint32_t irradianceSize = 32;  // Low resolution for diffuse
+
+    // Create output irradiance cubemap
+    auto irradiance = eastl::make_unique<Texture>();
+    irradiance->createEmptyCubemap(
+        context, irradianceSize,
+        vk::Format::eR16G16B16A16Sfloat,
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
+    );
+
+    // Create compute pipeline
+    ComputePipeline pipeline;
+    ComputePipelineConfig config;
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("IrradianceConvolution"));
+
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t) * 2;
+    config.pushConstantRanges.push_back(pushConstant);
+
+    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/irradiance_convolution.comp.spv"), config);
+
+    // Allocate and update descriptor set
+    auto descriptorSets = descriptorManager->allocateSets("IrradianceConvolution", 1);
+    auto descSet = eastl::make_unique<DescriptorSet>();
+    descSet->init(context, descriptorSets);
+
+    Texture* envTex = textureManager->getTexture(environmentTextureHandle);
+    descSet->updateTexture(0, envTex, 0);
+    descSet->updateStorageImage(0, irradiance.get(), 1);
+
+    // Keep descriptor set alive to prevent validation errors
+    DescriptorSet* descSetPtr = descSet.get();
+    tempDescriptorSets.push_back(eastl::move(descSet));
+
+    // Execute compute shader
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        // Transition to general layout
+        vk::ImageMemoryBarrier barrier;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.oldLayout = vk::ImageLayout::eUndefined;
+        barrier.newLayout = vk::ImageLayout::eGeneral;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = irradiance->getImage();
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;
+
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eComputeShader,
+            {}, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+
+        pipeline.bind(cmd);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSetPtr->getDescriptorSet(0), {});
+
+        struct { uint32_t size; uint32_t face; } pc;
+        pc.size = irradianceSize;
+        uint32_t workgroups = (irradianceSize + 15) / 16;
+
+        for (uint32_t face = 0; face < 6; ++face) {
+            pc.face = face;
+            cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+            pipeline.dispatch(cmd, workgroups, workgroups, 1);
+
+            if (face < 5) {
+                vk::MemoryBarrier mb;
+                mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                mb.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+                cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, 1, &mb, 0, nullptr, 0, nullptr);
+            }
+        }
+
+        // Transition to shader read-only
+        barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.oldLayout = vk::ImageLayout::eGeneral;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
+
+    // Set sampler before adding to TextureManager
+    irradiance->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+
+    irradianceMapHandle = textureManager->addTexture(eastl::move(irradiance));
+    irradianceMapIndex = descriptorManager->allocateBindlessCubemap(textureManager->getTexture(irradianceMapHandle));
+
+    violet::Log::info("Renderer", "Irradiance map generated (bindless cubemap index: {})", irradianceMapIndex);
+}
+
+void EnvironmentMap::generatePrefilteredMap() {
+    if (!environmentTextureHandle.isValid()) {
+        violet::Log::error("Renderer", "Cannot generate prefiltered map: no environment texture");
+        return;
+    }
+
+    violet::Log::info("Renderer", "Generating prefiltered environment map with mipmaps...");
+
+    const uint32_t prefilteredSize = 128;
+    const uint32_t mipLevels = 5;  // 128, 64, 32, 16, 8 (roughness: 0.0, 0.25, 0.5, 0.75, 1.0)
+
+    // Create output cubemap with mip levels
+    auto prefiltered = eastl::make_unique<Texture>();
+    prefiltered->createEmptyCubemap(
+        context, prefilteredSize,
+        vk::Format::eR16G16B16A16Sfloat,
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+        mipLevels
+    );
+
+    // Create compute pipeline
+    ComputePipeline pipeline;
+    ComputePipelineConfig config;
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("PrefilterEnvironment"));
+
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t) * 4;
+    config.pushConstantRanges.push_back(pushConstant);
+
+    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/prefilter_environment.comp.spv"), config);
+
+    Texture* envTex = textureManager->getTexture(environmentTextureHandle);
+
+    // Process each mip level with different roughness
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        // Transition all mip levels to general layout
+        vk::ImageMemoryBarrier barrier;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.oldLayout = vk::ImageLayout::eUndefined;
+        barrier.newLayout = vk::ImageLayout::eGeneral;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = prefiltered->getImage();
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = mipLevels;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;
+
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eComputeShader, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        pipeline.bind(cmd);
+
+        struct { uint32_t size; uint32_t face; float roughness; uint32_t padding; } pc;
+
+        // Generate each mip level with increasing roughness
+        for (uint32_t mip = 0; mip < mipLevels; ++mip) {
+            uint32_t mipSize = prefilteredSize >> mip;
+            pc.size = mipSize;
+            pc.roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
+
+            // Create per-mip descriptor set
+            auto mipDescriptorSets = descriptorManager->allocateSets("PrefilterEnvironment", 1);
+            auto mipDescSet = eastl::make_unique<DescriptorSet>();
+            mipDescSet->init(context, mipDescriptorSets);
+
+            // Create per-mip image view for storage
+            vk::raii::ImageView mipView = prefiltered->createMipImageView(context, mip);
+
+            // Update descriptor set for this mip level
+            eastl::vector<ResourceBindingDesc> bindings;
+            bindings.push_back(ResourceBindingDesc::texture(0, envTex));
+            bindings.push_back(ResourceBindingDesc::storageImage(1, *mipView));
+            descriptorManager->updateSet(mipDescriptorSets[0], bindings);
+
+            // Keep descriptor set and image view alive to prevent validation errors
+            DescriptorSet* mipDescSetPtr = mipDescSet.get();
+            vk::DescriptorSet descriptorSetHandle = mipDescriptorSets[0];
+            tempDescriptorSets.push_back(eastl::move(mipDescSet));
+            tempImageViews.push_back(eastl::move(mipView));
+
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descriptorSetHandle, {});
+
+            uint32_t workgroups = (mipSize + 15) / 16;
+
+            for (uint32_t face = 0; face < 6; ++face) {
+                pc.face = face;
+                cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+                pipeline.dispatch(cmd, workgroups, workgroups, 1);
+
+                if (face < 5) {
+                    vk::MemoryBarrier mb;
+                    mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                    mb.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, 1, &mb, 0, nullptr, 0, nullptr);
+                }
+            }
+
+            // Barrier between mip levels
+            if (mip < mipLevels - 1) {
+                vk::MemoryBarrier mb;
+                mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                mb.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+                cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, 1, &mb, 0, nullptr, 0, nullptr);
+            }
+        }
+
+        // Transition all mip levels to shader read-only
+        barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.oldLayout = vk::ImageLayout::eGeneral;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = mipLevels;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader, {}, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
+
+    // Set sampler before adding to TextureManager
+    prefiltered->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+
+    prefilteredMapHandle = textureManager->addTexture(eastl::move(prefiltered));
+    prefilteredMapIndex = descriptorManager->allocateBindlessCubemap(textureManager->getTexture(prefilteredMapHandle));
+
+    violet::Log::info("Renderer", "Prefiltered map generated with {} mip levels (bindless cubemap index: {})", mipLevels, prefilteredMapIndex);
+}
+
+void EnvironmentMap::generateBRDFLUT() {
+    violet::Log::info("Renderer", "Generating BRDF lookup table...");
+
+    const uint32_t lutSize = 512;
+
+    // Create 2D BRDF LUT texture
+    auto brdfLUT = eastl::make_unique<Texture>();
+    brdfLUT->createEmpty2D(
+        context, lutSize, lutSize,
+        vk::Format::eR16G16Sfloat,  // RG16F format: scale, bias
+        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
+    );
+
+    // Create compute pipeline
+    ComputePipeline pipeline;
+    ComputePipelineConfig config;
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("BRDFLUT"));
+
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(uint32_t);  // LUT size
+    config.pushConstantRanges.push_back(pushConstant);
+
+    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/brdf_lut.comp.spv"), config);
+
+    // Allocate and update descriptor set
+    auto descriptorSets = descriptorManager->allocateSets("BRDFLUT", 1);
+    auto descSet = eastl::make_unique<DescriptorSet>();
+    descSet->init(context, descriptorSets);
+
+    // Create image view for storage
+    vk::raii::ImageView lutView = brdfLUT->createMipImageView(context, 0);
+
+    // Update descriptor set
+    eastl::vector<ResourceBindingDesc> bindings;
+    bindings.push_back(ResourceBindingDesc::storageImage(0, *lutView));
+    descriptorManager->updateSet(descriptorSets[0], bindings);
+
+    // Keep descriptor set and image view alive to prevent validation errors
+    DescriptorSet* descSetPtr = descSet.get();
+    vk::DescriptorSet descriptorSetHandle = descriptorSets[0];
+    tempDescriptorSets.push_back(eastl::move(descSet));
+    tempImageViews.push_back(eastl::move(lutView));
+
+    // Execute compute shader
+    ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        // Transition to general layout
+        vk::ImageMemoryBarrier barrier;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.oldLayout = vk::ImageLayout::eUndefined;
+        barrier.newLayout = vk::ImageLayout::eGeneral;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = brdfLUT->getImage();
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eComputeShader,
+            {}, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+
+        pipeline.bind(cmd);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descriptorSetHandle, {});
+
+        // Push constants
+        cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(uint32_t), &lutSize);
+
+        // Dispatch compute shader
+        uint32_t workgroups = (lutSize + 15) / 16;
+        pipeline.dispatch(cmd, workgroups, workgroups, 1);
+
+        // Transition to shader read-only
+        barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.oldLayout = vk::ImageLayout::eGeneral;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+        cmd.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {}, 0, nullptr, 0, nullptr, 1, &barrier
+        );
+    });
+
+    // Set sampler before adding to TextureManager
+    brdfLUT->setSampler(descriptorManager->getSampler(SamplerType::ClampToEdge));
+
+    brdfLUTHandle = textureManager->addTexture(eastl::move(brdfLUT));
+    brdfLUTIndex = descriptorManager->allocateBindlessTexture(textureManager->getTexture(brdfLUTHandle));
+
+    violet::Log::info("Renderer", "BRDF LUT generated (bindless index: {})", brdfLUTIndex);
 }
 
 } // namespace violet

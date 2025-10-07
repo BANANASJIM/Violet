@@ -14,10 +14,23 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     vec4 lightParams[8];
     int numLights;
     vec3 ambientLight;
+
+    // Skybox data
+    float skyboxExposure;
+    float skyboxRotation;
+    int skyboxEnabled;
+    float padding1;
+
+    // IBL bindless texture indices
+    uint environmentMapIndex;
+    uint irradianceMapIndex;
+    uint prefilteredMapIndex;
+    uint brdfLUTIndex;
 } global;
 
 // Set 1: Bindless texture array
 layout(set = 1, binding = 0) uniform sampler2D textures[];
+layout(set = 1, binding = 1) uniform samplerCube cubemaps[];  // Cubemaps use binding 1
 
 // Set 2: Materials SSBO (must match DescriptorManager::MaterialData exactly)
 struct MaterialData {
@@ -113,6 +126,10 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 void main() {
@@ -217,8 +234,35 @@ void main() {
         Lo += (kD * albedo / PI + specular) * radiance * NdotL;
     }
 
-    // Ambient with occlusion
-    vec3 ambient = global.ambientLight * albedo * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength);
+    // Image-Based Lighting (IBL)
+    vec3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    vec3 kS = F;
+    vec3 kD = 1.0 - kS;
+    kD *= 1.0 - metallic;
+
+    vec3 ambient = vec3(0.0);
+
+    // Check if IBL textures are available
+    if (global.irradianceMapIndex != 0 && global.prefilteredMapIndex != 0 && global.brdfLUTIndex != 0) {
+        // Diffuse IBL - irradiance
+        vec3 irradiance = texture(cubemaps[nonuniformEXT(global.irradianceMapIndex)], N).rgb;
+        vec3 diffuse = irradiance * albedo;
+
+        // Specular IBL - prefiltered environment map + BRDF LUT
+        vec3 R = reflect(-V, N);
+        const float MAX_REFLECTION_LOD = 4.0;
+        vec3 prefilteredColor = textureLod(cubemaps[nonuniformEXT(global.prefilteredMapIndex)], R, roughness * MAX_REFLECTION_LOD).rgb;
+
+        // Sample BRDF LUT with NdotV and roughness
+        vec2 envBRDF = texture(textures[nonuniformEXT(global.brdfLUTIndex)], vec2(max(dot(N, V), 0.0), roughness)).rg;
+        vec3 specular = prefilteredColor * (F * envBRDF.x + envBRDF.y);
+
+        // Combine diffuse and specular IBL
+        ambient = (kD * diffuse + specular) * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength);
+    } else {
+        // Fallback to simple ambient if IBL not available
+        ambient = global.ambientLight * albedo * mix(1.0, occlusion, materials.data[push.materialID].occlusionStrength);
+    }
 
     vec3 color = ambient + Lo + emissive;
 

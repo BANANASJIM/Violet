@@ -144,8 +144,12 @@ void AssetLoader::loadMeshes(void* modelPtr, GLTFAsset* asset) {
                 );
 
                 for (size_t v = 0; v < accessor.count; v++) {
+                    float originalU = texCoords[v * 2];
+                    float originalV = texCoords[v * 2 + 1];
+                    //  standard Vulkan Y-flip
                     meshData.vertices[vertexStart + v].texCoord = glm::vec2(
-                        texCoords[v * 2], texCoords[v * 2 + 1]
+                        originalU,
+                        1.0f - originalV
                     );
                 }
             }
@@ -185,14 +189,17 @@ void AssetLoader::loadMeshes(void* modelPtr, GLTFAsset* asset) {
                         break;
                     }
                 }
-            }
 
-            // Create submesh
-            SubMesh subMesh;
-            subMesh.firstIndex = indexStart;
-            subMesh.indexCount = static_cast<uint32_t>(meshData.indices.size()) - indexStart;
-            subMesh.materialIndex = primitive.material > -1 ? static_cast<uint32_t>(primitive.material) : 0;
-            meshData.submeshes.push_back(subMesh);
+                // Create submesh only if indices were loaded
+                SubMesh subMesh;
+                subMesh.firstIndex = indexStart;
+                subMesh.indexCount = static_cast<uint32_t>(meshData.indices.size()) - indexStart;
+                subMesh.materialIndex = primitive.material > -1 ? static_cast<uint32_t>(primitive.material) : 0;
+                meshData.submeshes.push_back(subMesh);
+            } else {
+                // Skip primitives without indices (e.g., point clouds, lines)
+                violet::Log::warn("AssetLoader", "Skipping primitive without indices in mesh {}", meshIdx);
+            }
         }
     }
 }

@@ -138,6 +138,9 @@ void PBRMaterialInstance::setMetallicRoughnessTexture(Texture* texture) {
     DescriptorManager::MaterialData updatedData = *matData;
     updatedData.metallicRoughnessTexIndex = texture ? descriptorManager->allocateBindlessTexture(texture) : 0;
     descriptorManager->updateMaterialData(materialID, updatedData);
+
+    violet::Log::debug("Material", "Set metallicRoughness texture for material {}: bindless index = {}, factor = {:.2f}/{:.2f}",
+        materialID, updatedData.metallicRoughnessTexIndex, updatedData.metallicFactor, updatedData.roughnessFactor);
 }
 
 void PBRMaterialInstance::setNormalTexture(Texture* texture) {

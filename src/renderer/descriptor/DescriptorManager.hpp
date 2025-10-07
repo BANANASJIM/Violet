@@ -143,8 +143,10 @@ public:
 
     // Bindless texture management integration
     void initBindless(uint32_t maxTextures);
-    uint32_t allocateBindlessTexture(Texture* texture);
+    uint32_t allocateBindlessTexture(Texture* texture);  // For 2D textures (binding 0)
+    uint32_t allocateBindlessCubemap(Texture* cubemapTexture);  // For cubemaps (binding 1)
     void freeBindlessTexture(uint32_t index);
+    void freeBindlessCubemap(uint32_t index);
     vk::DescriptorSet getBindlessSet() const;
     bool isBindlessEnabled() const { return bindlessEnabled; }
 
@@ -153,8 +155,8 @@ public:
     struct MaterialData {
         // Material parameters
         alignas(16) glm::vec4 baseColorFactor{1.0f};
-        alignas(4) float metallicFactor{0.0f};
-        alignas(4) float roughnessFactor{0.8f};
+        alignas(4) float metallicFactor{1.0f};  // glTF 2.0 default
+        alignas(4) float roughnessFactor{1.0f};  // glTF 2.0 default
         alignas(4) float normalScale{1.0f};
         alignas(4) float occlusionStrength{1.0f};
         alignas(16) glm::vec3 emissiveFactor{0.0f};
@@ -220,9 +222,14 @@ private:
     // Bindless texture management
     bool bindlessEnabled = false;
     vk::DescriptorSet bindlessSet;
-    eastl::vector<Texture*> bindlessTextureSlots;
+    eastl::vector<Texture*> bindlessTextureSlots;   // 2D textures (binding 0)
     eastl::vector<uint32_t> bindlessFreeIndices;
     uint32_t bindlessMaxTextures = 0;
+
+    // Cubemap bindless (binding 1)
+    eastl::vector<Texture*> bindlessCubemapSlots;
+    eastl::vector<uint32_t> bindlessCubemapFreeIndices;
+    uint32_t bindlessMaxCubemaps = 64;  // Fewer cubemaps needed than 2D textures
 
     // Material data SSBO management
     bool materialDataEnabled = false;

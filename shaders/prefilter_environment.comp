@@ -1,0 +1,157 @@
+#version 450
+
+// Workgroup size for processing cubemap faces
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Input: Environment cubemap
+layout(set = 0, binding = 0) uniform samplerCube environmentMap;
+
+// Output: Prefiltered cubemap (specific mip level)
+layout(set = 0, binding = 1, rgba16f) uniform imageCube prefilteredMap;
+
+// Push constants for size, face, and roughness
+layout(push_constant) uniform PushConstants {
+    uint outputSize;
+    uint currentFace;
+    float roughness;
+    uint padding;
+} pc;
+
+const float PI = 3.14159265359;
+
+// Convert cubemap UV coordinates to 3D direction vector
+vec3 uvToDirection(vec2 uv, uint face) {
+    vec2 ndc = uv * 2.0 - 1.0;
+
+    vec3 dir;
+    switch (face) {
+        case 0: dir = vec3( 1.0, -ndc.y, -ndc.x); break; // +X
+        case 1: dir = vec3(-1.0, -ndc.y,  ndc.x); break; // -X
+        case 2: dir = vec3( ndc.x,  1.0,  ndc.y); break; // +Y
+        case 3: dir = vec3( ndc.x, -1.0, -ndc.y); break; // -Y
+        case 4: dir = vec3( ndc.x, -ndc.y,  1.0); break; // +Z
+        case 5: dir = vec3(-ndc.x, -ndc.y, -1.0); break; // -Z
+    }
+
+    return normalize(dir);
+}
+
+// Build orthonormal basis from normal
+void buildOrthonormalBasis(vec3 n, out vec3 tangent, out vec3 bitangent) {
+    if (n.z < -0.9999999) {
+        tangent = vec3(0.0, -1.0, 0.0);
+        bitangent = vec3(-1.0, 0.0, 0.0);
+        return;
+    }
+    float a = 1.0 / (1.0 + n.z);
+    float b = -n.x * n.y * a;
+    tangent = vec3(1.0 - n.x * n.x * a, b, -n.x);
+    bitangent = vec3(b, 1.0 - n.y * n.y * a, -n.y);
+}
+
+// Van Der Corput sequence for low-discrepancy sampling
+float radicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10; // / 0x100000000
+}
+
+// Hammersley sequence for quasi-random sampling
+vec2 hammersley(uint i, uint N) {
+    return vec2(float(i) / float(N), radicalInverse_VdC(i));
+}
+
+// GGX importance sampling
+vec3 importanceSampleGGX(vec2 Xi, vec3 N, float roughness) {
+    float a = roughness * roughness;
+
+    // Sample in spherical coordinates
+    float phi = 2.0 * PI * Xi.x;
+    float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    // Convert to cartesian coordinates (in tangent space)
+    vec3 H;
+    H.x = cos(phi) * sinTheta;
+    H.y = sin(phi) * sinTheta;
+    H.z = cosTheta;
+
+    // Transform from tangent space to world space
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N));
+    vec3 bitangent = cross(N, tangent);
+
+    vec3 sampleVec = tangent * H.x + bitangent * H.y + N * H.z;
+    return normalize(sampleVec);
+}
+
+// GGX normal distribution function
+float D_GGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH2 = NdotH * NdotH;
+
+    float nom = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
+}
+
+void main() {
+    // Get current pixel coordinates
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    // Check bounds
+    if (pixelCoord.x >= pc.outputSize || pixelCoord.y >= pc.outputSize) {
+        return;
+    }
+
+    // Calculate UV for this pixel
+    vec2 uv = (vec2(pixelCoord) + 0.5) / float(pc.outputSize);
+
+    // Get 3D direction for this cubemap pixel (this is our view direction V and reflection R)
+    vec3 N = uvToDirection(uv, pc.currentFace);
+    vec3 R = N;
+    vec3 V = R;
+
+    // Prefilter convolution using importance sampling
+    const uint SAMPLE_COUNT = 1024u;
+    float totalWeight = 0.0;
+    vec3 prefilteredColor = vec3(0.0);
+
+    for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
+        // Generate sample direction using importance sampling
+        vec2 Xi = hammersley(i, SAMPLE_COUNT);
+        vec3 H = importanceSampleGGX(Xi, N, pc.roughness);
+        vec3 L = normalize(2.0 * dot(V, H) * H - V);
+
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL > 0.0) {
+            // Sample environment map at lower mip levels for higher roughness
+            // This reduces noise and fireflies
+            float NdotH = max(dot(N, H), 0.0);
+            float HdotV = max(dot(H, V), 0.0);
+            float D = D_GGX(NdotH, pc.roughness);
+            float pdf = (D * NdotH / (4.0 * HdotV)) + 0.0001;
+
+            // Calculate mip level based on PDF
+            float resolution = 512.0; // Source environment map resolution
+            float saTexel = 4.0 * PI / (6.0 * resolution * resolution);
+            float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 0.0001);
+
+            float mipLevel = pc.roughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
+
+            prefilteredColor += textureLod(environmentMap, L, mipLevel).rgb * NdotL;
+            totalWeight += NdotL;
+        }
+    }
+
+    prefilteredColor = prefilteredColor / totalWeight;
+
+    // Write to prefiltered map
+    imageStore(prefilteredMap, ivec3(pixelCoord, pc.currentFace), vec4(prefilteredColor, 1.0));
+}

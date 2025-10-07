@@ -442,11 +442,18 @@ void DescriptorManager::initBindless(uint32_t maxTextures) {
         bindlessFreeIndices.push_back(i);
     }
 
+    // Initialize cubemap arrays (binding 1)
+    bindlessCubemapSlots.resize(bindlessMaxCubemaps, nullptr);
+    bindlessCubemapFreeIndices.reserve(bindlessMaxCubemaps);
+    for (uint32_t i = 0; i < bindlessMaxCubemaps; ++i) {
+        bindlessCubemapFreeIndices.push_back(i);
+    }
+
     // Allocate bindless descriptor set
     bindlessSet = allocateSet("Bindless", 0);
     bindlessEnabled = true;
 
-    violet::Log::info("Renderer", "DescriptorManager bindless initialized with {} max textures", maxTextures);
+    violet::Log::info("Renderer", "DescriptorManager bindless initialized with {} max 2D textures and {} max cubemaps", maxTextures, bindlessMaxCubemaps);
 }
 
 uint32_t DescriptorManager::allocateBindlessTexture(Texture* texture) {
@@ -501,6 +508,60 @@ void DescriptorManager::freeBindlessTexture(uint32_t index) {
     bindlessFreeIndices.push_back(index);
 
     violet::Log::debug("Renderer", "Freed bindless texture at index {}", index);
+}
+
+uint32_t DescriptorManager::allocateBindlessCubemap(Texture* cubemapTexture) {
+    if (!bindlessEnabled) {
+        violet::Log::error("Renderer", "Bindless not enabled - call initBindless() first");
+        return 0;
+    }
+
+    if (bindlessCubemapFreeIndices.empty()) {
+        violet::Log::error("Renderer", "Bindless cubemap array is full (max: {})", bindlessMaxCubemaps);
+        return 0;
+    }
+
+    // Get a free index
+    uint32_t index = bindlessCubemapFreeIndices.back();
+    bindlessCubemapFreeIndices.pop_back();
+
+    bindlessCubemapSlots[index] = cubemapTexture;
+
+    // Update descriptor set (binding 1 for cubemaps)
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    imageInfo.imageView = cubemapTexture->getImageView();
+    imageInfo.sampler = cubemapTexture->getSampler();
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = bindlessSet;
+    write.dstBinding = 1;  // Cubemaps use binding 1
+    write.dstArrayElement = index;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
+
+    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+
+    violet::Log::debug("Renderer", "Allocated bindless cubemap at index {}", index);
+    return index;
+}
+
+void DescriptorManager::freeBindlessCubemap(uint32_t index) {
+    if (index >= bindlessMaxCubemaps) {
+        violet::Log::error("Renderer", "Invalid bindless cubemap index: {}", index);
+        return;
+    }
+
+    if (bindlessCubemapSlots[index] == nullptr) {
+        violet::Log::warn("Renderer", "Attempting to free already-freed bindless cubemap at index {}", index);
+        return;
+    }
+
+    bindlessCubemapSlots[index] = nullptr;
+    bindlessCubemapFreeIndices.push_back(index);
+
+    violet::Log::debug("Renderer", "Freed bindless cubemap at index {}", index);
 }
 
 vk::DescriptorSet DescriptorManager::getBindlessSet() const {

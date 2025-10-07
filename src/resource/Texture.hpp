@@ -60,6 +60,10 @@ public:
     void loadCubemapFromMemory(VulkanContext* context, const eastl::array<const unsigned char*, 6>& faceData,
                                const eastl::array<size_t, 6>& faceSizes, int faceWidth, int faceHeight, int channels);
     void createEmptyCubemap(VulkanContext* context, uint32_t size, vk::Format format, vk::ImageUsageFlags usage);
+    void createEmptyCubemap(VulkanContext* context, uint32_t size, vk::Format format, vk::ImageUsageFlags usage, uint32_t mipLevels);
+
+    // 2D texture support
+    void createEmpty2D(VulkanContext* context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
 
     void cleanup() override;
 
@@ -73,6 +77,9 @@ public:
 
     // Sampler management - set from external source (DescriptorManager)
     void setSampler(vk::Sampler externalSampler) { sampler = externalSampler; }
+
+    // Per-mip image view creation for compute shaders (caller must manage lifetime)
+    vk::raii::ImageView createMipImageView(VulkanContext* context, uint32_t mipLevel) const;
 
 private:
     void createImageView(VulkanContext* context, vk::Format format);
