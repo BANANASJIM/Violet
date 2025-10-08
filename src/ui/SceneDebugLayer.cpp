@@ -1134,15 +1134,15 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
         auto light = LightComponent::createDirectionalLight(
             glm::vec3(-0.3f, -1.0f, -0.3f),
             glm::vec3(1.0f, 1.0f, 1.0f),
-            1.0f
+            30000.0f  // 30,000 lux (bright daylight)
         );
         registry.emplace<LightComponent>(entity, light);
         lightName = "Directional Light";
     } else {
         auto light = LightComponent::createPointLight(
             glm::vec3(1.0f, 1.0f, 1.0f),
-            10.0f,
-            300.0f
+            800.0f,   // 800 lumens (60W bulb equivalent)
+            300.0f    // 300 unit radius
         );
         registry.emplace<LightComponent>(entity, light);
         lightName = "Point Light";
@@ -1204,25 +1204,7 @@ void SceneDebugLayer::renderLightListItem(entt::entity entity, const LightCompon
     ImGui::PopID();
 }
 
-void SceneDebugLayer::renderAttenuationPresets(LightComponent* light) {
-    if (ImGui::Button("Preset: Close Range")) {
-        light->linearAttenuation = 0.22f;
-        light->quadraticAttenuation = 0.20f;
-        light->radius = 50.0f;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Preset: Medium Range")) {
-        light->linearAttenuation = 0.09f;
-        light->quadraticAttenuation = 0.032f;
-        light->radius = 200.0f;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Preset: Long Range")) {
-        light->linearAttenuation = 0.045f;
-        light->quadraticAttenuation = 0.0075f;
-        light->radius = 600.0f;
-    }
-}
+// Removed: Attenuation presets no longer needed with physical light units
 
 void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent* light) {
     if (!world || !light) return;
@@ -1241,7 +1223,17 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
 
     // Common properties
     ImGui::ColorEdit3("Color", &light->color.x);
-    ImGui::DragFloat("Light Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+
+    // Type-specific intensity with physical units
+    if (light->type == LightType::Directional) {
+        ImGui::DragFloat("Illuminance (lux)", &light->intensity, 100.0f, 0.0f, 200000.0f);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+            "Ref: Sunlight ~100k, Overcast ~10k, Office ~500");
+    } else if (light->type == LightType::Point) {
+        ImGui::DragFloat("Luminous Power (lm)", &light->intensity, 10.0f, 0.0f, 10000.0f);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+            "Ref: 100W bulb ~1600lm, 60W ~800lm, Candle ~12lm");
+    }
 
     // Type-specific properties
     if (light->type == LightType::Directional) {
@@ -1268,13 +1260,8 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
 
         ImGui::Separator();
         ImGui::DragFloat("Radius", &light->radius, 1.0f, 1.0f, 1000.0f);
-
-        if (ImGui::TreeNode("Attenuation")) {
-            ImGui::DragFloat("Linear", &light->linearAttenuation, 0.001f, 0.0f, 1.0f, "%.4f");
-            ImGui::DragFloat("Quadratic", &light->quadraticAttenuation, 0.0001f, 0.0f, 1.0f, "%.6f");
-            renderAttenuationPresets(light);
-            ImGui::TreePop();
-        }
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+            "Radius defines smooth falloff boundary (windowing function)");
     }
 
     ImGui::Separator();
@@ -1545,7 +1532,7 @@ void SceneDebugLayer::renderEnvironmentPanel() {
 
         // Environment map parameters
         float exposure = environmentMap.getExposure();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f")) {
+        if (ImGui::DragFloat("Exposure", &exposure, 0.01f, 0.0f, 0.0f, "%.4f")) {
             environmentMap.setExposure(exposure);
         }
 
@@ -1561,17 +1548,54 @@ void SceneDebugLayer::renderEnvironmentPanel() {
 
         ImGui::Separator();
 
-        // PostProcess tone mapping parameters
+        // PostProcess tone mapping parameters (Auto-Exposure + EV100 system)
         if (ImGui::CollapsingHeader("Post-Process Tone Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-            float ppExposure = renderer->getPostProcessExposure();
-            if (ImGui::SliderFloat("PP Exposure", &ppExposure, 0.5f, 5.0f, "%.2f")) {
-                renderer->setPostProcessExposure(ppExposure);
-            }
+            auto& autoExp = renderer->getAutoExposure();
+            auto& params = autoExp.getParams();
+
+            // Auto-exposure toggle
+            ImGui::Checkbox("Auto Exposure", &params.enabled);
             ImGui::SameLine();
-            if (ImGui::SmallButton("Reset##Exposure")) {
-                renderer->setPostProcessExposure(1.5f);
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Automatically adjust exposure based on scene luminance");
             }
 
+            // Manual EV100 control (when auto-exposure disabled)
+            if (!params.enabled) {
+                float manualEV = autoExp.getManualEV100();
+                if (ImGui::SliderFloat("Manual EV100", &manualEV, -2.0f, 16.0f, "%.1f")) {
+                    autoExp.setManualEV100(manualEV);
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reset##ManualEV")) {
+                    autoExp.setManualEV100(9.0f);
+                }
+            } else {
+                // Auto-exposure parameters
+                ImGui::SliderFloat("Adaptation Speed", &params.adaptationSpeed, 0.5f, 5.0f, "%.1f");
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("How quickly exposure adapts to scene changes");
+                }
+
+                ImGui::SliderFloat("Exposure Compensation", &params.exposureCompensation, -4.0f, 4.0f, "%.1f EV");
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Manual offset to auto-computed exposure");
+                }
+
+                // Display current/target EV100
+                ImGui::Text("Current EV100: %.2f", autoExp.getCurrentEV100());
+                ImGui::SameLine();
+                ImGui::TextDisabled("Target: %.2f", autoExp.getTargetEV100());
+            }
+
+            ImGui::Separator();
+
+            // Gamma control
             float ppGamma = renderer->getPostProcessGamma();
             if (ImGui::SliderFloat("Gamma", &ppGamma, 1.8f, 2.6f, "%.2f")) {
                 renderer->setPostProcessGamma(ppGamma);
@@ -1581,7 +1605,9 @@ void SceneDebugLayer::renderEnvironmentPanel() {
                 renderer->setPostProcessGamma(2.2f);
             }
 
-            ImGui::TextDisabled("Using Uncharted2 tone mapping");
+            ImGui::TextDisabled("Using ACES Filmic tone mapping");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                "EV Ref: Night -2, Overcast 0, Sunny 9-10, Direct Sun 15");
         }
 
         ImGui::Separator();

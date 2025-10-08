@@ -155,15 +155,22 @@ enum class LightType : uint32_t {
 struct LightComponent {
     LightType type = LightType::Directional;
     glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
+
+    // Physical light units:
+    // - DirectionalLight: illuminance in lux (lm/m²)
+    //   Examples: Direct sunlight ~100,000 lux, overcast day ~10,000 lux,
+    //             office lighting ~500 lux, full moon ~0.25 lux
+    // - PointLight: luminous power in lumens (lm)
+    //   Examples: 100W incandescent ~1600 lm, 60W incandescent ~800 lm,
+    //             candle ~12.5 lm, LED bulb (60W equiv) ~800 lm
     float intensity = 1.0f;
 
     // For directional light (normalized direction vector)
     glm::vec3 direction = glm::vec3(-0.3f, -1.0f, -0.3f);
 
-    // For point/spot light
-    float radius = 100.0f;      // Light influence radius (also used for culling)
-    float linearAttenuation = 0.09f;    // Linear attenuation factor
-    float quadraticAttenuation = 0.032f; // Quadratic attenuation factor
+    // For point/spot light - influence radius for windowing function and culling
+    // Beyond this radius, light contribution smoothly falls to zero
+    float radius = 100.0f;
 
     // For spot light (future)
     float innerCutoff = 0.0f;
@@ -185,20 +192,28 @@ struct LightComponent {
     LightComponent() = default;
 
     // Helper constructors
-    static LightComponent createDirectionalLight(const glm::vec3& dir, const glm::vec3& col = glm::vec3(1.0f), float intens = 1.0f) {
+    // Create directional light
+    // @param dir Direction vector
+    // @param col RGB color (0-1 linear)
+    // @param illuminance Illuminance in lux (typical: 500-100000)
+    static LightComponent createDirectionalLight(const glm::vec3& dir, const glm::vec3& col = glm::vec3(1.0f), float illuminance = 30000.0f) {
         LightComponent light;
         light.type = LightType::Directional;
         light.direction = glm::normalize(dir);
         light.color = col;
-        light.intensity = intens;
+        light.intensity = illuminance;
         return light;
     }
 
-    static LightComponent createPointLight(const glm::vec3& col = glm::vec3(1.0f), float intens = 1.0f, float rad = 100.0f) {
+    // Create point light
+    // @param col RGB color (0-1 linear)
+    // @param luminousPower Luminous power in lumens (typical: 100-5000)
+    // @param rad Influence radius in world units
+    static LightComponent createPointLight(const glm::vec3& col = glm::vec3(1.0f), float luminousPower = 800.0f, float rad = 100.0f) {
         LightComponent light;
         light.type = LightType::Point;
         light.color = col;
-        light.intensity = intens;
+        light.intensity = luminousPower;
         light.radius = rad;
         return light;
     }

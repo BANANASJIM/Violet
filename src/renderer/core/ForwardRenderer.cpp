@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <EASTL/unique_ptr.h>
+#include <chrono>
 
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/gpu/Buffer.hpp"
@@ -72,6 +73,9 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
             environmentMap.init(context, matMgr, &descriptorManager, &resourceManager->getTextureManager());
         }
     }
+
+    // Initialize auto-exposure system
+    autoExposure.init(context, &descriptorManager, currentExtent);
 
     // Initialize bindless through DescriptorManager
     descriptorManager.initBindless(1024);
@@ -164,12 +168,39 @@ void ForwardRenderer::cleanup() {
 
 void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     currentWorld = &world;
+
+    // Calculate deltaTime for auto-exposure
+    auto currentTime = std::chrono::steady_clock::now();
+    float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+    lastFrameTime = currentTime;
+
+    // Update auto-exposure (smooth interpolation)
+    autoExposure.update(deltaTime);
+
     updateGlobalUniforms(world, frameIndex);
     collectRenderables(world);
 }
 
 void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
     currentExtent = extent;
+
+    // Create sampler for auto-exposure (linear sampling)
+    static vk::Sampler linearSampler = VK_NULL_HANDLE;
+    if (!linearSampler) {
+        vk::SamplerCreateInfo samplerInfo{};
+        samplerInfo.magFilter = vk::Filter::eLinear;
+        samplerInfo.minFilter = vk::Filter::eLinear;
+        samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+        samplerInfo.anisotropyEnable = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+        linearSampler = context->getDevice().createSampler(samplerInfo);
+    }
 
     for (size_t i = 0; i < passes.size(); ++i) {
         // Insert explicit barrier between passes if needed
@@ -198,6 +229,15 @@ void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebu
 
         pass->execute(cmd, frameIndex);
         pass->end(cmd);
+
+        // After main pass (pass 0), compute luminance for auto-exposure
+        if (i == 0 && autoExposure.getParams().enabled) {
+            RenderPass* mainPass = getRenderPass(0);
+            if (mainPass) {
+                vk::ImageView hdrView = mainPass->getColorImageView(0);
+                autoExposure.computeLuminance(cmd, hdrView, linearSampler);
+            }
+        }
     }
 }
 
@@ -332,12 +372,13 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
             );
         }
 
-        // Push constants for tone mapping parameters (exposure + gamma)
+        // Push constants for tone mapping parameters (EV100 + gamma)
         struct PostProcessParams {
-            float exposure;
+            float ev100;
             float gamma;
         } params;
-        params.exposure = postProcessExposure;
+        // Use auto-exposure EV100 if enabled, otherwise use manual value
+        params.ev100 = autoExposure.getCurrentEV100();
         params.gamma = postProcessGamma;
 
         cmd.pushConstants(
@@ -779,16 +820,9 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
             cachedUBO.lightPositions[lightIndex] = glm::vec4(transform.world.position, 1.0f);  // w=1 for point
         }
 
-        // Store color with intensity and radius
+        // Store color with intensity (physical units: lux for directional, lumens for point) and radius
         glm::vec3 finalColor = light.color * light.intensity;
         cachedUBO.lightColors[lightIndex] = glm::vec4(finalColor, light.radius);
-
-        // Store attenuation parameters
-        cachedUBO.lightParams[lightIndex] = glm::vec4(
-            light.linearAttenuation,
-            light.quadraticAttenuation,
-            0.0f, 0.0f  // Reserved for future use
-        );
 
         cachedUBO.numLights++;
     }
@@ -960,6 +994,16 @@ void ForwardRenderer::registerDescriptorLayouts() {
             {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
         },
         .frequency = UpdateFrequency::Static
+    });
+
+    // Auto-exposure luminance compute - per-frame update
+    descriptorManager.registerLayout({
+        .name = "LuminanceCompute",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 1, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eCompute}
+        },
+        .frequency = UpdateFrequency::PerFrame
     });
 
     violet::Log::info("Renderer", "Registered all descriptor layouts declaratively");

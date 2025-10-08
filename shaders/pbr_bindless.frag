@@ -16,10 +16,9 @@ mat4 proj;
 vec3 cameraPos;
 float padding0;
 
-// Light data
-vec4 lightPositions[8];
-vec4 lightColors[8];
-vec4 lightParams[8];
+// Light data (physical units: lux for directional, lumens for point)
+vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
+vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
 int numLights;
 vec3 ambientLight;
 
@@ -210,34 +209,37 @@ for (int i = 0; i < global.numLights; i++) {
     vec3 radiance;
 
     float lightType = global.lightPositions[i].w;
-    vec3 lightColor = global.lightColors[i].xyz;
+    vec3 lightColorIntensity = global.lightColors[i].xyz;  // color * physical intensity
 
     if (lightType < 0.5) {
         // Directional light (type == 0)
+        // lightColorIntensity = color * illuminance (lux)
         L = -normalize(global.lightPositions[i].xyz);
-        radiance = lightColor;
+        radiance = lightColorIntensity;
     } else {
         // Point light (type == 1)
+        // Physical point light attenuation: Φ / (4π * r²)
+        // where Φ is luminous power in lumens
         vec3 lightPos = global.lightPositions[i].xyz;
         L = normalize(lightPos - fragPos);
         float distance = length(lightPos - fragPos);
 
-        // Check if within light radius
+        // Check if within light radius (for early culling)
         float radius = global.lightColors[i].w;
         if (distance > radius) {
             continue;
         }
 
-        // Attenuation
-        float linear = global.lightParams[i].x;
-        float quadratic = global.lightParams[i].y;
-        float attenuation = 1.0 / (1.0 + linear * distance + quadratic * distance * distance);
+        // Inverse square law: illuminance = luminousPower / (4π * distance²)
+        // lightColorIntensity = color * luminousPower (lumens)
+        float illuminance = 1.0 / (4.0 * PI * distance * distance);
 
-        // Soft cutoff at radius boundary
-        float falloff = clamp(1.0 - (distance / radius), 0.0, 1.0);
-        attenuation *= falloff;
+        // Windowing function for smooth falloff at radius boundary (UE4/Frostbite method)
+        // Avoids hard cutoff and maintains energy conservation
+        float distanceRatio = distance / radius;
+        float windowTerm = pow(clamp(1.0 - pow(distanceRatio, 4.0), 0.0, 1.0), 2.0);
 
-        radiance = lightColor * attenuation;
+        radiance = lightColorIntensity * illuminance * windowTerm;
     }
 
     // Cook-Torrance BRDF:

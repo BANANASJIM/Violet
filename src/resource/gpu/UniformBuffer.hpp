@@ -9,20 +9,6 @@ namespace violet {
 
 class VulkanContext;
 
-struct UniformBufferObject {
-    alignas(16) glm::mat4 model;
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
-};
-
-struct PushConstants {
-    alignas(16) glm::vec4 baseColor;
-    alignas(4) float metallic;
-    alignas(4) float roughness;
-    alignas(4) float normalScale;
-    alignas(4) float occlusionStrength;
-};
-
 class UniformBuffer : public GPUResource {
 public:
     UniformBuffer() = default;

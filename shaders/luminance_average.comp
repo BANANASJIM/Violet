@@ -1,0 +1,69 @@
+#version 450
+
+// Compute average scene luminance for auto-exposure
+// Simplified approach: downsample and compute average in single workgroup
+// Reference: https://bruop.github.io/exposure/
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Input: HDR scene color
+layout(set = 0, binding = 0) uniform sampler2D hdrScene;
+
+// Output: Luminance statistics buffer
+layout(set = 0, binding = 1) buffer LuminanceBuffer {
+    float avgLogLuminance;  // Average log luminance (output)
+    float minLuminance;     // Minimum luminance (reserved)
+    float maxLuminance;     // Maximum luminance (reserved)
+    uint sampleCount;       // Number of workgroups
+} luminance;
+
+// Shared memory for reduction
+shared float sharedLogLum[256];
+
+// Rec. 709 luminance weights
+float getLuminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    ivec2 texSize = textureSize(hdrScene, 0);
+
+    // Each thread samples from a grid (downsample scene)
+    uint localIdx = gl_LocalInvocationID.y * 16 + gl_LocalInvocationID.x;
+
+    // Map to grid position (divide scene into 16x16 grid)
+    vec2 gridPos = vec2(gl_LocalInvocationID.xy);
+    vec2 uv = (gridPos + 0.5) / 16.0;  // Normalize to [0,1]
+
+    // Sample HDR scene
+    vec3 color = texture(hdrScene, uv).rgb;
+
+    // Calculate luminance
+    float lum = getLuminance(color);
+
+    // Log luminance for perceptual averaging
+    float logLum = log2(clamp(lum, 0.001, 65504.0));
+
+    // Store in shared memory
+    sharedLogLum[localIdx] = logLum;
+
+    barrier();
+
+    // Parallel reduction
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (localIdx < stride) {
+            sharedLogLum[localIdx] += sharedLogLum[localIdx + stride];
+        }
+        barrier();
+    }
+
+    // First thread writes result
+    if (localIdx == 0) {
+        // Average of 256 samples
+        float avgLog = sharedLogLum[0] / 256.0;
+
+        // Only one workgroup, so directly write result
+        luminance.avgLogLuminance = avgLog;
+        luminance.sampleCount = 1;
+    }
+}

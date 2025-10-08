@@ -21,6 +21,7 @@
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/core/DebugRenderer.hpp"
 #include "renderer/effect/EnvironmentMap.hpp"
+#include "renderer/effect/AutoExposure.hpp"
 #include "renderer/core/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 
@@ -75,9 +76,9 @@ private:
         alignas(4) float padding0;
 
         // Light data (support up to MAX_LIGHTS lights)
+        // Physical units: DirectionalLight uses lux, PointLight uses lumens
         alignas(16) glm::vec4 lightPositions[MAX_LIGHTS];  // xyz=position/direction, w=type (0=dir, 1=point)
-        alignas(16) glm::vec4 lightColors[MAX_LIGHTS];     // xyz=color*intensity, w=radius (for point lights)
-        alignas(16) glm::vec4 lightParams[MAX_LIGHTS];     // x=linear, y=quadratic attenuation, zw=reserved
+        alignas(16) glm::vec4 lightColors[MAX_LIGHTS];     // xyz=color*intensity (physical units), w=radius
         alignas(4) int numLights;
         alignas(16) glm::vec3 ambientLight;  // Ambient light color
 
@@ -159,14 +160,17 @@ public:
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
+    // Auto-exposure access
+    AutoExposure& getAutoExposure() { return autoExposure; }
+
     // PostProcess access
     Material* getPostProcessMaterial() const { return postProcessMaterial; }
     void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
 
-    // PostProcess tone mapping parameters
-    void setPostProcessExposure(float exposure) { postProcessExposure = exposure; }
+    // PostProcess tone mapping parameters (EV100 system)
+    void setPostProcessEV100(float ev) { postProcessEV100 = ev; }
     void setPostProcessGamma(float gamma) { postProcessGamma = gamma; }
-    float getPostProcessExposure() const { return postProcessExposure; }
+    float getPostProcessEV100() const { return postProcessEV100; }
     float getPostProcessGamma() const { return postProcessGamma; }
 
     // PBR Bindless Material access (shared material for all PBR instances)
@@ -209,17 +213,23 @@ private:
     // Descriptor sets owned by renderer
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
 
-    // PostProcess tone mapping parameters
-    float postProcessExposure = 1.5f;  // Default 1.5 (lower than Vulkan's 4.5 due to PI adjustment)
+    // PostProcess tone mapping parameters (EV100 system)
+    // EV100 = Exposure Value at ISO 100 (photographic exposure)
+    // Typical values: -2 (night), 0 (overcast), 9-10 (sunny), 15 (direct sun)
+    float postProcessEV100 = 9.0f;  // Default: sunny day
     float postProcessGamma = 2.2f;
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
     EnvironmentMap environmentMap;
+    AutoExposure autoExposure;
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
     DescriptorManager descriptorManager;
     ResourceManager* resourceManager = nullptr;  // Injected dependency
+
+    // Time tracking for auto-exposure
+    std::chrono::steady_clock::time_point lastFrameTime;
 
 };
 

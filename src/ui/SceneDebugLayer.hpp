@@ -103,7 +103,6 @@ private:
     const char* getLightTypeString(LightType type);
     void renderLightListItem(entt::entity entity, const LightComponent& light, int index);
     void renderLightProperties(entt::entity entity, LightComponent* light);
-    void renderAttenuationPresets(LightComponent* light);
 
     // Scene node reparenting methods
     void handleNodeReparenting(uint32_t draggedNodeId, uint32_t newParentId);

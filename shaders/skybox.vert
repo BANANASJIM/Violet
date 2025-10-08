@@ -6,10 +6,9 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     vec3 cameraPos;
     float padding0;
 
-    // Light data
-    vec4 lightPositions[8];
-    vec4 lightColors[8];
-    vec4 lightParams[8];
+    // Light data (physical units: lux for directional, lumens for point)
+    vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
+    vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
     int numLights;
     vec3 ambientLight;
 
@@ -17,7 +16,7 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     float skyboxExposure;
     float skyboxRotation;
     int skyboxEnabled;
-    float padding1;
+    float iblIntensity;
 
     // IBL bindless texture indices
     uint environmentMapIndex;

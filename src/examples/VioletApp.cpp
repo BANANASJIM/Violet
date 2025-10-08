@@ -168,7 +168,7 @@ void VioletApp::initializeScene() {
     auto light = LightComponent::createDirectionalLight(
         glm::vec3(-0.3f, -1.0f, -0.3f),  // Direction from upper-left
         glm::vec3(1.0f, 0.95f, 0.8f),    // Warm white color
-        3.0f                              // Intensity
+        30000.0f                          // Illuminance in lux (bright daylight)
     );
     world.getRegistry().emplace<LightComponent>(lightEntity, light);
 
@@ -245,7 +245,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
                     auto light = LightComponent::createDirectionalLight(
                         glm::vec3(-0.3f, -1.0f, -0.3f),
                         glm::vec3(1.0f, 0.95f, 0.8f),
-                        3.0f
+                        30000.0f  // Illuminance in lux
                     );
                     world.getRegistry().emplace<LightComponent>(lightEntity, light);
 
