@@ -2,7 +2,7 @@
 
 #include "resource/Texture.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "core/Log.hpp"
 
 namespace violet {

@@ -1,7 +1,7 @@
 #include "ResourceManager.hpp"
 #include "core/Log.hpp"
-#include "renderer/core/VulkanContext.hpp"
-#include "renderer/descriptor/DescriptorManager.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 
 namespace violet {
 

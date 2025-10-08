@@ -6,7 +6,7 @@
 #include <EASTL/unique_ptr.h>
 #include <functional>
 #include "resource/gpu/ResourceFactory.hpp"
-#include "renderer/core/Pass.hpp"
+#include "renderer/vulkan/Pass.hpp"
 
 namespace violet {
 

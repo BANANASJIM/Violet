@@ -9,8 +9,7 @@
 
 #include "core/Exception.hpp"
 
-#include "resource/gpu/Buffer.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 

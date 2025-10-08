@@ -8,8 +8,8 @@
 #include "resource/Texture.hpp"
 #include "resource/Material.hpp"
 #include "resource/MaterialManager.hpp"
-#include "renderer/core/ForwardRenderer.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/ForwardRenderer.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 
 #include <algorithm>
 #define GLM_ENABLE_EXPERIMENTAL

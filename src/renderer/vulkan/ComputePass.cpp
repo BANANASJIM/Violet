@@ -1,5 +1,5 @@
-#include "renderer/core/ComputePass.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/ComputePass.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 

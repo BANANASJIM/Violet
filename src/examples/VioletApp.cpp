@@ -9,8 +9,6 @@
 #include "core/Log.hpp"
 #include "core/Exception.hpp"
 #include "core/FileSystem.hpp"
-#include "examples/TestData.hpp"
-#include "examples/TestTexture.hpp"
 #include "resource/Mesh.hpp"
 #include "scene/Scene.hpp"
 

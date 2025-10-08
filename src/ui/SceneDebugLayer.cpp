@@ -8,7 +8,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
-#include "renderer/core/ForwardRenderer.hpp"
+#include "renderer/ForwardRenderer.hpp"
 #include "ecs/Components.hpp"
 #include "math/Ray.hpp"
 #include "scene/Scene.hpp"
@@ -1134,7 +1134,7 @@ entt::entity SceneDebugLayer::createLightEntity(LightType type, const glm::vec3&
         auto light = LightComponent::createDirectionalLight(
             glm::vec3(-0.3f, -1.0f, -0.3f),
             glm::vec3(1.0f, 1.0f, 1.0f),
-            30000.0f  // 30,000 lux (bright daylight)
+            30.0f  // 30,000 lux (bright daylight)
         );
         registry.emplace<LightComponent>(entity, light);
         lightName = "Directional Light";

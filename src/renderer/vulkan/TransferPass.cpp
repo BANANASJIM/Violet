@@ -1,5 +1,5 @@
-#include "renderer/core/TransferPass.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/TransferPass.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "core/Log.hpp"
 
 namespace violet {

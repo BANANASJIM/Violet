@@ -12,17 +12,17 @@
 
 #include <entt/entt.hpp>
 
-#include "renderer/DescriptorSet.hpp"
-#include "renderer/descriptor/DescriptorManager.hpp"
+#include "renderer/vulkan/DescriptorSet.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/MaterialManager.hpp"
 #include "renderer/Renderable.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
-#include "renderer/core/DebugRenderer.hpp"
+#include "renderer/DebugRenderer.hpp"
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/effect/AutoExposure.hpp"
-#include "renderer/core/RenderPass.hpp"
+#include "renderer/vulkan/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 
 namespace violet {

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "renderer/core/Pass.hpp"
-#include "renderer/pipeline/ComputePipeline.hpp"
+#include "renderer/vulkan/Pass.hpp"
+#include "renderer/vulkan/ComputePipeline.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>

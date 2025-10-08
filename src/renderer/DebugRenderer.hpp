@@ -9,8 +9,8 @@
 #include "renderer/BaseRenderer.hpp"
 #include "resource/Vertex.hpp"
 #include "resource/gpu/GPUResource.hpp"
-#include "renderer/pipeline/GraphicsPipeline.hpp"
-#include "renderer/core/RenderPass.hpp"
+#include "renderer/vulkan/GraphicsPipeline.hpp"
+#include "renderer/vulkan/RenderPass.hpp"
 #include "math/AABB.hpp"
 #include "math/Frustum.hpp"
 #include <entt/entt.hpp>

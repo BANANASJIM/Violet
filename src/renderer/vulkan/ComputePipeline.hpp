@@ -1,6 +1,6 @@
 #pragma once
 
-#include "renderer/PipelineBase.hpp"
+#include "renderer/vulkan/PipelineBase.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>

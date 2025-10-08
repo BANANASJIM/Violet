@@ -1,7 +1,6 @@
 #include "ResourceLoader.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/Texture.hpp"
-#include "resource/gpu/Buffer.hpp"
 #include "core/Log.hpp"
 
 namespace violet {

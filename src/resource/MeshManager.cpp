@@ -1,6 +1,6 @@
 #include "MeshManager.hpp"
 #include "core/Log.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/Mesh.hpp"
 
 namespace violet {

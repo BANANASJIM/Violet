@@ -1,9 +1,9 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
-#include "renderer/pipeline/ComputePipeline.hpp"
+#include "renderer/vulkan/ComputePipeline.hpp"
 #include <EASTL/unique_ptr.h>
 
 namespace violet {

@@ -1,6 +1,6 @@
 #include "AutoExposure.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
-#include "renderer/descriptor/DescriptorManager.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Log.hpp"
 #include <cmath>

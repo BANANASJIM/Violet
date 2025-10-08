@@ -1,6 +1,5 @@
 #include "resource/gpu/ResourceFactory.hpp"
-#include "renderer/core/VulkanContext.hpp"
-#include "resource/gpu/Buffer.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/Texture.hpp"
 #include "core/Log.hpp"
 #include <cassert>

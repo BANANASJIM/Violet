@@ -7,7 +7,7 @@
 #include <EASTL/string.h>
 #include <EASTL/fixed_vector.h>
 
-#include "renderer/pipeline/GraphicsPipeline.hpp"
+#include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "resource/TextureManager.hpp"
 
 namespace violet {

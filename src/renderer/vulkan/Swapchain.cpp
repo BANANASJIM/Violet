@@ -1,5 +1,5 @@
 #include "Swapchain.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "core/Log.hpp"
 #include <GLFW/glfw3.h>

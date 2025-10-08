@@ -5,7 +5,7 @@
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
 #include <EASTL/unique_ptr.h>
-#include "renderer/DescriptorSet.hpp"
+#include "renderer/vulkan/DescriptorSet.hpp"
 
 namespace violet {
 

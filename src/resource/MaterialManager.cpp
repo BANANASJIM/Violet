@@ -2,11 +2,11 @@
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
-#include "renderer/core/VulkanContext.hpp"
-#include "renderer/descriptor/DescriptorManager.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/Texture.hpp"
-#include "renderer/core/RenderPass.hpp"
+#include "renderer/vulkan/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 
 #include <EASTL/algorithm.h>

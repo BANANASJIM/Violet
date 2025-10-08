@@ -1,9 +1,8 @@
-#include "renderer/descriptor/DescriptorManager.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
-#include "resource/gpu/Buffer.hpp"
 #include "core/Log.hpp"
 #include <functional>
 #include <EASTL/algorithm.h>

@@ -11,7 +11,7 @@
 #include <EASTL/hash_map.h>
 
 #include "renderer/camera/Camera.hpp"
-#include "renderer/CameraController.hpp"
+#include "input/CameraController.hpp"
 #include "renderer/Renderable.hpp"
 #include "resource/Mesh.hpp"
 #include "math/AABB.hpp"

@@ -190,7 +190,7 @@ if (baseColor.a < materials.data[push.materialID].alphaCutoff) {
     discard;
 }
 
-vec3 albedo = pow(baseColor.rgb, vec3(2.2)); // Convert from sRGB to linear
+vec3 albedo = baseColor.rgb; // Already linear (sRGB textures auto-converted by Vulkan)
 
 // Get normal from normal map
 vec3 N = getNormalFromMap();

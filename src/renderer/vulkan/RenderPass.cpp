@@ -1,5 +1,5 @@
-#include "renderer/core/RenderPass.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include <EASTL/array.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "renderer/core/TransferPass.hpp"
+#include "renderer/vulkan/TransferPass.hpp"
 #include "ResourceFactory.hpp"
 #include <EASTL/vector.h>
 #include <EASTL/string.h>

@@ -1,4 +1,4 @@
-#include "renderer/core/ForwardRenderer.hpp"
+#include "renderer/ForwardRenderer.hpp"
 
 #include <glm/glm.hpp>
 
@@ -6,7 +6,6 @@
 #include <chrono>
 
 #include "resource/gpu/ResourceFactory.hpp"
-#include "resource/gpu/Buffer.hpp"
 #include "resource/ResourceManager.hpp"
 
 #include "core/Log.hpp"
@@ -16,13 +15,13 @@
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/camera/Camera.hpp"
-#include "renderer/DescriptorSet.hpp"
+#include "renderer/vulkan/DescriptorSet.hpp"
 #include "resource/Material.hpp"
 #include "resource/Mesh.hpp"
-#include "renderer/pipeline/GraphicsPipeline.hpp"
-#include "renderer/core/RenderPass.hpp"
+#include "renderer/vulkan/GraphicsPipeline.hpp"
+#include "renderer/vulkan/RenderPass.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 
 namespace violet {
 

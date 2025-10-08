@@ -1,5 +1,5 @@
-#include "renderer/pipeline/ComputePipeline.hpp"
-#include "renderer/core/VulkanContext.hpp"
+#include "renderer/vulkan/ComputePipeline.hpp"
+#include "renderer/vulkan/VulkanContext.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
