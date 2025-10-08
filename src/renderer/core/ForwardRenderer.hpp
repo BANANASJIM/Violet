@@ -163,6 +163,12 @@ public:
     Material* getPostProcessMaterial() const { return postProcessMaterial; }
     void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
 
+    // PostProcess tone mapping parameters
+    void setPostProcessExposure(float exposure) { postProcessExposure = exposure; }
+    void setPostProcessGamma(float gamma) { postProcessGamma = gamma; }
+    float getPostProcessExposure() const { return postProcessExposure; }
+    float getPostProcessGamma() const { return postProcessGamma; }
+
     // PBR Bindless Material access (shared material for all PBR instances)
     Material* getPBRBindlessMaterial() const { return pbrBindlessMaterial; }
 
@@ -202,6 +208,10 @@ private:
 
     // Descriptor sets owned by renderer
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
+
+    // PostProcess tone mapping parameters
+    float postProcessExposure = 1.5f;  // Default 1.5 (lower than Vulkan's 4.5 due to PI adjustment)
+    float postProcessGamma = 2.2f;
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;

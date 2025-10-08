@@ -250,6 +250,57 @@ void DebugRenderer::generateAABBGeometry(const AABB& aabb, const glm::vec3& colo
     }
 }
 
+void DebugRenderer::generateSphereGeometry(const glm::vec3& center, float radius, const glm::vec3& color,
+                                          eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices,
+                                          uint32_t segments, uint32_t rings) {
+    uint32_t baseVertexIndex = static_cast<uint32_t>(vertices.size());
+
+    // Generate vertices using spherical coordinates
+    // Latitude rings (horizontal circles) and longitude segments (vertical semicircles)
+    for (uint32_t ring = 0; ring <= rings; ++ring) {
+        float theta = static_cast<float>(ring) * glm::pi<float>() / static_cast<float>(rings);
+        float sinTheta = glm::sin(theta);
+        float cosTheta = glm::cos(theta);
+
+        for (uint32_t seg = 0; seg <= segments; ++seg) {
+            float phi = static_cast<float>(seg) * 2.0f * glm::pi<float>() / static_cast<float>(segments);
+            float sinPhi = glm::sin(phi);
+            float cosPhi = glm::cos(phi);
+
+            // Spherical to Cartesian coordinates
+            glm::vec3 pos;
+            pos.x = center.x + radius * sinTheta * cosPhi;
+            pos.y = center.y + radius * cosTheta;
+            pos.z = center.z + radius * sinTheta * sinPhi;
+
+            Vertex v;
+            v.pos = pos;
+            v.color = color;
+            vertices.push_back(v);
+        }
+    }
+
+    // Generate line indices for latitude rings (horizontal circles)
+    for (uint32_t ring = 0; ring <= rings; ++ring) {
+        for (uint32_t seg = 0; seg < segments; ++seg) {
+            uint32_t current = baseVertexIndex + ring * (segments + 1) + seg;
+            uint32_t next = baseVertexIndex + ring * (segments + 1) + (seg + 1);
+            indices.push_back(current);
+            indices.push_back(next);
+        }
+    }
+
+    // Generate line indices for longitude segments (vertical semicircles)
+    for (uint32_t seg = 0; seg <= segments; ++seg) {
+        for (uint32_t ring = 0; ring < rings; ++ring) {
+            uint32_t current = baseVertexIndex + ring * (segments + 1) + seg;
+            uint32_t below = baseVertexIndex + (ring + 1) * (segments + 1) + seg;
+            indices.push_back(current);
+            indices.push_back(below);
+        }
+    }
+}
+
 void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum) {
     if (!enabled || !showFrustumDebug || !debugPipeline) {
         return;
@@ -306,6 +357,64 @@ void DebugRenderer::renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIn
     eastl::vector<AABB> aabbs = { aabb };
     eastl::vector<bool> visibility = { isVisible };
     renderAABBs(commandBuffer, frameIndex, aabbs, visibility);
+}
+
+void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
+                                const glm::vec3& center, float radius, const glm::vec3& color) {
+    if (!enabled || !debugPipeline) {
+        return;
+    }
+
+    // Generate sphere geometry
+    eastl::vector<Vertex> vertices;
+    eastl::vector<uint32_t> indices;
+    generateSphereGeometry(center, radius, color, vertices, indices);
+
+    if (vertices.empty() || indices.empty()) {
+        return;
+    }
+
+    // Check buffer size limits
+    if (vertices.size() > MAX_DEBUG_VERTICES || indices.size() > MAX_DEBUG_INDICES) {
+        violet::Log::warn("Renderer", "Debug sphere geometry exceeds buffer limits: {} vertices, {} indices",
+                vertices.size(), indices.size());
+        return;
+    }
+
+    auto& frame = frameData[frameIndex];
+
+    // Update vertex buffer
+    if (frame.vertexBuffer && frame.vertexBuffer->mappedData) {
+        memcpy(frame.vertexBuffer->mappedData, vertices.data(),
+               vertices.size() * sizeof(Vertex));
+        frame.vertexCount = static_cast<uint32_t>(vertices.size());
+    }
+
+    // Update index buffer
+    if (frame.indexBuffer && frame.indexBuffer->mappedData) {
+        memcpy(frame.indexBuffer->mappedData, indices.data(),
+               indices.size() * sizeof(uint32_t));
+        frame.indexCount = static_cast<uint32_t>(indices.size());
+    }
+
+    // Bind pipeline
+    debugPipeline->bind(commandBuffer);
+
+    // Use BaseRenderer's bindGlobalDescriptors helper
+    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
+
+    // Bind vertex and index buffers
+    vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
+    vk::DeviceSize offsets[] = { 0 };
+    commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+    commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
+
+    // Use BaseRenderer's pushModelMatrix helper (identity matrix since sphere is already in world space)
+    pushModelMatrix(commandBuffer, debugPipeline->getPipelineLayout(), glm::mat4(1.0f));
+
+    // Draw
+    commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
 }
 
 void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask) {
@@ -648,40 +757,45 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
 
 void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
                                         entt::registry& world, const ForwardRenderer& renderer) {
-    if (!enabled || selectedEntity == entt::null || !wireframePipeline) {
+    if (!enabled || selectedEntity == entt::null) {
         return;
     }
 
     // Get entity components
     auto* meshComp = world.try_get<MeshComponent>(selectedEntity);
     auto* transformComp = world.try_get<TransformComponent>(selectedEntity);
+    auto* lightComp = world.try_get<LightComponent>(selectedEntity);
 
-    if (!meshComp || !meshComp->mesh || !transformComp) {
-        return;
+    // Render mesh wireframe if entity has a mesh
+    if (meshComp && meshComp->mesh && transformComp && wireframePipeline) {
+        const Mesh* mesh = meshComp->mesh.get();
+
+        // Bind wireframe pipeline (configured for triangle list wireframe rendering)
+        wireframePipeline->bind(commandBuffer);
+
+        // Use BaseRenderer's bindGlobalDescriptors helper
+        vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+        bindGlobalDescriptors(commandBuffer, wireframePipeline->getPipelineLayout(), globalSet, 0);
+
+        // Use BaseRenderer's bindVertexIndexBuffers helper
+        bindVertexIndexBuffers(commandBuffer, mesh);
+
+        if (mesh->getVertexBuffer().getBuffer() && mesh->getIndexBuffer().getBuffer()) {
+            // Use BaseRenderer's pushModelMatrix helper
+            pushModelMatrix(commandBuffer, wireframePipeline->getPipelineLayout(), transformComp->world.getMatrix());
+
+            // Render all submeshes as wireframe
+            for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
+                const SubMesh& subMesh = mesh->getSubMesh(i);
+                commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
+            }
+        }
     }
 
-    const Mesh* mesh = meshComp->mesh.get();
-
-    // Bind wireframe pipeline (configured for triangle list wireframe rendering)
-    wireframePipeline->bind(commandBuffer);
-
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-    bindGlobalDescriptors(commandBuffer, wireframePipeline->getPipelineLayout(), globalSet, 0);
-
-    // Use BaseRenderer's bindVertexIndexBuffers helper
-    bindVertexIndexBuffers(commandBuffer, mesh);
-
-    if (mesh->getVertexBuffer().getBuffer() && mesh->getIndexBuffer().getBuffer()) {
-        // Use BaseRenderer's pushModelMatrix helper
-        pushModelMatrix(commandBuffer, wireframePipeline->getPipelineLayout(), transformComp->world.getMatrix());
-
-        // Render all submeshes as wireframe
-        for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
-            const SubMesh& subMesh = mesh->getSubMesh(i);
-            commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
-        }
-
+    // Render point light influence sphere if entity is a point light
+    if (lightComp && lightComp->type == LightType::Point && transformComp) {
+        renderSphere(commandBuffer, frameIndex, transformComp->world.position,
+                    lightComp->radius, DebugColors::SELECTED_ENTITY);
     }
 }
 

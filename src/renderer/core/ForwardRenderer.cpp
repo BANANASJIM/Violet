@@ -332,6 +332,22 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
             );
         }
 
+        // Push constants for tone mapping parameters (exposure + gamma)
+        struct PostProcessParams {
+            float exposure;
+            float gamma;
+        } params;
+        params.exposure = postProcessExposure;
+        params.gamma = postProcessGamma;
+
+        cmd.pushConstants(
+            postProcessMaterial->getPipelineLayout(),
+            vk::ShaderStageFlagBits::eFragment,
+            0,
+            sizeof(PostProcessParams),
+            &params
+        );
+
         // Draw fullscreen quad (3 vertices, no vertex buffer)
         cmd.draw(3, 1, 0, 0);
     };

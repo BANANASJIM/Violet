@@ -175,6 +175,13 @@ Material* MaterialManager::createPostProcessMaterial(RenderPass* renderPass) {
     postProcessConfig.depthCompareOp = vk::CompareOp::eAlways;
     postProcessConfig.useVertexInput = false;
 
+    // Add push constant for tone mapping parameters (exposure + gamma)
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(float) * 2;  // exposure + gamma
+    postProcessConfig.pushConstantRanges.push_back(pushConstant);
+
     return createMaterialWithConfig(
         FileSystem::resolveRelativePath("build/shaders/postprocess.vert.spv"),
         FileSystem::resolveRelativePath("build/shaders/postprocess.frag.spv"),

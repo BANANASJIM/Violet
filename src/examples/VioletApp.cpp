@@ -112,6 +112,13 @@ void VioletApp::createResources() {
             }
         }
     );
+
+    // Load default HDR environment map
+    eastl::string defaultHDR = violet::FileSystem::resolveRelativePath("assets/textures/stadium_exterior_4k.hdr");
+    violet::Log::info("App", "Loading default HDR environment map: {}", defaultHDR.c_str());
+    renderer.getEnvironmentMap().loadHDR(defaultHDR);
+    renderer.getEnvironmentMap().generateIBLMaps();
+    violet::Log::info("App", "Default HDR environment map loaded successfully");
 }
 
 // createTestResources removed - using MaterialManager default textures instead

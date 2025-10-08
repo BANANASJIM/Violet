@@ -674,6 +674,18 @@ void SceneDebugLayer::renderGizmo() {
             light->direction = glm::normalize(rotationMatrix * glm::vec3(0.0f, -1.0f, 0.0f));
         }
 
+        // Special handling for point lights: scale controls radius
+        if (light && light->type == LightType::Point &&
+            currentGizmoOperation == ImGuizmo::SCALE) {
+            // Use uniform scale (average of xyz) as radius multiplier
+            float scaleMultiplier = (scale.x + scale.y + scale.z) / 3.0f;
+            light->radius *= scaleMultiplier;
+            // Clamp radius to reasonable range
+            light->radius = glm::clamp(light->radius, 1.0f, 10000.0f);
+            // Reset scale to (1,1,1) to prevent visual distortion
+            transform->local.scale = glm::vec3(1.0f);
+        }
+
         // Update world transforms through hierarchy if scene is available
         if (scene) {
             scene->updateWorldTransforms(world->getRegistry());
@@ -1229,7 +1241,7 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
 
     // Common properties
     ImGui::ColorEdit3("Color", &light->color.x);
-    ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+    ImGui::DragFloat("Light Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
 
     // Type-specific properties
     if (light->type == LightType::Directional) {
@@ -1251,7 +1263,7 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
                 transform->world.position.y,
                 transform->world.position.z);
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                "Use gizmo in viewport to adjust position (T key)");
+                "Tip: Use gizmo to adjust position (T) and radius (E)");
         }
 
         ImGui::Separator();
@@ -1543,8 +1555,33 @@ void SceneDebugLayer::renderEnvironmentPanel() {
         }
 
         float intensity = environmentMap.getIntensity();
-        if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 3.0f, "%.2f")) {
+        if (ImGui::SliderFloat("IBL Intensity", &intensity, 0.0f, 3.0f, "%.2f")) {
             environmentMap.setIntensity(intensity);
+        }
+
+        ImGui::Separator();
+
+        // PostProcess tone mapping parameters
+        if (ImGui::CollapsingHeader("Post-Process Tone Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+            float ppExposure = renderer->getPostProcessExposure();
+            if (ImGui::SliderFloat("PP Exposure", &ppExposure, 0.5f, 5.0f, "%.2f")) {
+                renderer->setPostProcessExposure(ppExposure);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##Exposure")) {
+                renderer->setPostProcessExposure(1.5f);
+            }
+
+            float ppGamma = renderer->getPostProcessGamma();
+            if (ImGui::SliderFloat("Gamma", &ppGamma, 1.8f, 2.6f, "%.2f")) {
+                renderer->setPostProcessGamma(ppGamma);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##Gamma")) {
+                renderer->setPostProcessGamma(2.2f);
+            }
+
+            ImGui::TextDisabled("Using Uncharted2 tone mapping");
         }
 
         ImGui::Separator();

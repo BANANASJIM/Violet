@@ -56,6 +56,7 @@ public:
     void renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible);
     void renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask);
     void renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length = 1000.0f);
+    void renderSphere(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& center, float radius, const glm::vec3& color);
 
     // Batched ray rendering for multiple rays
     void beginRayBatch();
@@ -100,6 +101,7 @@ private:
     void setupOverlayPass(vk::Format swapchainFormat);
     void generateFrustumGeometry(const Frustum& frustum, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices);
     void generateAABBGeometry(const AABB& aabb, const glm::vec3& color, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices, uint32_t baseVertexIndex);
+    void generateSphereGeometry(const glm::vec3& center, float radius, const glm::vec3& color, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices, uint32_t segments = 16, uint32_t rings = 12);
     void generateWireframeGeometry(const eastl::vector<Vertex>& meshVertices, const eastl::vector<uint32_t>& meshIndices,
                                   const glm::vec3& color, eastl::vector<Vertex>& outVertices, eastl::vector<uint32_t>& outIndices);
 
