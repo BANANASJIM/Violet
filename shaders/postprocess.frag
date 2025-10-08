@@ -13,15 +13,18 @@ layout(set = 1, binding = 0) uniform sampler2D colorTexture;
 layout(set = 1, binding = 1) uniform sampler2D depthTexture;
 
 void main() {
-    // Sample color texture
+    // Sample HDR linear color from main pass
     vec3 color = texture(colorTexture, fragTexCoord).rgb;
 
     // Sample depth texture (optional - can be used for effects)
     float depth = texture(depthTexture, fragTexCoord).r;
 
-    // For now, just pass through the color
-    // Future: tonemapping, color grading, bloom, etc.
+    // Tone mapping (Reinhard)
+    color = color / (color + vec3(1.0));
+
+    // Gamma correction (linear to sRGB)
+    color = pow(color, vec3(1.0/2.2));
+
     outColor = vec4(color, 1.0);
     gl_FragDepth = depth;
-
 }

@@ -33,15 +33,6 @@ layout(set = 1, binding = 1) uniform samplerCube cubemaps[];
 layout(location = 0) in vec3 fragTexCoord;
 layout(location = 0) out vec4 outColor;
 
-// Simple tone mapping functions
-vec3 reinhardToneMapping(vec3 color) {
-    return color / (color + vec3(1.0));
-}
-
-vec3 gammaCorrection(vec3 color) {
-    return pow(color, vec3(1.0 / 2.2));
-}
-
 void main() {
     // Sample from the environment cubemap using bindless index
     vec3 direction = normalize(fragTexCoord);
@@ -54,14 +45,9 @@ void main() {
 
     vec3 color = texture(cubemaps[nonuniformEXT(global.environmentMapIndex)], direction).rgb;
 
-    // Apply exposure
+    // Apply exposure for visual adjustment
     color *= global.skyboxExposure;
 
-    // Apply tone mapping for HDR
-    color = reinhardToneMapping(color);
-
-    // Gamma correction
-    color = gammaCorrection(color);
-
+    // Output HDR linear color (tone mapping and gamma correction handled in post-process)
     outColor = vec4(color, 1.0);
 }

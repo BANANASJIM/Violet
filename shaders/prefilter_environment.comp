@@ -19,6 +19,16 @@ layout(push_constant) uniform PushConstants {
 
 const float PI = 3.14159265359;
 
+// Random number generator for reducing banding artifacts
+float random(vec2 co) {
+    float a = 12.9898;
+    float b = 78.233;
+    float c = 43758.5453;
+    float dt = dot(co.xy, vec2(a, b));
+    float sn = mod(dt, 3.14);
+    return fract(sin(sn) * c);
+}
+
 // Convert cubemap UV coordinates to 3D direction vector
 vec3 uvToDirection(vec2 uv, uint face) {
     vec2 ndc = uv * 2.0 - 1.0;
@@ -68,8 +78,8 @@ vec2 hammersley(uint i, uint N) {
 vec3 importanceSampleGGX(vec2 Xi, vec3 N, float roughness) {
     float a = roughness * roughness;
 
-    // Sample in spherical coordinates
-    float phi = 2.0 * PI * Xi.x;
+    // Sample in spherical coordinates with random perturbation to reduce banding
+    float phi = 2.0 * PI * Xi.x + random(N.xz) * 0.1;
     float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
     float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 
@@ -143,7 +153,8 @@ void main() {
             float saTexel = 4.0 * PI / (6.0 * resolution * resolution);
             float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 0.0001);
 
-            float mipLevel = pc.roughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
+            // Biased (+1.0) mip level for better result (reduces noise and fireflies)
+            float mipLevel = pc.roughness == 0.0 ? 0.0 : max(0.5 * log2(saSample / saTexel) + 1.0, 0.0);
 
             prefilteredColor += textureLod(environmentMap, L, mipLevel).rgb * NdotL;
             totalWeight += NdotL;

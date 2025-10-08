@@ -70,52 +70,46 @@ void main() {
     // Convolve environment map - integrate over hemisphere
     vec3 irradiance = vec3(0.0);
 
-    // Sample count - higher = better quality but slower
-    const uint SAMPLE_COUNT = 2048u;
-    const float sampleDelta = (2.0 * PI) / float(SAMPLE_COUNT);
+    // Hemisphere sampling resolution
+    const uint THETA_SAMPLES = 32u;  // Polar angle samples (latitude)
+    const uint PHI_SAMPLES = 64u;    // Azimuthal angle samples (longitude)
 
     float totalWeight = 0.0;
 
     // Integrate using Riemann sum over hemisphere
-    for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
-        // Spherical coordinates
-        float phi = float(i) * sampleDelta;
+    for (uint j = 0u; j < THETA_SAMPLES; ++j) {
+        // Theta from 0 (pole) to PI/2 (horizon)
+        float theta = (float(j) + 0.5) / float(THETA_SAMPLES) * (PI * 0.5);
 
-        // Sample in concentric circles from pole to equator
-        // Use multiple phi samples per theta ring for better coverage
-        const uint PHI_SAMPLES = 64u;
-        const uint THETA_SAMPLES = 32u;
+        for (uint k = 0u; k < PHI_SAMPLES; ++k) {
+            // Phi from 0 to 2*PI (full rotation around hemisphere)
+            float phi = (float(k) + 0.5) / float(PHI_SAMPLES) * 2.0 * PI;
 
-        for (uint j = 0u; j < THETA_SAMPLES; ++j) {
-            // theta from 0 (pole) to PI/2 (equator)
-            float theta = (float(j) + 0.5) / float(THETA_SAMPLES) * (PI * 0.5);
+            // Convert spherical to cartesian (in tangent space)
+            vec3 tangentSample = vec3(
+                sin(theta) * cos(phi),
+                sin(theta) * sin(phi),
+                cos(theta)
+            );
 
-            for (uint k = 0u; k < PHI_SAMPLES; ++k) {
-                float phi = (float(k) + 0.5) / float(PHI_SAMPLES) * 2.0 * PI;
+            // Transform to world space
+            vec3 sampleDir = tangentSample.x * T + tangentSample.y * B + tangentSample.z * N;
 
-                // Convert spherical to cartesian (in tangent space)
-                vec3 tangentSample = vec3(
-                    sin(theta) * cos(phi),
-                    sin(theta) * sin(phi),
-                    cos(theta)
-                );
+            // Sample environment map
+            vec3 sampleColor = texture(environmentMap, sampleDir).rgb;
 
-                // Transform to world space
-                vec3 sampleDir = tangentSample.x * T + tangentSample.y * B + tangentSample.z * N;
-
-                // Sample environment map
-                vec3 sampleColor = texture(environmentMap, sampleDir).rgb;
-
-                // Weight by cos(theta) for Lambert diffuse
-                float cosTheta = cos(theta);
-                irradiance += sampleColor * cosTheta * sin(theta);
-                totalWeight += cosTheta * sin(theta);
-            }
+            // Weight by cos(theta) * sin(theta) (solid angle measure)
+            float cosTheta = cos(theta);
+            irradiance += sampleColor * cosTheta * sin(theta);
+            totalWeight += cosTheta * sin(theta);
         }
     }
 
-    // Normalize by total weight
-    irradiance = PI * irradiance / totalWeight;
+    // Normalize by total weight and multiply by PI
+    // The PI factor accounts for the hemisphere integration in the rendering equation
+    // The diffuse BRDF term in the fragment shader is albedo/PI, so the final result is:
+    // (irradiance * PI) * (albedo / PI) = irradiance * albedo (correct Lambert diffuse)
+    irradiance = (PI * irradiance) / totalWeight;
 
     // Write to irradiance map
     imageStore(irradianceMap, ivec3(pixelCoord, pc.currentFace), vec4(irradiance, 1.0));

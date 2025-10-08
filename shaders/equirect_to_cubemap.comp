@@ -38,12 +38,17 @@ vec3 uvToDirection(vec2 uv, uint face) {
 // Convert 3D direction to equirectangular UV coordinates
 vec2 directionToEquirectUV(vec3 dir) {
     // Calculate spherical coordinates
+    // Theta (longitude): measured from +X axis around Y axis, range [-π, π]
     float theta = atan(dir.z, dir.x);
-    float phi = asin(dir.y);
+
+    // Phi (latitude): measured from +Y axis (north pole) downward, range [0, π]
+    // Use acos instead of asin to get full [0, π] range
+    // Clamp to prevent numerical errors outside [-1, 1]
+    float phi = acos(clamp(dir.y, -1.0, 1.0));
 
     // Convert to UV coordinates [0, 1]
-    float u = (theta + PI) / (2.0 * PI);
-    float v = (phi + PI / 2.0) / PI;
+    float u = (theta + PI) / (2.0 * PI);  // Map [-π, π] → [0, 1]
+    float v = 1.0 - phi / PI;              // Map [0, π] → [1, 0] (flip V to correct upside-down)
 
     return vec2(u, v);
 }
