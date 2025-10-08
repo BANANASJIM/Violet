@@ -154,6 +154,29 @@ void AssetLoader::loadMeshes(void* modelPtr, GLTFAsset* asset) {
                 }
             }
 
+            // Load tangents (required for normal mapping and PBR lighting)
+            // glTF tangent is vec4: xyz=tangent direction, w=bitangent handedness (+1 or -1)
+            if (primitive.attributes.find("TANGENT") != primitive.attributes.end()) {
+                const tinygltf::Accessor& accessor = model->accessors[primitive.attributes.find("TANGENT")->second];
+                const tinygltf::BufferView& bufferView = model->bufferViews[accessor.bufferView];
+                const tinygltf::Buffer& buffer = model->buffers[bufferView.buffer];
+
+                const float* tangents = reinterpret_cast<const float*>(
+                    &buffer.data[bufferView.byteOffset + accessor.byteOffset]
+                );
+
+                for (size_t v = 0; v < accessor.count; v++) {
+                    meshData.vertices[vertexStart + v].tangent = glm::vec4(
+                        tangents[v * 4],
+                        tangents[v * 4 + 1],
+                        tangents[v * 4 + 2],
+                        tangents[v * 4 + 3]  // w component: bitangent handedness
+                    );
+                }
+            }
+            // Note: If TANGENT is missing, default (1,0,0,1) is used from vertex initialization
+            // Future: Generate tangents using MikkTSpace algorithm when missing
+
             // Load indices
             if (primitive.indices > -1) {
                 const tinygltf::Accessor& accessor = model->accessors[primitive.indices];
