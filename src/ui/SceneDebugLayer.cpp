@@ -1572,6 +1572,18 @@ void SceneDebugLayer::renderEnvironmentPanel() {
                     autoExp.setManualEV100(9.0f);
                 }
             } else {
+                // Auto-exposure method selection
+                const char* methods[] = { "Simple (Fast)", "Histogram (Accurate)" };
+                int currentMethod = static_cast<int>(params.method);
+                if (ImGui::Combo("Method", &currentMethod, methods, 2)) {
+                    params.method = static_cast<violet::AutoExposureMethod>(currentMethod);
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Simple: 256 samples (fast)\nHistogram: Full scene analysis (accurate, UE4/Frostbite standard)");
+                }
+
                 // Auto-exposure parameters
                 ImGui::SliderFloat("Adaptation Speed", &params.adaptationSpeed, 0.5f, 5.0f, "%.1f");
                 ImGui::SameLine();
@@ -1585,6 +1597,37 @@ void SceneDebugLayer::renderEnvironmentPanel() {
                 ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("Manual offset to auto-computed exposure");
+                }
+
+                // Histogram-specific parameters
+                if (params.method == violet::AutoExposureMethod::Histogram) {
+                    ImGui::Separator();
+                    ImGui::Text("Histogram Settings:");
+                    ImGui::Indent();
+
+                    ImGui::SliderFloat("Low Percentile", &params.lowPercentile, 0.0f, 0.2f, "%.2f");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Ignore darkest %% of pixels (prevents dark spots from dragging exposure)");
+                    }
+
+                    ImGui::SliderFloat("High Percentile", &params.highPercentile, 0.8f, 1.0f, "%.2f");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Ignore brightest %% of pixels (prevents highlights from dragging exposure)");
+                    }
+
+                    ImGui::SliderFloat("Center Weight", &params.centerWeightPower, 0.0f, 5.0f, "%.1f");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(?)");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Weighting for screen center (0 = uniform, 2 = Gaussian-like)");
+                    }
+
+                    ImGui::Unindent();
+                    ImGui::Separator();
                 }
 
                 // Display current/target EV100

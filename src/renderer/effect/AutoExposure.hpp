@@ -8,21 +8,43 @@
 
 namespace violet {
 
+// Auto-exposure method
+enum class AutoExposureMethod {
+    Simple,      // Simple downsampled average (fast, less accurate)
+    Histogram    // Histogram-based (accurate, industry standard)
+};
+
 // Auto-exposure parameters
 struct AutoExposureParams {
     bool enabled = false;              // Enable/disable auto-exposure
+    AutoExposureMethod method = AutoExposureMethod::Histogram; // Method to use
     float adaptationSpeed = 2.0f;      // Speed of adaptation (higher = faster)
     float minEV100 = 1.0f;             // Minimum EV100 (prevent too dark)
     float maxEV100 = 16.0f;            // Maximum EV100 (prevent too bright)
     float exposureCompensation = 0.0f; // Manual compensation offset (EV stops)
+
+    // Histogram-specific parameters
+    float lowPercentile = 0.05f;       // Ignore darkest 5% (0.0-1.0)
+    float highPercentile = 0.95f;      // Ignore brightest 5% (0.0-1.0)
+    float centerWeightPower = 2.0f;    // Center weighting strength (0 = uniform)
+    float minLogLuminance = -4.0f;     // Histogram min range (EV)
+    float maxLogLuminance = 12.0f;     // Histogram max range (EV)
 };
 
-// Luminance statistics buffer (GPU → CPU)
+// Luminance statistics buffer (GPU → CPU) - Simple method
 struct LuminanceData {
     float avgLogLuminance = 0.0f;  // Average log2 luminance
     float minLuminance = 0.0f;     // Minimum luminance (future use)
     float maxLuminance = 0.0f;     // Maximum luminance (future use)
     uint32_t sampleCount = 0;      // Number of workgroups (for averaging)
+};
+
+// Histogram buffer (GPU → CPU) - Histogram method
+struct HistogramData {
+    uint32_t bins[64];             // Histogram bins (64 bins for 16 EV range)
+    float minLogLuminance;         // Minimum log2 luminance in range
+    float maxLogLuminance;         // Maximum log2 luminance in range
+    uint32_t pixelCount;           // Total pixels processed
 };
 
 /**
@@ -113,17 +135,33 @@ private:
      */
     void readLuminanceData();
 
+    /**
+     * @brief Read histogram data and compute weighted average luminance
+     */
+    void readHistogramData();
+
+    /**
+     * @brief Analyze histogram to compute average log luminance
+     * @param histogram Histogram data from GPU
+     * @return Average log2 luminance (weighted, percentile-filtered)
+     */
+    float analyzeHistogram(const HistogramData& histogram);
+
 private:
     VulkanContext* context = nullptr;
     class DescriptorManager* descriptorManager = nullptr;
 
-    // Compute pipeline for luminance calculation
+    // Simple method resources
     eastl::unique_ptr<ComputePipeline> luminancePipeline;
-    vk::DescriptorSet descriptorSet = VK_NULL_HANDLE;
-
-    // GPU buffer for luminance data (with CPU-visible memory)
+    vk::DescriptorSet luminanceDescriptorSet = VK_NULL_HANDLE;
     BufferResource luminanceBuffer;
-    LuminanceData* mappedLuminanceData = nullptr;  // Persistent mapping
+    LuminanceData* mappedLuminanceData = nullptr;
+
+    // Histogram method resources
+    eastl::unique_ptr<ComputePipeline> histogramPipeline;
+    vk::DescriptorSet histogramDescriptorSet = VK_NULL_HANDLE;
+    BufferResource histogramBuffer;
+    HistogramData* mappedHistogramData = nullptr;
 
     // Exposure state
     AutoExposureParams params;

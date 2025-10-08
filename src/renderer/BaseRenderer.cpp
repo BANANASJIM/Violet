@@ -29,19 +29,6 @@ void BaseRenderer::bindGlobalDescriptors(vk::CommandBuffer commandBuffer, vk::Pi
     );
 }
 
-void BaseRenderer::bindMaterialDescriptors(vk::CommandBuffer commandBuffer, vk::PipelineLayout pipelineLayout,
-                                          vk::DescriptorSet materialSet, uint32_t setIndex) {
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipelineLayout,
-        setIndex,  // set index
-        1,         // descriptor set count
-        &materialSet,
-        0,         // dynamic offset count
-        nullptr    // dynamic offsets
-    );
-}
-
 void BaseRenderer::pushModelMatrix(vk::CommandBuffer commandBuffer, vk::PipelineLayout pipelineLayout,
                                   const glm::mat4& modelMatrix) {
     struct PushConstantData {

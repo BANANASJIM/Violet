@@ -136,7 +136,7 @@ void VioletApp::initializeScene() {
     auto controller = eastl::make_unique<CameraController>(cameraComp.camera.get());
     // Position camera for Sponza viewing (large indoor scene)
     controller->setPosition(glm::vec3(-10.0f, 5.0f, 0.0f));
-    controller->setMovementSpeed(10.0f);  // Faster movement for large scene
+    controller->setMovementSpeed(5.0f);  // Faster movement for large scene
     controller->setSensitivity(0.002f);
 
     // Look towards scene center
@@ -148,10 +148,6 @@ void VioletApp::initializeScene() {
     float pitch = glm::degrees(asin(direction.y));
     controller->setYaw(yaw);
     controller->setPitch(pitch);
-
-    violet::Log::info("App", "Camera positioned at ({:.1f}, {:.1f}, {:.1f}) looking towards scene center",
-            camPos.x, camPos.y, camPos.z);
-    violet::Log::info("App", "Camera yaw: {:.1f}°, pitch: {:.1f}°", yaw, pitch);
 
     auto& controllerComp = world.addComponent<CameraControllerComponent>(cameraEntity, eastl::move(controller));
 
@@ -166,7 +162,7 @@ void VioletApp::initializeScene() {
     auto light = LightComponent::createDirectionalLight(
         glm::vec3(-0.3f, -1.0f, -0.3f),  // Direction from upper-left
         glm::vec3(1.0f, 0.95f, 0.8f),    // Warm white color
-        30000.0f                          // Illuminance in lux (bright daylight)
+        30.0f                          // Illuminance in lux
     );
     world.getRegistry().emplace<LightComponent>(lightEntity, light);
 

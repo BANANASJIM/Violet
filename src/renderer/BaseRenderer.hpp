@@ -37,8 +37,6 @@ protected:
     void bindVertexIndexBuffers(vk::CommandBuffer commandBuffer, const Mesh* mesh);
     void bindGlobalDescriptors(vk::CommandBuffer commandBuffer, vk::PipelineLayout pipelineLayout,
                               vk::DescriptorSet globalSet, uint32_t setIndex = 0);
-    void bindMaterialDescriptors(vk::CommandBuffer commandBuffer, vk::PipelineLayout pipelineLayout,
-                                vk::DescriptorSet materialSet, uint32_t setIndex = 1);
     void pushModelMatrix(vk::CommandBuffer commandBuffer, vk::PipelineLayout pipelineLayout,
                         const glm::mat4& modelMatrix);
 };

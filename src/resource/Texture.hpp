@@ -9,10 +9,8 @@
 namespace violet {
 
 class VulkanContext;
-class TestTexture;
 
 class Texture : public GPUResource {
-    friend class TestTexture;
 
 public:
     Texture() = default;
