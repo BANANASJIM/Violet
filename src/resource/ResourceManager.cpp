@@ -1,7 +1,14 @@
 #include "ResourceManager.hpp"
 #include "core/Log.hpp"
+#include "core/FileSystem.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
-#include "renderer/vulkan/DescriptorManager.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
+#include "resource/TextureManager.hpp"
+#include "resource/MaterialManager.hpp"
+#include "resource/MeshManager.hpp"
+#include "resource/Material.hpp"
+#include "resource/Mesh.hpp"
+#include "resource/Texture.hpp"
 
 namespace violet {
 
@@ -12,25 +19,97 @@ ResourceManager::~ResourceManager() {
 void ResourceManager::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight) {
     context = ctx;
 
-    // Initialize sub-managers in dependency order
-    textureManager.init(ctx, descMgr);
-    materialManager.init(ctx, descMgr, &textureManager, maxFramesInFlight);
-    meshManager.init(ctx);
+    // Initialize sub-managers in dependency order using make_unique
+    shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx);
+    textureManager = eastl::make_unique<TextureManager>();
+    textureManager->init(ctx, descMgr);
+    materialManager = eastl::make_unique<MaterialManager>();
+    materialManager->init(ctx, descMgr, textureManager.get(), shaderLibrary.get(), maxFramesInFlight);
+    meshManager = eastl::make_unique<MeshManager>();
+    meshManager->init(ctx);
+
+    // Pre-load all shaders
+    loadAllShaders();
 
     violet::Log::info("ResourceManager", "Initialized all sub-managers");
 }
 
+void ResourceManager::loadAllShaders() {
+    violet::Log::info("ResourceManager", "Pre-loading all shaders into ShaderLibrary...");
+
+    using Language = Shader::Language;
+    using Stage = Shader::Stage;
+
+    // Shader definitions list
+    struct ShaderDef {
+        const char* name;
+        const char* filePath;
+        Stage stage;
+    };
+
+    eastl::vector<ShaderDef> shaders = {
+        // Graphics shaders (vertex + fragment pairs)
+        {"pbr_vert", "shaders/pbr_bindless.vert", Stage::Vertex},
+        {"pbr_frag", "shaders/pbr_bindless.frag", Stage::Fragment},
+
+        {"skybox_vert", "shaders/skybox.vert", Stage::Vertex},
+        {"skybox_frag", "shaders/skybox.frag", Stage::Fragment},
+
+        {"debug_vert", "shaders/debug.vert", Stage::Vertex},
+        {"debug_frag", "shaders/debug.frag", Stage::Fragment},
+
+        {"postprocess_vert", "shaders/postprocess.vert", Stage::Vertex},
+        {"postprocess_frag", "shaders/postprocess.frag", Stage::Fragment},
+
+        // Compute shaders
+        {"equirect_to_cubemap", "shaders/equirect_to_cubemap.comp", Stage::Compute},
+        {"irradiance_convolution", "shaders/irradiance_convolution.comp", Stage::Compute},
+        {"prefilter_environment", "shaders/prefilter_environment.comp", Stage::Compute},
+        {"brdf_lut", "shaders/brdf_lut.comp", Stage::Compute},
+        {"luminance_average", "shaders/luminance_average.comp", Stage::Compute},
+        {"luminance_histogram", "shaders/luminance_histogram.comp", Stage::Compute},
+    };
+
+    // Load all shaders
+    for (const auto& shader : shaders) {
+        shaderLibrary->load(shader.name, {
+            .name = shader.name,
+            .filePath = FileSystem::resolveRelativePath(shader.filePath),
+            .entryPoint = "main",
+            .stage = shader.stage,
+            .language = Language::GLSL
+        });
+    }
+
+    violet::Log::info("ResourceManager", "All {} shaders pre-loaded successfully", shaders.size());
+}
+
 void ResourceManager::cleanup() {
     // Cleanup in reverse dependency order
-    meshManager.cleanup();
-    materialManager.cleanup();
-    textureManager.cleanup();
+    if (meshManager) {
+        meshManager->cleanup();
+        meshManager.reset();
+    }
+    if (materialManager) {
+        materialManager->cleanup();
+        materialManager.reset();
+    }
+    if (textureManager) {
+        textureManager->cleanup();
+        textureManager.reset();
+    }
+    if (shaderLibrary) {
+        shaderLibrary->clear();
+        shaderLibrary.reset();
+    }
 
     violet::Log::info("ResourceManager", "Cleaned up all sub-managers");
 }
 
 void ResourceManager::createDefaultResources() {
-    textureManager.createDefaultResources();
+    if (textureManager) {
+        textureManager->createDefaultResources();
+    }
 }
 
 void ResourceManager::submitAsyncTask(eastl::shared_ptr<AsyncLoadTask> task) {

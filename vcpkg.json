@@ -2,7 +2,6 @@
   "name": "violet-engine",
   "version": "0.1.0",
   "dependencies": [
-    "vulkan-headers",
     "vulkan-memory-allocator",
     "glfw3",
     "glm",
@@ -14,6 +13,7 @@
     "stb",
     "entt",
     "imguizmo",
+    "shader-slang",
     {
       "name": "imgui",
       "features": ["vulkan-binding", "glfw-binding"]

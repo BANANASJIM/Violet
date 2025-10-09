@@ -1,5 +1,6 @@
 #include "renderer/vulkan/ComputePass.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "resource/shader/Shader.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 
@@ -22,10 +23,12 @@ void ComputePass::init(VulkanContext* ctx, const ComputePassConfig& cfg) {
     pipelineConfig.descriptorSetLayouts = config.descriptorSetLayouts;
     pipelineConfig.pushConstantRanges = config.pushConstantRanges;
 
-    pipeline->init(context, config.shaderPath, pipelineConfig);
+    pipeline->init(context, config.shader, pipelineConfig);
 
-    violet::Log::info("Renderer", "ComputePass '{}' initialized with shader: {}",
-                     config.name.c_str(), config.shaderPath.c_str());
+    if (auto sharedShader = config.shader.lock()) {
+        violet::Log::info("Renderer", "ComputePass '{}' initialized with shader: {}",
+                         config.name.c_str(), sharedShader->getName().c_str());
+    }
 }
 
 void ComputePass::cleanup() {

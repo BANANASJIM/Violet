@@ -27,11 +27,11 @@ namespace violet {
 
 // Material manager access
 MaterialManager* ForwardRenderer::getMaterialManager() {
-    return resourceManager ? &resourceManager->getMaterialManager() : nullptr;
+    return resourceManager ? resourceManager->getMaterialManager() : nullptr;
 }
 
 const MaterialManager* ForwardRenderer::getMaterialManager() const {
-    return resourceManager ? &resourceManager->getMaterialManager() : nullptr;
+    return resourceManager ? resourceManager->getMaterialManager() : nullptr;
 }
 
 MaterialInstance* ForwardRenderer::getMaterialInstanceByIndex(uint32_t index) const {
@@ -64,17 +64,18 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Find first graphics pass for initialization
     RenderPass* firstRenderPass = getRenderPass(0);
     if (firstRenderPass) {
-        debugRenderer.init(context, firstRenderPass, &globalUniforms, &descriptorManager, swapchainFormat, maxFramesInFlight);
+        // DebugRenderer.init() is called by VioletApp after ResourceManager loads shaders
+        // Removed duplicate call here to fix initialization order
 
         // Initialize EnvironmentMap with bindless architecture
         auto* matMgr = getMaterialManager();
         if (matMgr) {
-            environmentMap.init(context, matMgr, &descriptorManager, &resourceManager->getTextureManager());
+            environmentMap.init(context, matMgr, &descriptorManager, resourceManager->getTextureManager(), resourceManager->getShaderLibrary());
         }
     }
 
-    // Initialize auto-exposure system
-    autoExposure.init(context, &descriptorManager, currentExtent);
+    // AutoExposure.init() is called by VioletApp after ResourceManager loads shaders
+    // (Same initialization order pattern as DebugRenderer)
 
     // Initialize bindless through DescriptorManager
     descriptorManager.initBindless(1024);
@@ -123,6 +124,11 @@ void ForwardRenderer::createMaterials() {
     } catch (const violet::Exception& e) {
         violet::Log::warn("Renderer", "Failed to load default HDR environment map: {}", e.what_c_str());
     }
+}
+
+void ForwardRenderer::initAutoExposure() {
+    // Initialize auto-exposure system after shaders are loaded
+    autoExposure.init(context, &descriptorManager, currentExtent, resourceManager->getShaderLibrary());
 }
 
 void ForwardRenderer::cleanup() {

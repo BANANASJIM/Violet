@@ -4,40 +4,81 @@
 #include "renderer/vulkan/DescriptorSet.hpp"
 #include "resource/Material.hpp"
 #include "resource/Vertex.hpp"
+#include "resource/shader/Shader.hpp"
 #include "core/Log.hpp"
 #include <glm/glm.hpp>
 
 namespace violet {
 
-void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* material,
-                            const eastl::string& vertPath, const eastl::string& fragPath) {
-    PipelineConfig defaultConfig;
-    init(ctx, rp, material, vertPath, fragPath, defaultConfig);
+// ========================================
+// New weak_ptr-based init
+// ========================================
+
+void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* mat,
+                            eastl::weak_ptr<Shader> vert, eastl::weak_ptr<Shader> frag,
+                            const PipelineConfig& cfg) {
+    context = ctx;
+    renderPass = rp;
+    material = mat;
+    vertShader = vert;
+    fragShader = frag;
+    config = cfg;
+
+    buildPipeline();
 }
 
-void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* material,
-                            const eastl::string& vertPath, const eastl::string& fragPath,
-                            const PipelineConfig& config) {
-    context = ctx;
+bool GraphicsPipeline::rebuild() {
+    // Validate shader references
+    auto vert = vertShader.lock();
+    auto frag = fragShader.lock();
 
-    auto vertShaderCode = readFile(vertPath);
-    auto fragShaderCode = readFile(fragPath);
+    if (!vert || !frag) {
+        Log::error("Pipeline", "Rebuild failed: Shader references are invalid");
+        return false;
+    }
 
-    vertShaderModule = createShaderModule(vertShaderCode);
-    fragShaderModule = createShaderModule(fragShaderCode);
+    Log::info("Pipeline", "Rebuilding pipeline with updated shaders");
 
+    // Clean up old pipeline resources
+    graphicsPipeline = nullptr;
+    vertShaderModule = nullptr;
+    fragShaderModule = nullptr;
+
+    // Rebuild pipeline
+    buildPipeline();
+
+    Log::info("Pipeline", "Pipeline rebuild complete");
+    return true;
+}
+
+void GraphicsPipeline::buildPipeline() {
+    // Lock weak_ptr to get temporary shared_ptr
+    auto vert = vertShader.lock();
+    auto frag = fragShader.lock();
+
+    if (!vert || !frag) {
+        Log::error("Pipeline", "buildPipeline failed: Invalid shader references");
+        return;
+    }
+
+    // Create shader modules from SPIRV
+    vertShaderModule = createShaderModuleFromSPIRV(vert->getSPIRV());
+    fragShaderModule = createShaderModuleFromSPIRV(frag->getSPIRV());
+
+    // Shader stage info
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
-    vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
+    vertShaderStageInfo.stage = Shader::stageToVkFlag(vert->getStage());
     vertShaderStageInfo.module = *vertShaderModule;
-    vertShaderStageInfo.pName = "main";
+    vertShaderStageInfo.pName = vert->getEntryPoint().c_str();
 
     vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
-    fragShaderStageInfo.stage = vk::ShaderStageFlagBits::eFragment;
+    fragShaderStageInfo.stage = Shader::stageToVkFlag(frag->getStage());
     fragShaderStageInfo.module = *fragShaderModule;
-    fragShaderStageInfo.pName = "main";
+    fragShaderStageInfo.pName = frag->getEntryPoint().c_str();
 
     vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
+    // Rest of pipeline creation (vertex input, assembly, viewport, etc.)
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
 
     if (config.useVertexInput) {
@@ -49,11 +90,8 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* materi
         vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
         vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
     } else {
-        // No vertex input for full-screen effects like skybox
         vertexInputInfo.vertexBindingDescriptionCount = 0;
         vertexInputInfo.vertexAttributeDescriptionCount = 0;
-        vertexInputInfo.pVertexBindingDescriptions = nullptr;
-        vertexInputInfo.pVertexAttributeDescriptions = nullptr;
     }
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
@@ -107,51 +145,42 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* materi
     vk::PipelineDepthStencilStateCreateInfo depthStencil;
     depthStencil.depthTestEnable = config.enableDepthTest;
     depthStencil.depthWriteEnable = config.enableDepthWrite;
-    depthStencil.depthCompareOp = config.depthCompareOp;  // Use config's depth compare op
+    depthStencil.depthCompareOp = config.depthCompareOp;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
+    // Descriptor set layouts
     eastl::vector<vk::DescriptorSetLayout> setLayouts;
-
-    // Add global descriptor set layout from config
     if (config.globalDescriptorSetLayout) {
         setLayouts.push_back(config.globalDescriptorSetLayout);
-    } else {
-        violet::Log::error("Renderer", "GraphicsPipeline: No global descriptor set layout provided in config");
     }
-
-    // Add additional descriptor sets from config (e.g., bindless texture array)
     for (const auto& layout : config.additionalDescriptorSets) {
         setLayouts.push_back(layout);
     }
-
-    // Add material descriptor set layout if provided in config
     if (config.materialDescriptorSetLayout) {
         setLayouts.push_back(config.materialDescriptorSetLayout);
     }
 
-    // Use push constant ranges from config if specified
+    // Pipeline layout
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     pipelineLayoutInfo.pSetLayouts = setLayouts.data();
 
     if (!config.pushConstantRanges.empty()) {
-        // Use custom push constant ranges from config
         pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size());
         pipelineLayoutInfo.pPushConstantRanges = config.pushConstantRanges.data();
     } else {
-        // Default push constant range (model matrix only)
         vk::PushConstantRange pushConstantRange;
         pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
         pushConstantRange.offset = 0;
         pushConstantRange.size = sizeof(glm::mat4);
-
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
     }
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
+    // Graphics pipeline
     vk::GraphicsPipelineCreateInfo pipelineInfo;
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = shaderStages;
@@ -164,10 +193,17 @@ void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* materi
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = *pipelineLayout;
-    pipelineInfo.renderPass = rp->getRenderPass();
+    pipelineInfo.renderPass = renderPass->getRenderPass();
     pipelineInfo.subpass = 0;
 
     graphicsPipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, pipelineInfo);
+}
+
+vk::raii::ShaderModule GraphicsPipeline::createShaderModuleFromSPIRV(const eastl::vector<uint32_t>& spirv) {
+    vk::ShaderModuleCreateInfo createInfo;
+    createInfo.codeSize = spirv.size() * sizeof(uint32_t);
+    createInfo.pCode = spirv.data();
+    return vk::raii::ShaderModule(context->getDeviceRAII(), createInfo);
 }
 
 void GraphicsPipeline::cleanup() {

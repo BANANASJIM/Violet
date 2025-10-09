@@ -1,5 +1,6 @@
 #include "AutoExposure.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Log.hpp"
@@ -7,10 +8,11 @@
 
 namespace violet {
 
-void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Extent2D extent) {
+void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Extent2D extent, ShaderLibrary* shaderLib) {
     context = ctx;
     descriptorManager = descMgr;
     sceneExtent = extent;
+    shaderLibrary = shaderLib;
 
     violet::Log::info("AutoExposure", "Initializing auto-exposure system ({}x{})", extent.width, extent.height);
 
@@ -57,10 +59,10 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
 
         // Create pipeline
         luminancePipeline = eastl::make_unique<ComputePipeline>();
-        eastl::string shaderPath = violet::FileSystem::resolveRelativePath("build/shaders/luminance_average.comp.spv");
+        auto shader = shaderLibrary->get("luminance_average");
         ComputePipelineConfig pipelineConfig{};
         pipelineConfig.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
-        luminancePipeline->init(context, shaderPath, pipelineConfig);
+        luminancePipeline->init(context, shader, pipelineConfig);
     }
 
     // ===== Histogram Method Resources =====
@@ -108,7 +110,7 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
 
         // Create pipeline with push constants
         histogramPipeline = eastl::make_unique<ComputePipeline>();
-        eastl::string shaderPath = violet::FileSystem::resolveRelativePath("build/shaders/luminance_histogram.comp.spv");
+        auto shader = shaderLibrary->get("luminance_histogram");
         ComputePipelineConfig pipelineConfig{};
         pipelineConfig.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
 
@@ -119,7 +121,7 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
         pushConstantRange.size = 4 * sizeof(float); // 4 floats: minLogLum, maxLogLum, centerWeightPower, enabled
         pipelineConfig.pushConstantRanges.push_back(pushConstantRange);
 
-        histogramPipeline->init(context, shaderPath, pipelineConfig);
+        histogramPipeline->init(context, shader, pipelineConfig);
     }
 
     violet::Log::info("AutoExposure", "Auto-exposure initialized (Simple + Histogram)");

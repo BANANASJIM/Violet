@@ -8,6 +8,8 @@
 
 namespace violet {
 
+class ShaderLibrary;
+
 // Auto-exposure method
 enum class AutoExposureMethod {
     Simple,      // Simple downsampled average (fast, less accurate)
@@ -76,8 +78,9 @@ public:
      * @param context Vulkan context
      * @param descriptorManager Descriptor manager for layout/set allocation
      * @param sceneExtent Size of the HDR scene texture
+     * @param shaderLibrary Shader library for loading shaders
      */
-    void init(VulkanContext* context, class DescriptorManager* descriptorManager, vk::Extent2D sceneExtent);
+    void init(VulkanContext* context, class DescriptorManager* descriptorManager, vk::Extent2D sceneExtent, ShaderLibrary* shaderLibrary);
 
     /**
      * @brief Cleanup resources
@@ -150,6 +153,7 @@ private:
 private:
     VulkanContext* context = nullptr;
     class DescriptorManager* descriptorManager = nullptr;
+    ShaderLibrary* shaderLibrary = nullptr;
 
     // Simple method resources
     eastl::unique_ptr<ComputePipeline> luminancePipeline;

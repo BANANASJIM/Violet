@@ -3,6 +3,7 @@
 #include "resource/TextureManager.hpp"
 #include "resource/MaterialManager.hpp"
 #include "resource/MeshManager.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 #include "core/ThreadPool.hpp"
 
 #include <EASTL/vector.h>
@@ -40,14 +41,17 @@ public:
     void cleanup();
 
     // === Sub-manager Access ===
-    TextureManager& getTextureManager() { return textureManager; }
-    const TextureManager& getTextureManager() const { return textureManager; }
+    ShaderLibrary* getShaderLibrary() { return shaderLibrary.get(); }
+    const ShaderLibrary* getShaderLibrary() const { return shaderLibrary.get(); }
 
-    MaterialManager& getMaterialManager() { return materialManager; }
-    const MaterialManager& getMaterialManager() const { return materialManager; }
+    TextureManager* getTextureManager() { return textureManager.get(); }
+    const TextureManager* getTextureManager() const { return textureManager.get(); }
 
-    MeshManager& getMeshManager() { return meshManager; }
-    const MeshManager& getMeshManager() const { return meshManager; }
+    MaterialManager* getMaterialManager() { return materialManager.get(); }
+    const MaterialManager* getMaterialManager() const { return materialManager.get(); }
+
+    MeshManager* getMeshManager() { return meshManager.get(); }
+    const MeshManager* getMeshManager() const { return meshManager.get(); }
 
     // === Convenience Methods (delegates to sub-managers) ===
     void createDefaultResources();
@@ -57,12 +61,14 @@ public:
     void processAsyncTasks();  // Call every frame to process completed CPU work
 
 private:
+    void loadAllShaders();  // Pre-load all shaders into ShaderLibrary
     VulkanContext* context = nullptr;
 
     // Sub-managers (order matters: initialization dependency)
-    TextureManager textureManager;
-    MaterialManager materialManager;  // depends on TextureManager
-    MeshManager meshManager;
+    eastl::unique_ptr<ShaderLibrary> shaderLibrary;      // no dependencies
+    eastl::unique_ptr<TextureManager> textureManager;
+    eastl::unique_ptr<MaterialManager> materialManager;  // depends on TextureManager
+    eastl::unique_ptr<MeshManager> meshManager;
 
     // Async loading support
     ThreadPool threadPool;

@@ -6,11 +6,13 @@
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
 #include <EASTL/unique_ptr.h>
+#include <EASTL/weak_ptr.h>
 
 namespace violet {
 
 class VulkanContext;
 class DescriptorSet;
+class Shader;
 
 // Resource barrier configuration for automatic image/buffer layout management
 struct ResourceBarrier {
@@ -35,7 +37,7 @@ struct ComputePassConfig : public PassConfigBase {
     // Compute-specific configuration
     eastl::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     eastl::vector<vk::PushConstantRange> pushConstantRanges;
-    eastl::string shaderPath;
+    eastl::weak_ptr<Shader> shader;
 
     // Resource barriers (automatic layout management)
     eastl::vector<ResourceBarrier> preBarriers;   // Barriers before execution

@@ -6,6 +6,7 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/Texture.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 
@@ -17,10 +18,11 @@ MaterialManager::~MaterialManager() {
     cleanup();
 }
 
-void MaterialManager::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t framesInFlight) {
+void MaterialManager::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, uint32_t framesInFlight) {
     context = ctx;
     descriptorManager = descMgr;
     textureManager = texMgr;
+    shaderLibrary = shaderLib;
     maxFramesInFlight = framesInFlight;
 
     // Reserve space for common use cases
@@ -110,28 +112,6 @@ Material* MaterialManager::getMaterial(size_t index) const {
     return materials[index].get();
 }
 
-// Generic factory method with custom pipeline config
-Material* MaterialManager::createMaterialWithConfig(
-    const eastl::string& vertexShader,
-    const eastl::string& fragmentShader,
-    const eastl::string& layoutName,
-    const PipelineConfig& config,
-    RenderPass* renderPass,
-    const eastl::string& name) {
-
-    MaterialDesc desc{
-        .vertexShader = vertexShader,
-        .fragmentShader = fragmentShader,
-        .layoutName = layoutName,
-        .pipelineConfig = config,
-        .renderPass = renderPass,
-        .name = name.empty() ? "CustomMaterial" : name,
-        .type = MaterialType::Custom
-    };
-
-    return createMaterial(desc);
-}
-
 // Predefined material creation shortcuts
 
 Material* MaterialManager::createPBRBindlessMaterial(RenderPass* renderPass) {
@@ -146,25 +126,17 @@ Material* MaterialManager::createPBRBindlessMaterial(RenderPass* renderPass) {
     bindlessConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
     bindlessConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("MaterialData"));
 
-    return createMaterialWithConfig(
-        FileSystem::resolveRelativePath("build/shaders/pbr_bindless.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/pbr_bindless.frag.spv"),
-        "",  // No traditional material layout needed for bindless
-        bindlessConfig,
-        renderPass,
-        "PBR_Bindless"
-    );
-}
+    MaterialDesc desc{
+        .vertexShader = shaderLibrary->get("pbr_vert"),
+        .fragmentShader = shaderLibrary->get("pbr_frag"),
+        .layoutName = "",  // No traditional material layout needed for bindless
+        .pipelineConfig = bindlessConfig,
+        .renderPass = renderPass,
+        .name = "PBR_Bindless",
+        .type = MaterialType::PBR
+    };
 
-Material* MaterialManager::createUnlitMaterial(RenderPass* renderPass) {
-    return createMaterialWithConfig(
-        FileSystem::resolveRelativePath("build/shaders/unlit.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/unlit.frag.spv"),
-        "UnlitMaterial",
-        {},  // Default pipeline config
-        renderPass,
-        "Unlit"
-    );
+    return createMaterial(desc);
 }
 
 Material* MaterialManager::createPostProcessMaterial(RenderPass* renderPass) {
@@ -182,14 +154,17 @@ Material* MaterialManager::createPostProcessMaterial(RenderPass* renderPass) {
     pushConstant.size = sizeof(float) * 2;  // exposure + gamma
     postProcessConfig.pushConstantRanges.push_back(pushConstant);
 
-    return createMaterialWithConfig(
-        FileSystem::resolveRelativePath("build/shaders/postprocess.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/postprocess.frag.spv"),
-        "PostProcess",
-        postProcessConfig,
-        renderPass,
-        "PostProcess"
-    );
+    MaterialDesc desc{
+        .vertexShader = shaderLibrary->get("postprocess_vert"),
+        .fragmentShader = shaderLibrary->get("postprocess_frag"),
+        .layoutName = "PostProcess",
+        .pipelineConfig = postProcessConfig,
+        .renderPass = renderPass,
+        .name = "PostProcess",
+        .type = MaterialType::PostProcess
+    };
+
+    return createMaterial(desc);
 }
 
 Material* MaterialManager::createSkyboxMaterial(RenderPass* renderPass) {
@@ -202,14 +177,17 @@ Material* MaterialManager::createSkyboxMaterial(RenderPass* renderPass) {
     // Add bindless descriptor set (set 1) for cubemap array access
     skyboxConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
 
-    return createMaterialWithConfig(
-        FileSystem::resolveRelativePath("build/shaders/skybox.vert.spv"),
-        FileSystem::resolveRelativePath("build/shaders/skybox.frag.spv"),
-        "Global",  // Skybox uses global descriptor set (set 0)
-        skyboxConfig,
-        renderPass,
-        "Skybox"
-    );
+    MaterialDesc desc{
+        .vertexShader = shaderLibrary->get("skybox_vert"),
+        .fragmentShader = shaderLibrary->get("skybox_frag"),
+        .layoutName = "Global",  // Skybox uses global descriptor set (set 0)
+        .pipelineConfig = skyboxConfig,
+        .renderPass = renderPass,
+        .name = "Skybox",
+        .type = MaterialType::Skybox
+    };
+
+    return createMaterial(desc);
 }
 
 // === MaterialInstance Management ===

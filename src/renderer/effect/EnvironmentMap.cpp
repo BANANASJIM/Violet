@@ -4,6 +4,7 @@
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/MaterialManager.hpp"
 #include "resource/TextureManager.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
@@ -86,11 +87,12 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     return *this;
 }
 
-void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr) {
+void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib) {
     context = ctx;
     materialManager = matMgr;
     descriptorManager = descMgr;
     textureManager = texMgr;
+    shaderLibrary = shaderLib;
 
     violet::Log::info("Renderer", "EnvironmentMap initialized (resources managed by TextureManager, MaterialManager, DescriptorManager)");
 }
@@ -298,7 +300,8 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
     pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
     config.pushConstantRanges.push_back(pushConstant);
 
-    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/equirect_to_cubemap.comp.spv"), config);
+auto shader = shaderLibrary->get("equirect_to_cubemap");
+    pipeline.init(context, shader, config);
 
     // Step 4: Allocate descriptor set
     auto descriptorSets = descriptorManager->allocateSets("EquirectToCubemap", 1);
@@ -417,7 +420,8 @@ void EnvironmentMap::generateIrradianceMap() {
     pushConstant.size = sizeof(uint32_t) * 2;
     config.pushConstantRanges.push_back(pushConstant);
 
-    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/irradiance_convolution.comp.spv"), config);
+    auto shader = shaderLibrary->get("irradiance_convolution");
+    pipeline.init(context, shader, config);
 
     // Allocate and update descriptor set
     auto descriptorSets = descriptorManager->allocateSets("IrradianceConvolution", 1);
@@ -518,7 +522,8 @@ void EnvironmentMap::generatePrefilteredMap() {
     pushConstant.size = sizeof(uint32_t) * 4;
     config.pushConstantRanges.push_back(pushConstant);
 
-    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/prefilter_environment.comp.spv"), config);
+    auto shader = shaderLibrary->get("prefilter_environment");
+    pipeline.init(context, shader, config);
 
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
 
@@ -635,7 +640,8 @@ void EnvironmentMap::generateBRDFLUT() {
     pushConstant.size = sizeof(uint32_t);  // LUT size
     config.pushConstantRanges.push_back(pushConstant);
 
-    pipeline.init(context, FileSystem::resolveRelativePath("build/shaders/brdf_lut.comp.spv"), config);
+    auto shader = shaderLibrary->get("brdf_lut");
+    pipeline.init(context, shader, config);
 
     // Allocate and update descriptor set
     auto descriptorSets = descriptorManager->allocateSets("BRDFLUT", 1);

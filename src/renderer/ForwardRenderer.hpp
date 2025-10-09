@@ -162,6 +162,7 @@ public:
 
     // Auto-exposure access
     AutoExposure& getAutoExposure() { return autoExposure; }
+    void initAutoExposure();  // Initialize auto-exposure after shaders are loaded
 
     // PostProcess access
     Material* getPostProcessMaterial() const { return postProcessMaterial; }

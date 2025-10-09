@@ -17,6 +17,22 @@ endif()
 
 project(VioletEngine VERSION 0.1.0 LANGUAGES CXX)
 
+# Detect vcpkg triplet for cross-platform support
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+    if(UNIX AND NOT APPLE)
+        set(VCPKG_TARGET_TRIPLET "x64-linux")
+    elseif(APPLE)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            set(VCPKG_TARGET_TRIPLET "arm64-osx")
+        else()
+            set(VCPKG_TARGET_TRIPLET "x64-osx")
+        endif()
+    elseif(WIN32)
+        set(VCPKG_TARGET_TRIPLET "x64-windows")
+    endif()
+    message(STATUS "Auto-detected vcpkg triplet: ${VCPKG_TARGET_TRIPLET}")
+endif()
+
 # Generate compile_commands.json for clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -36,9 +52,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # Find packages
-# On Linux, prefer system Vulkan over vcpkg to avoid ICD driver issues
+# Force use system Vulkan to avoid glfw compatibility issues
 if(UNIX AND NOT APPLE)
     set(Vulkan_LIBRARY "/usr/lib/libvulkan.so")
+    set(Vulkan_INCLUDE_DIR "/usr/include")
 endif()
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
@@ -53,6 +70,7 @@ find_package(Stb REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
+find_package(slang CONFIG REQUIRED)
 
 # Enable ccache if available
 find_program(CCACHE_PROGRAM ccache)
@@ -61,8 +79,42 @@ if(CCACHE_PROGRAM)
 endif()
 
 
+# ============================================
+# Resolve vcpkg Shader Slang vs system S-Lang conflict
+# ============================================
+# Must be defined BEFORE add_executable to create imported target
+# Explicitly find Shader Slang library in vcpkg directory to avoid
+# linking against system S-Lang library (/usr/lib/libslang.so)
+
+# Determine vcpkg lib directory based on build type
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(VCPKG_LIB_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib")
+else()
+    set(VCPKG_LIB_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib")
+endif()
+
+# Find Shader Slang with full path (cross-platform)
+find_library(SLANG_LIBRARY_FULL_PATH
+    NAMES slang
+    PATHS ${VCPKG_LIB_DIR}
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+
+if(SLANG_LIBRARY_FULL_PATH)
+    message(STATUS "Found Shader Slang: ${SLANG_LIBRARY_FULL_PATH}")
+
+    # Create imported library target to force CMake to use absolute path
+    add_library(ShaderSlang SHARED IMPORTED)
+    set_target_properties(ShaderSlang PROPERTIES
+        IMPORTED_LOCATION "${SLANG_LIBRARY_FULL_PATH}"
+    )
+else()
+    message(FATAL_ERROR "vcpkg Shader Slang library not found in ${VCPKG_LIB_DIR}")
+endif()
+
 # Collect source files
-file(GLOB_RECURSE VIOLET_SOURCES 
+file(GLOB_RECURSE VIOLET_SOURCES
     "src/*.cpp"
     "src/*.hpp"
     "src/*.h"
@@ -70,6 +122,35 @@ file(GLOB_RECURSE VIOLET_SOURCES
 
 # Create executable
 add_executable(${PROJECT_NAME} ${VIOLET_SOURCES})
+
+# Set RPATH - system first for Vulkan compatibility
+if(UNIX AND NOT APPLE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        CMAKE_SKIP_BUILD_RPATH FALSE
+        CMAKE_BUILD_WITH_INSTALL_RPATH FALSE
+        # vcpkg path first to prioritize Shader Slang over system S-Lang
+        # System Vulkan used via vcpkg overlay (empty port prevents vcpkg Vulkan installation)
+        BUILD_RPATH "${VCPKG_LIB_DIR}:/usr/lib"
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    # Force use of RPATH instead of RUNPATH
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -Wl,--disable-new-dtags
+    )
+
+    # Explicitly add Slang library directory with absolute path to DT_NEEDED
+    # This ensures runtime linker finds Slang using full path, not RPATH
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "LINKER:-rpath-link,${VCPKG_LIB_DIR}"
+    )
+elseif(APPLE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        CMAKE_SKIP_BUILD_RPATH FALSE
+        CMAKE_BUILD_WITH_INSTALL_RPATH FALSE
+        CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE
+        BUILD_RPATH "@loader_path/../lib:${VCPKG_LIB_DIR}"
+    )
+endif()
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -93,6 +174,17 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     imgui::imgui
     imguizmo::imguizmo
 )
+
+# Link Slang with absolute path to avoid name conflict with system S-Lang
+# Must be after other libraries to ensure proper link order
+if(UNIX AND NOT APPLE)
+    # Use absolute path directly to force DT_NEEDED entry with path
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "${SLANG_LIBRARY_FULL_PATH}"
+    )
+elseif(APPLE OR WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ShaderSlang)
+endif()
 
 # Explicitly link C++ standard library on Linux when using Clang
 if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")

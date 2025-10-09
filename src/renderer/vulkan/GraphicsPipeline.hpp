@@ -3,12 +3,14 @@
 #include "renderer/vulkan/PipelineBase.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
+#include <EASTL/weak_ptr.h>
 
 namespace violet {
 
 class RenderPass;
 class DescriptorSet;
 class Material;
+class Shader;
 
 struct PipelineConfig {
     vk::PrimitiveTopology topology = vk::PrimitiveTopology::eTriangleList;
@@ -31,14 +33,20 @@ public:
     GraphicsPipeline() = default;
     ~GraphicsPipeline() override = default;
 
-    // Generic init method - all configuration through PipelineConfig
+    /**
+     * @brief Initialize pipeline with Shader weak_ptr references
+     * @param vertShader Vertex shader weak_ptr (managed by ShaderLibrary)
+     * @param fragShader Fragment shader weak_ptr (managed by ShaderLibrary)
+     */
     void init(VulkanContext* context, RenderPass* renderPass, Material* material,
-              const eastl::string& vertPath, const eastl::string& fragPath,
+              eastl::weak_ptr<Shader> vertShader, eastl::weak_ptr<Shader> fragShader,
               const PipelineConfig& config);
 
-    // Convenience init with default config
-    void init(VulkanContext* context, RenderPass* renderPass, Material* material,
-              const eastl::string& vertPath, const eastl::string& fragPath);
+    /**
+     * @brief Rebuild pipeline after shader update (hot reload)
+     * @return True if rebuild succeeded, false if shaders are no longer valid
+     */
+    bool rebuild();
 
     void cleanup() override;
 
@@ -47,9 +55,30 @@ public:
     vk::Pipeline getPipeline() const { return *graphicsPipeline; }
 
 private:
+    /**
+     * @brief Build Vulkan pipeline from current shader references
+     */
+    void buildPipeline();
+
+    /**
+     * @brief Create ShaderModule from SPIRV bytecode
+     */
+    vk::raii::ShaderModule createShaderModuleFromSPIRV(const eastl::vector<uint32_t>& spirv);
+
+private:
+    // Shader references (weak pointers - owned by ShaderLibrary)
+    eastl::weak_ptr<Shader> vertShader;
+    eastl::weak_ptr<Shader> fragShader;
+
+    // Cached Vulkan resources
     vk::raii::ShaderModule vertShaderModule{nullptr};
     vk::raii::ShaderModule fragShaderModule{nullptr};
     vk::raii::Pipeline graphicsPipeline{nullptr};
+
+    // Cached configuration for rebuild
+    RenderPass* renderPass = nullptr;
+    Material* material = nullptr;
+    PipelineConfig config;
 };
 
 } // namespace violet

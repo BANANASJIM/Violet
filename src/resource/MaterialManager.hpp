@@ -6,6 +6,7 @@
 #include <EASTL/unique_ptr.h>
 #include <EASTL/string.h>
 #include <EASTL/fixed_vector.h>
+#include <EASTL/weak_ptr.h>
 
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "resource/TextureManager.hpp"
@@ -19,6 +20,8 @@ class MaterialInstance;
 class Texture;
 class TextureManager;
 class RenderPass;
+class ShaderLibrary;
+class Shader;
 
 // Material types
 enum class MaterialType {
@@ -31,12 +34,12 @@ enum class MaterialType {
 
 // Material creation descriptor
 struct MaterialDesc {
-    eastl::string vertexShader;
-    eastl::string fragmentShader;
-    eastl::string layoutName;           // Descriptor layout name from DescriptorManager
+    eastl::weak_ptr<Shader> vertexShader;    // Vertex shader from ShaderLibrary
+    eastl::weak_ptr<Shader> fragmentShader;  // Fragment shader from ShaderLibrary
+    eastl::string layoutName;                // Descriptor layout name from DescriptorManager
     PipelineConfig pipelineConfig;
     RenderPass* renderPass = nullptr;
-    eastl::string name;                 // Optional material name for debugging
+    eastl::string name;                      // Optional material name for debugging
     MaterialType type = MaterialType::Custom;
 };
 
@@ -60,7 +63,7 @@ public:
     MaterialManager& operator=(MaterialManager&&) = delete;
 
     // === Initialization ===
-    void init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t maxFramesInFlight);
+    void init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
     void cleanup();
 
     // === Material Management (using vector for stable storage) ===
@@ -68,19 +71,8 @@ public:
     Material* getMaterial(size_t index) const;
     size_t getMaterialCount() const { return materials.size(); }
 
-    // Generic factory method with custom pipeline config
-    Material* createMaterialWithConfig(
-        const eastl::string& vertexShader,
-        const eastl::string& fragmentShader,
-        const eastl::string& layoutName,
-        const PipelineConfig& config,
-        RenderPass* renderPass,
-        const eastl::string& name = ""
-    );
-
     // Predefined material shortcuts
     Material* createPBRBindlessMaterial(RenderPass* renderPass);
-    Material* createUnlitMaterial(RenderPass* renderPass);
     Material* createPostProcessMaterial(RenderPass* renderPass);
     Material* createSkyboxMaterial(RenderPass* renderPass);
 
@@ -143,6 +135,7 @@ private:
     VulkanContext* context = nullptr;
     DescriptorManager* descriptorManager = nullptr;
     TextureManager* textureManager = nullptr;
+    ShaderLibrary* shaderLibrary = nullptr;
     uint32_t maxFramesInFlight = 0;
 
     // === Helper Methods ===

@@ -23,7 +23,8 @@ echo -e "${YELLOW}Configuring CMake...${NC}"
 cmake .. \
     -DCMAKE_TOOLCHAIN_FILE=~/vcpkg/scripts/buildsystems/vcpkg.cmake \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DVCPKG_OVERLAY_PORTS=../overlays
 
 # Build
 echo -e "${YELLOW}Building project...${NC}"

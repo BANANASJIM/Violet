@@ -15,6 +15,7 @@
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "ui/UILayer.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 
 namespace violet {
 
@@ -30,7 +31,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFl
     // We'll need GlobalUniforms for actual debug rendering, so this method doesn't do much
 }
 
-void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif, DescriptorManager* descMgr, vk::Format swapchainFormat, uint32_t framesInFlight) {
+void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif,
+                         DescriptorManager* descMgr, ShaderLibrary* shaderLib, vk::Format swapchainFormat, uint32_t framesInFlight) {
     context = ctx;
     renderPass = rp;
     maxFramesInFlight = framesInFlight;
@@ -42,6 +44,10 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
     debugMaterial->create(context);
+
+    // Get shaders from ShaderLibrary
+    auto debugVert = shaderLib->get("debug_vert");
+    auto debugFrag = shaderLib->get("debug_frag");
 
     // Create debug pipeline with line topology
     debugPipeline = eastl::make_unique<GraphicsPipeline>();
@@ -66,10 +72,8 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
         config.lineWidth = 1.0f;  // Default line width
     }
 
-    // Use global uniforms from the main renderer (already set in config.globalDescriptorSetLayout)
-    debugPipeline->init(context, renderPass, debugMaterial.get(),
-                       violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
-                       violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), config);
+    // Use new shader-based init API
+    debugPipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, config);
 
     // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
     wireframePipeline = eastl::make_unique<GraphicsPipeline>();
@@ -83,9 +87,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
         wireframeConfig.polygonMode = vk::PolygonMode::eFill;
     }
 
-    wireframePipeline->init(context, renderPass, debugMaterial.get(),
-                           violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
-                           violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), wireframeConfig);
+    wireframePipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, wireframeConfig);
 
     // Create solid pipeline for filled triangle rendering
     solidPipeline = eastl::make_unique<GraphicsPipeline>();
@@ -94,9 +96,7 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
     solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
     solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects
 
-    solidPipeline->init(context, renderPass, debugMaterial.get(),
-                       violet::FileSystem::resolveRelativePath("build/shaders/debug.vert.spv"),
-                       violet::FileSystem::resolveRelativePath("build/shaders/debug.frag.spv"), solidConfig);
+    solidPipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, solidConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);

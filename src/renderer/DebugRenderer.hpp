@@ -27,6 +27,7 @@ class GlobalUniforms;
 class World;
 class ForwardRenderer;
 class DescriptorManager;
+class ShaderLibrary;
 
 struct DebugColors {
     static constexpr glm::vec3 FRUSTUM = glm::vec3(0.0f, 1.0f, 0.0f);        // Green
@@ -45,7 +46,8 @@ public:
     DebugRenderer& operator=(const DebugRenderer&) = delete;
 
     void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight);
-    void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms, DescriptorManager* descMgr, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
+    void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms,
+              DescriptorManager* descMgr, ShaderLibrary* shaderLib, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
 
     // UI support
     void setUILayer(class UILayer* layer) { uiLayer = layer; }

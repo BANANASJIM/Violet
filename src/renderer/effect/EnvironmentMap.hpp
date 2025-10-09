@@ -13,6 +13,7 @@ class DescriptorManager;
 class TextureManager;
 class Texture;
 class DescriptorSet;
+class ShaderLibrary;
 
 class EnvironmentMap {
 public:
@@ -33,7 +34,7 @@ public:
     EnvironmentMap& operator=(EnvironmentMap&& other) noexcept;
 
     // Initialization (all resources managed by injected managers)
-    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr);
+    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib);
     void cleanup();
 
     // Loading methods
@@ -72,6 +73,7 @@ private:
     MaterialManager* materialManager = nullptr;
     DescriptorManager* descriptorManager = nullptr;
     TextureManager* textureManager = nullptr;
+    ShaderLibrary* shaderLibrary = nullptr;
 
     // Texture handles (references to TextureManager-owned resources)
     TextureHandle environmentTextureHandle;

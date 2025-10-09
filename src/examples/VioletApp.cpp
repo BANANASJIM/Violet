@@ -57,8 +57,12 @@ void VioletApp::createResources() {
 
     // Create renderer materials after ResourceManager is initialized
     renderer.createMaterials();
-    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(),
+                       resourceManager.getShaderLibrary(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
+
+    // Initialize auto-exposure after shaders are loaded
+    renderer.initAutoExposure();
 
     // Configure App base class
     this->forwardRenderer = &renderer;
@@ -79,7 +83,7 @@ void VioletApp::createResources() {
         resourceManager,
         renderer,
         world.getRegistry(),
-        resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+        resourceManager.getTextureManager()->getDefaultTexture(DefaultTextureType::White),
         [this](eastl::unique_ptr<Scene> scene, eastl::string error) {
             if (!error.empty()) {
                 violet::Log::error("App", "Failed to load scene: {}", error.c_str());
@@ -200,7 +204,7 @@ void VioletApp::loadAsset(const eastl::string& path) {
                 resourceManager,
                 renderer,
                 world.getRegistry(),
-                resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+                resourceManager.getTextureManager()->getDefaultTexture(DefaultTextureType::White),
                 [this, path](eastl::unique_ptr<Scene> scene, eastl::string error) {
                     if (!error.empty()) {
                         violet::Log::error("App", "Failed to load glTF {}: {}", path.c_str(), error.c_str());
@@ -271,7 +275,7 @@ void VioletApp::loadAssetAtPosition(const eastl::string& path, const glm::vec3& 
                 resourceManager,
                 renderer,
                 world.getRegistry(),
-                resourceManager.getTextureManager().getDefaultTexture(DefaultTextureType::White),
+                resourceManager.getTextureManager()->getDefaultTexture(DefaultTextureType::White),
                 [this, path, position](eastl::unique_ptr<Scene> tempScene, eastl::string error) {
                     if (!error.empty()) {
                         violet::Log::error("App", "Failed to load asset {}: {}", path.c_str(), error.c_str());
