@@ -344,37 +344,18 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
             0, descSetPtr->getDescriptorSet(0), {}
         );
 
-        // Dispatch for each cubemap face
-        struct PushConstants {
-            uint32_t cubemapSize;
-            uint32_t currentFace;
-        } pushConstants;
-
-        pushConstants.cubemapSize = cubemapSize;
+        // Single dispatch for all 6 faces using Z dimension (ultimate optimization)
+        // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
         uint32_t workgroupCountX = (cubemapSize + 15) / 16;
         uint32_t workgroupCountY = (cubemapSize + 15) / 16;
 
-        for (uint32_t face = 0; face < 6; ++face) {
-            pushConstants.currentFace = face;
-            cmd.pushConstants(
-                pipeline.getPipelineLayout(),
-                vk::ShaderStageFlagBits::eCompute,
-                0, sizeof(PushConstants), &pushConstants
-            );
+        cmd.pushConstants(
+            pipeline.getPipelineLayout(),
+            vk::ShaderStageFlagBits::eCompute,
+            0, sizeof(uint32_t), &cubemapSize
+        );
 
-            pipeline.dispatch(cmd, workgroupCountX, workgroupCountY, 1);
-
-            if (face < 5) {
-                vk::MemoryBarrier memBarrier;
-                memBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-                memBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-                cmd.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eComputeShader,
-                    vk::PipelineStageFlagBits::eComputeShader,
-                    {}, 1, &memBarrier, 0, nullptr, 0, nullptr
-                );
-            }
-        }
+        pipeline.dispatch(cmd, workgroupCountX, workgroupCountY, 6);  // Z=6 for all faces
 
         // Transition to shader read-only
         vk::ImageMemoryBarrier finalBarrier;
@@ -481,17 +462,12 @@ void EnvironmentMap::generateIrradianceMap() {
         pc.size = irradianceSize;
         uint32_t workgroups = (irradianceSize + 15) / 16;
 
+        // Dispatch for each cubemap face (GPU can parallelize these independent writes)
         for (uint32_t face = 0; face < 6; ++face) {
             pc.face = face;
             cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
             pipeline.dispatch(cmd, workgroups, workgroups, 1);
-
-            if (face < 5) {
-                vk::MemoryBarrier mb;
-                mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-                mb.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-                cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, 1, &mb, 0, nullptr, 0, nullptr);
-            }
+            // No barrier needed: each face writes to a different array layer
         }
 
         // Transition to shader read-only
@@ -599,20 +575,15 @@ void EnvironmentMap::generatePrefilteredMap() {
 
             uint32_t workgroups = (mipSize + 15) / 16;
 
+            // Dispatch for each cubemap face (GPU can parallelize these independent writes)
             for (uint32_t face = 0; face < 6; ++face) {
                 pc.face = face;
                 cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
                 pipeline.dispatch(cmd, workgroups, workgroups, 1);
-
-                if (face < 5) {
-                    vk::MemoryBarrier mb;
-                    mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-                    mb.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, 1, &mb, 0, nullptr, 0, nullptr);
-                }
+                // No barrier needed: each face writes to a different array layer
             }
 
-            // Barrier between mip levels
+            // Barrier between mip levels (required: mip N may depend on mip N-1)
             if (mip < mipLevels - 1) {
                 vk::MemoryBarrier mb;
                 mb.srcAccessMask = vk::AccessFlagBits::eShaderWrite;

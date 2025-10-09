@@ -1,6 +1,6 @@
 #version 450
 
-// Workgroup size for processing cubemap faces
+// Optimized workgroup size: process all 6 faces in one dispatch using Z dimension
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 // Input: Equirectangular HDR texture
@@ -9,10 +9,9 @@ layout(set = 0, binding = 0) uniform sampler2D equirectangularMap;
 // Output: Cubemap storage image
 layout(set = 0, binding = 1, rgba16f) uniform imageCube outputCubemap;
 
-// Push constants for cubemap size
+// Push constants for cubemap size (currentFace removed - using gl_GlobalInvocationID.z)
 layout(push_constant) uniform PushConstants {
     uint cubemapSize;
-    uint currentFace;
 } pc;
 
 const float PI = 3.14159265359;
@@ -54,11 +53,13 @@ vec2 directionToEquirectUV(vec3 dir) {
 }
 
 void main() {
-    // Get current pixel coordinates
-    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    // Get current pixel coordinates (Z = face index)
+    ivec3 globalId = ivec3(gl_GlobalInvocationID);
+    ivec2 pixelCoord = globalId.xy;
+    uint currentFace = globalId.z;
 
     // Check bounds
-    if (pixelCoord.x >= pc.cubemapSize || pixelCoord.y >= pc.cubemapSize) {
+    if (pixelCoord.x >= pc.cubemapSize || pixelCoord.y >= pc.cubemapSize || currentFace >= 6) {
         return;
     }
 
@@ -66,7 +67,7 @@ void main() {
     vec2 uv = (vec2(pixelCoord) + 0.5) / float(pc.cubemapSize);
 
     // Get 3D direction for this cubemap pixel
-    vec3 direction = uvToDirection(uv, pc.currentFace);
+    vec3 direction = uvToDirection(uv, currentFace);
 
     // Convert direction to equirectangular UV
     vec2 equirectUV = directionToEquirectUV(direction);
@@ -74,6 +75,6 @@ void main() {
     // Sample from equirectangular map
     vec4 color = texture(equirectangularMap, equirectUV);
 
-    // Write to cubemap face
-    imageStore(outputCubemap, ivec3(pixelCoord, pc.currentFace), color);
+    // Write to cubemap face (all 6 faces processed in parallel)
+    imageStore(outputCubemap, ivec3(pixelCoord, currentFace), color);
 }
