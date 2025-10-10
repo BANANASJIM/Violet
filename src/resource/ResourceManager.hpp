@@ -4,6 +4,7 @@
 #include "resource/MaterialManager.hpp"
 #include "resource/MeshManager.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "core/ThreadPool.hpp"
 
 #include <EASTL/vector.h>
@@ -15,7 +16,6 @@
 namespace violet {
 
 class VulkanContext;
-class DescriptorManager;
 
 // Async loading task for CPU/GPU work separation
 struct AsyncLoadTask {
@@ -37,7 +37,7 @@ public:
     ResourceManager& operator=(const ResourceManager&) = delete;
 
     // === Initialization ===
-    void init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
+    void init(VulkanContext* ctx, uint32_t maxFramesInFlight);
     void cleanup();
 
     // === Sub-manager Access ===
@@ -53,6 +53,9 @@ public:
     MeshManager* getMeshManager() { return meshManager.get(); }
     const MeshManager* getMeshManager() const { return meshManager.get(); }
 
+    DescriptorManager& getDescriptorManager() { return descriptorManager; }
+    const DescriptorManager& getDescriptorManager() const { return descriptorManager; }
+
     // === Convenience Methods (delegates to sub-managers) ===
     void createDefaultResources();
 
@@ -65,9 +68,10 @@ private:
     VulkanContext* context = nullptr;
 
     // Sub-managers (order matters: initialization dependency)
+    DescriptorManager descriptorManager;                 // Base infrastructure (owned)
     eastl::unique_ptr<ShaderLibrary> shaderLibrary;      // no dependencies
-    eastl::unique_ptr<TextureManager> textureManager;
-    eastl::unique_ptr<MaterialManager> materialManager;  // depends on TextureManager
+    eastl::unique_ptr<TextureManager> textureManager;    // depends on DescriptorManager
+    eastl::unique_ptr<MaterialManager> materialManager;  // depends on TextureManager + DescriptorManager
     eastl::unique_ptr<MeshManager> meshManager;
 
     // Async loading support

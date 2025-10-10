@@ -34,6 +34,10 @@ const MaterialManager* ForwardRenderer::getMaterialManager() const {
     return resourceManager ? resourceManager->getMaterialManager() : nullptr;
 }
 
+DescriptorManager& ForwardRenderer::getDescriptorManager() {
+    return resourceManager->getDescriptorManager();
+}
+
 MaterialInstance* ForwardRenderer::getMaterialInstanceByIndex(uint32_t index) const {
     auto* matMgr = getMaterialManager();
     return matMgr ? const_cast<MaterialInstance*>(matMgr->getGlobalMaterial(index)) : nullptr;
@@ -49,8 +53,8 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     resourceManager = resMgr;
     maxFramesInFlight = framesInFlight;
 
-    // Initialize descriptor manager first
-    descriptorManager.init(context, maxFramesInFlight);
+    // DescriptorManager is now owned by ResourceManager and already initialized
+    auto& descMgr = resourceManager->getDescriptorManager();
 
     // Declare all descriptor set layouts (declarative registration)
     registerDescriptorLayouts();
@@ -59,29 +63,23 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     setupPasses(swapchainFormat);
 
     // Initialize subsystems - use first graphics pass for components that need RenderPass
-    globalUniforms.init(context, &descriptorManager, maxFramesInFlight);
+    globalUniforms.init(context, &descMgr, maxFramesInFlight);
 
-    // Find first graphics pass for initialization
-    RenderPass* firstRenderPass = getRenderPass(0);
-    if (firstRenderPass) {
-        // DebugRenderer.init() is called by VioletApp after ResourceManager loads shaders
-        // Removed duplicate call here to fix initialization order
-
-        // Initialize EnvironmentMap with bindless architecture
-        auto* matMgr = getMaterialManager();
-        if (matMgr) {
-            environmentMap.init(context, matMgr, &descriptorManager, resourceManager->getTextureManager(), resourceManager->getShaderLibrary());
-        }
+    // Initialize EnvironmentMap with bindless architecture
+    // MaterialManager is now guaranteed to exist (ResourceManager already initialized)
+    auto* matMgr = getMaterialManager();
+    if (matMgr) {
+        environmentMap.init(context, matMgr, &descMgr, resourceManager->getTextureManager(), resourceManager->getShaderLibrary());
     }
 
-    // AutoExposure.init() is called by VioletApp after ResourceManager loads shaders
-    // (Same initialization order pattern as DebugRenderer)
+    // Initialize auto-exposure (now safe since shaders are loaded)
+    autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary());
 
     // Initialize bindless through DescriptorManager
-    descriptorManager.initBindless(1024);
+    descMgr.initBindless(1024);
 
     // Initialize material data SSBO for bindless architecture
-    descriptorManager.initMaterialDataBuffer(1024);
+    descMgr.initMaterialDataBuffer(1024);
 
     // Materials will be created later via createMaterials() after MaterialManager is initialized
 }
@@ -106,29 +104,14 @@ void ForwardRenderer::createMaterials() {
         postProcessMaterial = matMgr->createPostProcessMaterial(postProcessPass);
 
         // Create descriptor set for post-process material
-        auto sets = descriptorManager.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
+        auto& descMgr = resourceManager->getDescriptorManager();
+        auto sets = descMgr.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
         postProcessDescriptorSet = eastl::make_unique<DescriptorSet>();
         postProcessDescriptorSet->init(context, sets);
 
         // Update descriptor set with offscreen textures
         updatePostProcessDescriptors();
     }
-
-    // Load default HDR environment map
-    try {
-        eastl::string hdrPath = violet::FileSystem::resolveRelativePath("assets/textures/skybox.hdr");
-        violet::Log::info("Renderer", "Loading default HDR environment map: {}", hdrPath.c_str());
-        environmentMap.loadHDR(hdrPath);
-        environmentMap.generateIBLMaps();
-        violet::Log::info("Renderer", "Default HDR environment map loaded successfully");
-    } catch (const violet::Exception& e) {
-        violet::Log::warn("Renderer", "Failed to load default HDR environment map: {}", e.what_c_str());
-    }
-}
-
-void ForwardRenderer::initAutoExposure() {
-    // Initialize auto-exposure system after shaders are loaded
-    autoExposure.init(context, &descriptorManager, currentExtent, resourceManager->getShaderLibrary());
 }
 
 void ForwardRenderer::cleanup() {
@@ -162,12 +145,6 @@ void ForwardRenderer::cleanup() {
     postProcessMaterial = nullptr;
     pbrBindlessMaterial = nullptr;
     skyboxMaterial = nullptr;
-
-    // Step 7: Materials and textures managed by MaterialManager are cleaned in ResourceManager
-    // (No cleanup needed here)
-
-    // Step 8: Finally cleanup descriptor manager after all resources are destroyed
-    descriptorManager.cleanup();  // Safe to cleanup after materials/textures are gone
 }
 
 
@@ -294,10 +271,14 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     vk::ClearValue depthClear;
     depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
-    // Pass 1: Main pass - Render scene to offscreen framebuffer
+    // Pass 1: Main pass - Render scene to offscreen framebuffer (HDR)
+    // Use linear format for HDR rendering, NOT swapchain format (which is sRGB)
+    // Linear format prevents automatic sRGB conversion during writes
+    vk::Format hdrFormat = vk::Format::eR16G16B16A16Sfloat;  // Linear HDR format
+
     RenderPassConfig mainPassConfig;
     mainPassConfig.name = "Main";
-    mainPassConfig.colorAttachments = {AttachmentDesc::color(swapchainFormat, vk::AttachmentLoadOp::eClear)};
+    mainPassConfig.colorAttachments = {AttachmentDesc::color(hdrFormat, vk::AttachmentLoadOp::eClear)};
     mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore);
     mainPassConfig.hasDepth = true;
     mainPassConfig.clearValues = {colorClear, depthClear};
@@ -321,7 +302,7 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
                 // Bindless descriptor set for cubemap array
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                     skyboxMaterial->getPipelineLayout(), 1,
-                    descriptorManager.getBindlessSet(), {});
+                    resourceManager->getDescriptorManager().getBindlessSet(), {});
                 cmd.draw(3, 1, 0, 0); // Full-screen triangle
             }
 
@@ -377,14 +358,18 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
             );
         }
 
-        // Push constants for tone mapping parameters (EV100 + gamma)
+        // Push constants for tone mapping parameters (EV100 + gamma + tonemap mode)
         struct PostProcessParams {
             float ev100;
             float gamma;
+            uint32_t tonemapMode;  // 0=ACES Fitted, 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
+            float padding;  // Alignment
         } params;
         // Use auto-exposure EV100 if enabled, otherwise use manual value
         params.ev100 = autoExposure.getCurrentEV100();
         params.gamma = postProcessGamma;
+        params.tonemapMode = tonemapMode;
+        params.padding = 0.0f;
 
         cmd.pushConstants(
             postProcessMaterial->getPipelineLayout(),
@@ -597,9 +582,10 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     pbrBindlessMaterial->getPipeline()->bind(commandBuffer);
 
     // Bind all descriptor sets once (set 0: Global, set 1: Bindless Textures, set 2: Material Data SSBO)
+    auto& descMgr = resourceManager->getDescriptorManager();
     vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
-    vk::DescriptorSet bindlessSet = descriptorManager.getBindlessSet();
-    vk::DescriptorSet materialDataSet = descriptorManager.getMaterialDataSet();
+    vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
+    vk::DescriptorSet materialDataSet = descMgr.getMaterialDataSet();
 
     eastl::array<vk::DescriptorSet, 3> descriptorSets = {globalSet, bindlessSet, materialDataSet};
     commandBuffer.bindDescriptorSets(
@@ -897,8 +883,10 @@ void GlobalUniforms::setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_
 }
 
 void ForwardRenderer::registerDescriptorLayouts() {
+    auto& descMgr = resourceManager->getDescriptorManager();
+
     // Global uniforms layout - per-frame updates
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "Global",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
@@ -908,7 +896,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // PBR material layout - per-material updates
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "PBRMaterial",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
@@ -922,7 +910,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // Unlit material layout - per-material updates
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "UnlitMaterial",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
@@ -932,7 +920,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // PostProcess layout - per-pass updates
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "PostProcess",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Color texture
@@ -942,7 +930,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // Compute shader layout for equirect to cubemap
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "EquirectToCubemap",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input equirect
@@ -952,7 +940,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // IBL compute shader layouts
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "IrradianceConvolution",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
@@ -961,7 +949,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
         .frequency = UpdateFrequency::Static
     });
 
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "PrefilterEnvironment",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
@@ -970,7 +958,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
         .frequency = UpdateFrequency::Static
     });
 
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "BRDFLUT",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output BRDF LUT (2D texture)
@@ -980,7 +968,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
 
     // Bindless texture array layout - static, rarely updated
     // Binding 0: 2D textures, Binding 1: Cubemaps
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "Bindless",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment, .count = 1024},  // 2D textures
@@ -993,7 +981,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
 
     // Material data SSBO - bindless architecture (set 2)
     // Contains all material parameters + texture indices
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "MaterialData",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
@@ -1002,7 +990,7 @@ void ForwardRenderer::registerDescriptorLayouts() {
     });
 
     // Auto-exposure luminance compute - per-frame update
-    descriptorManager.registerLayout({
+    descMgr.registerLayout({
         .name = "LuminanceCompute",
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute},
@@ -1034,7 +1022,8 @@ void ForwardRenderer::updatePostProcessDescriptors() {
     }
 
     // Get sampler from DescriptorManager (reuse cached sampler)
-    vk::Sampler sampler = descriptorManager.getSampler(SamplerType::ClampToEdge);
+    auto& descMgr = resourceManager->getDescriptorManager();
+    vk::Sampler sampler = descMgr.getSampler(SamplerType::ClampToEdge);
 
     // Update descriptor set with color texture (binding 0)
     vk::DescriptorImageInfo colorImageInfo{};

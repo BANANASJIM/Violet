@@ -134,7 +134,6 @@ void AssetBrowserLayer::renderTreeNode(const FileTreeNode& node) {
 
         // Drag source with improved visual feedback
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
-            violet::Log::info("UI", "AssetBrowser: Starting drag for {}", node.fullPath.c_str());
             ImGui::SetDragDropPayload("ASSET_PATH", node.fullPath.c_str(), node.fullPath.size() + 1);
 
             // Different drop text based on file type

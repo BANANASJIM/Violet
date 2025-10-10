@@ -89,7 +89,6 @@ void InputManager::scrollCallback(GLFWwindow* window, double xoffset, double yof
     ScrollEvent event(glm::vec2(static_cast<float>(xoffset), static_cast<float>(yoffset)));
     event.timestamp = getCurrentTimestamp();
     EventDispatcher::publish(event);
-    violet::Log::debug("Input", "Scroll event: ({}, {})", xoffset, yoffset);
 }
 
 uint32_t InputManager::getCurrentTimestamp() {

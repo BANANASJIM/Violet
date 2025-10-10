@@ -1,0 +1,5 @@
+{
+  "name": "vulkan",
+  "version": "0.0.0",
+  "description": "Empty overlay to use system Vulkan instead of vcpkg"
+}

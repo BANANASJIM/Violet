@@ -417,7 +417,7 @@ void EnvironmentMap::generateIrradianceMap() {
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
     pushConstant.offset = 0;
-    pushConstant.size = sizeof(uint32_t) * 2;
+    pushConstant.size = sizeof(uint32_t);
     config.pushConstantRanges.push_back(pushConstant);
 
     auto shader = shaderLibrary->get("irradiance_convolution");
@@ -462,17 +462,20 @@ void EnvironmentMap::generateIrradianceMap() {
         pipeline.bind(cmd);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSetPtr->getDescriptorSet(0), {});
 
-        struct { uint32_t size; uint32_t face; } pc;
-        pc.size = irradianceSize;
+        // Single dispatch for all 6 faces using Z dimension
+        // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
         uint32_t workgroups = (irradianceSize + 15) / 16;
 
-        // Dispatch for each cubemap face (GPU can parallelize these independent writes)
-        for (uint32_t face = 0; face < 6; ++face) {
-            pc.face = face;
-            cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-            pipeline.dispatch(cmd, workgroups, workgroups, 1);
-            // No barrier needed: each face writes to a different array layer
-        }
+        cmd.pushConstants(
+            pipeline.getPipelineLayout(),
+            vk::ShaderStageFlagBits::eCompute,
+            0,
+            sizeof(uint32_t),
+            &irradianceSize
+        );
+
+        pipeline.dispatch(cmd, workgroups, workgroups, 6);  // Z=6 for all faces
+        // No barrier needed: each face writes to a different array layer
 
         // Transition to shader read-only
         barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;

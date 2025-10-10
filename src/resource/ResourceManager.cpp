@@ -16,22 +16,28 @@ ResourceManager::~ResourceManager() {
     cleanup();
 }
 
-void ResourceManager::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight) {
+void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
     context = ctx;
 
-    // Initialize sub-managers in dependency order using make_unique
+    // 1. Initialize DescriptorManager first (base infrastructure)
+    descriptorManager.init(context, maxFramesInFlight);
+
+    // 2. Initialize sub-managers in dependency order using make_unique
     shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx);
+
     textureManager = eastl::make_unique<TextureManager>();
-    textureManager->init(ctx, descMgr);
+    textureManager->init(ctx, &descriptorManager);
+
     materialManager = eastl::make_unique<MaterialManager>();
-    materialManager->init(ctx, descMgr, textureManager.get(), shaderLibrary.get(), maxFramesInFlight);
+    materialManager->init(ctx, &descriptorManager, textureManager.get(), shaderLibrary.get(), maxFramesInFlight);
+
     meshManager = eastl::make_unique<MeshManager>();
     meshManager->init(ctx);
 
-    // Pre-load all shaders
+    // 3. Pre-load all shaders
     loadAllShaders();
 
-    violet::Log::info("ResourceManager", "Initialized all sub-managers");
+    violet::Log::info("ResourceManager", "Initialized all sub-managers with DescriptorManager");
 }
 
 void ResourceManager::loadAllShaders() {
@@ -103,7 +109,10 @@ void ResourceManager::cleanup() {
         shaderLibrary.reset();
     }
 
-    violet::Log::info("ResourceManager", "Cleaned up all sub-managers");
+    // Finally cleanup DescriptorManager (base infrastructure)
+    descriptorManager.cleanup();
+
+    violet::Log::info("ResourceManager", "Cleaned up all sub-managers including DescriptorManager");
 }
 
 void ResourceManager::createDefaultResources() {

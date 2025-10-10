@@ -171,14 +171,16 @@ public:
     // PostProcess tone mapping parameters (EV100 system)
     void setPostProcessEV100(float ev) { postProcessEV100 = ev; }
     void setPostProcessGamma(float gamma) { postProcessGamma = gamma; }
+    void setTonemapMode(uint32_t mode) { tonemapMode = mode; }
     float getPostProcessEV100() const { return postProcessEV100; }
     float getPostProcessGamma() const { return postProcessGamma; }
+    uint32_t getTonemapMode() const { return tonemapMode; }
 
     // PBR Bindless Material access (shared material for all PBR instances)
     Material* getPBRBindlessMaterial() const { return pbrBindlessMaterial; }
 
-    // Descriptor manager access
-    DescriptorManager& getDescriptorManager() { return descriptorManager; }
+    // Descriptor manager access (delegates to ResourceManager)
+    DescriptorManager& getDescriptorManager();
 
     // Compatibility layer - delegates to MaterialManager
     MaterialInstance* getMaterialInstanceByIndex(uint32_t index) const;
@@ -219,6 +221,7 @@ private:
     // Typical values: -2 (night), 0 (overcast), 9-10 (sunny), 15 (direct sun)
     float postProcessEV100 = 9.0f;  // Default: sunny day
     float postProcessGamma = 2.2f;
+    uint32_t tonemapMode = 0;  // 0=ACES Fitted (default), 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
@@ -226,8 +229,7 @@ private:
     AutoExposure autoExposure;
     eastl::vector<eastl::unique_ptr<Pass>> passes;
 
-    DescriptorManager descriptorManager;
-    ResourceManager* resourceManager = nullptr;  // Injected dependency
+    ResourceManager* resourceManager = nullptr;  // Injected dependency (provides DescriptorManager)
 
     // Time tracking for auto-exposure
     std::chrono::steady_clock::time_point lastFrameTime;

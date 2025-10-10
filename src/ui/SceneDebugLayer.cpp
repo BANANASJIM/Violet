@@ -996,8 +996,6 @@ void SceneDebugLayer::handleAssetDragDrop() {
         ImGui::InvisibleButton("##DropZone", io.DisplaySize);
 
         if (ImGui::BeginDragDropTarget()) {
-            violet::Log::debug("UI", "Drop target ready");
-
             if (const ImGuiPayload* dropPayload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
                 const char* path = (const char*)dropPayload->Data;
                 violet::Log::info("UI", "Asset dropped in scene: {}", path);
@@ -1638,6 +1636,25 @@ void SceneDebugLayer::renderEnvironmentPanel() {
 
             ImGui::Separator();
 
+            // Tonemap operator selection
+            const char* tonemapModes[] = { "ACES Fitted", "ACES Narkowicz", "Uncharted 2", "Reinhard", "None (Linear)" };
+            int currentMode = static_cast<int>(renderer->getTonemapMode());
+            if (ImGui::Combo("Tone Mapper", &currentMode, tonemapModes, 5)) {
+                renderer->setTonemapMode(static_cast<uint32_t>(currentMode));
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "ACES Fitted: UE4/UE5 default, most accurate\n"
+                    "ACES Narkowicz: Fast approximation\n"
+                    "Uncharted 2: Classic game industry standard\n"
+                    "Reinhard: Simple, fast, can wash out\n"
+                    "None: Linear (for debugging)");
+            }
+
+            ImGui::Separator();
+
             // Gamma control
             float ppGamma = renderer->getPostProcessGamma();
             if (ImGui::SliderFloat("Gamma", &ppGamma, 1.8f, 2.6f, "%.2f")) {
@@ -1648,7 +1665,6 @@ void SceneDebugLayer::renderEnvironmentPanel() {
                 renderer->setPostProcessGamma(2.2f);
             }
 
-            ImGui::TextDisabled("Using ACES Filmic tone mapping");
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
                 "EV Ref: Night -2, Overcast 0, Sunny 9-10, Direct Sun 15");
         }

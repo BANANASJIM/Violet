@@ -497,7 +497,6 @@ uint32_t DescriptorManager::allocateBindlessTexture(Texture* texture) {
 
     context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 
-    violet::Log::debug("Renderer", "Allocated bindless texture at index {}", index);
     return index;
 }
 
@@ -540,7 +539,6 @@ uint32_t DescriptorManager::allocateBindlessTextureAt(Texture* texture, uint32_t
 
     context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 
-    violet::Log::debug("Renderer", "Allocated bindless texture at fixed index {}", index);
     return index;
 }
 
@@ -557,8 +555,6 @@ void DescriptorManager::freeBindlessTexture(uint32_t index) {
 
     bindlessTextureSlots[index] = nullptr;
     bindlessFreeIndices.push_back(index);
-
-    violet::Log::debug("Renderer", "Freed bindless texture at index {}", index);
 }
 
 uint32_t DescriptorManager::allocateBindlessCubemap(Texture* cubemapTexture) {
@@ -594,7 +590,6 @@ uint32_t DescriptorManager::allocateBindlessCubemap(Texture* cubemapTexture) {
 
     context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 
-    violet::Log::debug("Renderer", "Allocated bindless cubemap at index {}", index);
     return index;
 }
 
@@ -611,8 +606,6 @@ void DescriptorManager::freeBindlessCubemap(uint32_t index) {
 
     bindlessCubemapSlots[index] = nullptr;
     bindlessCubemapFreeIndices.push_back(index);
-
-    violet::Log::debug("Renderer", "Freed bindless cubemap at index {}", index);
 }
 
 vk::DescriptorSet DescriptorManager::getBindlessSet() const {
@@ -789,7 +782,6 @@ uint32_t DescriptorManager::allocateMaterialData(const MaterialData& data) {
     MaterialData* gpuData = static_cast<MaterialData*>(materialDataMapped);
     gpuData[index] = data;
 
-    violet::Log::debug("Renderer", "Allocated material data at index {}", index);
     return index;
 }
 
@@ -811,7 +803,6 @@ bool DescriptorManager::updateMaterialData(uint32_t index, const MaterialData& d
     MaterialData* gpuData = static_cast<MaterialData*>(materialDataMapped);
     gpuData[index] = data;
 
-    violet::Log::debug("Renderer", "Updated material data at index {}", index);
     return true;
 }
 
@@ -825,7 +816,6 @@ bool DescriptorManager::freeMaterialData(uint32_t index) {
     materialDataSlots[index] = MaterialData{};
     materialDataFreeIndices.push_back(index);
 
-    violet::Log::debug("Renderer", "Freed material data at index {}", index);
     return true;
 }
 

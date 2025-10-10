@@ -48,21 +48,20 @@ VioletApp::~VioletApp() {
 }
 
 void VioletApp::createResources() {
-    // Initialize renderer first to set up DescriptorManager
-    renderer.init(getContext(), &resourceManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
-
-    // Initialize ResourceManager with renderer's DescriptorManager
-    resourceManager.init(getContext(), &renderer.getDescriptorManager(), MAX_FRAMES_IN_FLIGHT);
+    // 1. Initialize ResourceManager first (includes DescriptorManager initialization)
+    resourceManager.init(getContext(), MAX_FRAMES_IN_FLIGHT);
     resourceManager.createDefaultResources();
 
-    // Create renderer materials after ResourceManager is initialized
+    // 2. Initialize Renderer (all dependencies are ready - DescriptorManager, MaterialManager, etc.)
+    renderer.init(getContext(), &resourceManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+
+    // 3. Create renderer materials
     renderer.createMaterials();
-    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &renderer.getDescriptorManager(),
+    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &resourceManager.getDescriptorManager(),
                        resourceManager.getShaderLibrary(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
     debugRenderer.setUILayer(compositeUI.get());
 
-    // Initialize auto-exposure after shaders are loaded
-    renderer.initAutoExposure();
+    // Note: initAutoExposure() no longer needed - auto-exposure is initialized in renderer.init()
 
     // Configure App base class
     this->forwardRenderer = &renderer;

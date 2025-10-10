@@ -9,13 +9,46 @@ layout(set = 0, binding = 0) uniform samplerCube environmentMap;
 // Output: Irradiance cubemap (lower resolution)
 layout(set = 0, binding = 1, rgba16f) uniform imageCube irradianceMap;
 
-// Push constants for cubemap size and current face
+// Push constants for cubemap size
 layout(push_constant) uniform PushConstants {
     uint irradianceSize;
-    uint currentFace;
 } pc;
 
 const float PI = 3.14159265359;
+
+// Van der Corput radical inverse (base 2)
+// Generates deterministic low-discrepancy sequence in [0, 1)
+float radicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10; // / 0x100000000
+}
+
+// Hammersley low-discrepancy sequence
+// Returns 2D point in [0, 1)^2 with excellent stratification
+vec2 hammersley(uint i, uint N) {
+    return vec2(float(i) / float(N), radicalInverse_VdC(i));
+}
+
+// Cosine-weighted hemisphere sampling (Malley's method)
+// Maps uniform [0,1)^2 to hemisphere with PDF = cos(theta) / PI
+vec3 cosineSampleHemisphere(vec2 u) {
+    // Map to unit disk using concentric mapping
+    float r = sqrt(u.x);
+    float phi = 2.0 * PI * u.y;
+
+    // Cartesian coordinates on disk
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+
+    // Project to hemisphere (z = sqrt(1 - x^2 - y^2))
+    float z = sqrt(max(0.0, 1.0 - u.x));
+
+    return vec3(x, y, z);
+}
 
 // Convert cubemap UV coordinates to 3D direction vector
 vec3 uvToDirection(vec2 uv, uint face) {
@@ -49,11 +82,12 @@ void buildOrthonormalBasis(vec3 n, out vec3 tangent, out vec3 bitangent) {
 }
 
 void main() {
-    // Get current pixel coordinates
+    // Get current pixel coordinates and cubemap face index from Z dimension
     ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    uint currentFace = gl_GlobalInvocationID.z;
 
     // Check bounds
-    if (pixelCoord.x >= pc.irradianceSize || pixelCoord.y >= pc.irradianceSize) {
+    if (pixelCoord.x >= pc.irradianceSize || pixelCoord.y >= pc.irradianceSize || currentFace >= 6u) {
         return;
     }
 
@@ -61,56 +95,49 @@ void main() {
     vec2 uv = (vec2(pixelCoord) + 0.5) / float(pc.irradianceSize);
 
     // Get 3D normal direction for this cubemap pixel
-    vec3 N = uvToDirection(uv, pc.currentFace);
+    vec3 N = uvToDirection(uv, currentFace);
 
     // Build tangent space
     vec3 T, B;
     buildOrthonormalBasis(N, T, B);
 
-    // Convolve environment map - integrate over hemisphere
+    // Convolve environment map using importance sampling with Hammersley sequence
     vec3 irradiance = vec3(0.0);
 
-    // Hemisphere sampling resolution
-    const uint THETA_SAMPLES = 32u;  // Polar angle samples (latitude)
-    const uint PHI_SAMPLES = 64u;    // Azimuthal angle samples (longitude)
+    // Number of samples for Monte Carlo integration
+    // Using low-discrepancy Hammersley sequence converges faster than uniform grid
+    // 1024 samples with importance sampling ≈ 2048+ samples with uniform sampling
+    const uint SAMPLE_COUNT = 1024u;
 
-    float totalWeight = 0.0;
+    // Monte Carlo integration with cosine-weighted importance sampling
+    // Rendering equation: ∫ Li(ω) * cos(θ) dω over hemisphere
+    // PDF = cos(θ) / π (cosine-weighted sampling)
+    // Monte Carlo estimator: (1/N) * Σ [Li(ω) * cos(θ) / PDF(ω)]
+    //                       = (1/N) * Σ [Li(ω) * cos(θ) / (cos(θ)/π)]
+    //                       = (π/N) * Σ Li(ω)
+    // The cos(θ) term cancels with PDF, leaving only Li(ω) contribution!
+    for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
+        // Generate low-discrepancy sample using Hammersley sequence
+        vec2 u = hammersley(i, SAMPLE_COUNT);
 
-    // Integrate using Riemann sum over hemisphere
-    for (uint j = 0u; j < THETA_SAMPLES; ++j) {
-        // Theta from 0 (pole) to PI/2 (horizon)
-        float theta = (float(j) + 0.5) / float(THETA_SAMPLES) * (PI * 0.5);
+        // Generate cosine-weighted hemisphere sample (in tangent space)
+        // This naturally weights samples toward the normal (more important directions)
+        vec3 tangentSample = cosineSampleHemisphere(u);
 
-        for (uint k = 0u; k < PHI_SAMPLES; ++k) {
-            // Phi from 0 to 2*PI (full rotation around hemisphere)
-            float phi = (float(k) + 0.5) / float(PHI_SAMPLES) * 2.0 * PI;
+        // Transform from tangent space to world space
+        vec3 sampleDir = tangentSample.x * T + tangentSample.y * B + tangentSample.z * N;
 
-            // Convert spherical to cartesian (in tangent space)
-            vec3 tangentSample = vec3(
-                sin(theta) * cos(phi),
-                sin(theta) * sin(phi),
-                cos(theta)
-            );
+        // Sample incoming radiance from environment map
+        vec3 Li = texture(environmentMap, sampleDir).rgb;
 
-            // Transform to world space
-            vec3 sampleDir = tangentSample.x * T + tangentSample.y * B + tangentSample.z * N;
-
-            // Sample environment map
-            vec3 sampleColor = texture(environmentMap, sampleDir).rgb;
-
-            // Weight by cos(theta) * sin(theta) (solid angle measure)
-            float cosTheta = cos(theta);
-            irradiance += sampleColor * cosTheta * sin(theta);
-            totalWeight += cosTheta * sin(theta);
-        }
+        // Accumulate contribution (cos(θ) cancels with PDF)
+        irradiance += Li;
     }
 
-    // Normalize by total weight and multiply by PI
-    // The PI factor accounts for the hemisphere integration in the rendering equation
-    // The diffuse BRDF term in the fragment shader is albedo/PI, so the final result is:
-    // (irradiance * PI) * (albedo / PI) = irradiance * albedo (correct Lambert diffuse)
-    irradiance = (PI * irradiance) / totalWeight;
+    // Monte Carlo estimator: multiply by PI (from PDF) and divide by sample count
+    // The PI factor ensures correct energy balance with fragment shader's albedo/PI BRDF
+    irradiance = (PI * irradiance) / float(SAMPLE_COUNT);
 
-    // Write to irradiance map
-    imageStore(irradianceMap, ivec3(pixelCoord, pc.currentFace), vec4(irradiance, 1.0));
+    // Write to irradiance map (currentFace is from gl_GlobalInvocationID.z)
+    imageStore(irradianceMap, ivec3(pixelCoord, currentFace), vec4(irradiance, 1.0));
 }
