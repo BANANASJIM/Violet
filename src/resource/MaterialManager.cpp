@@ -147,11 +147,11 @@ Material* MaterialManager::createPostProcessMaterial(RenderPass* renderPass) {
     postProcessConfig.depthCompareOp = vk::CompareOp::eAlways;
     postProcessConfig.useVertexInput = false;
 
-    // Add push constant for tone mapping parameters (exposure + gamma)
+    // Add push constant for tone mapping parameters (ev100 + gamma + tonemapMode + padding)
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eFragment;
     pushConstant.offset = 0;
-    pushConstant.size = sizeof(float) * 2;  // exposure + gamma
+    pushConstant.size = sizeof(float) * 4;  // ev100 + gamma + tonemapMode + padding (16 bytes total)
     postProcessConfig.pushConstantRanges.push_back(pushConstant);
 
     MaterialDesc desc{

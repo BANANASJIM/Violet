@@ -24,6 +24,7 @@
 #include "renderer/effect/AutoExposure.hpp"
 #include "renderer/vulkan/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
+#include "renderer/graph/RenderGraph.hpp"
 
 namespace violet {
 
@@ -207,6 +208,7 @@ private:
     RenderStats renderStats;
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
+    uint32_t currentFrameIndex = 0;
 
     // Material references from MaterialManager (not owned by renderer)
     Material* postProcessMaterial = nullptr;
@@ -228,6 +230,10 @@ private:
     EnvironmentMap environmentMap;
     AutoExposure autoExposure;
     eastl::vector<eastl::unique_ptr<Pass>> passes;
+
+    // Render graph for automatic barrier generation
+    eastl::unique_ptr<RenderGraph> renderGraph;
+    bool useRenderGraph = true;  // Flag to enable/disable render graph
 
     ResourceManager* resourceManager = nullptr;  // Injected dependency (provides DescriptorManager)
 

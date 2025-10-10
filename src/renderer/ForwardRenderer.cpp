@@ -22,6 +22,7 @@
 #include "renderer/vulkan/RenderPass.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/graph/RenderGraph.hpp"
 
 namespace violet {
 
@@ -184,40 +185,65 @@ void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebu
         linearSampler = context->getDevice().createSampler(samplerInfo);
     }
 
-    for (size_t i = 0; i < passes.size(); ++i) {
-        // Insert explicit barrier between passes if needed
-        if (i > 0) {
-            insertPassTransition(cmd, i);
+    // Use render graph if enabled
+    if (useRenderGraph && renderGraph) {
+        // Store current frame data for lambdas
+        currentFrameIndex = frameIndex;
+
+        // Special handling for swapchain pass
+        RenderPass* postProcessPass = getRenderPass(1);
+        if (postProcessPass) {
+            postProcessPass->setExternalFramebuffer(framebuffer);
         }
 
-        // Execute pass
-        Pass* pass = passes[i].get();
+        // Execute render graph
+        renderGraph->execute(cmd, frameIndex);
 
-        // Handle swapchain framebuffer for graphics passes
-        if (pass->getType() == PassType::Graphics) {
-            RenderPass* renderPass = static_cast<RenderPass*>(pass);
-            if (renderPass->getConfig().isSwapchainPass) {
-                // Set external framebuffer for swapchain pass
-                renderPass->setExternalFramebuffer(framebuffer);
-                renderPass->begin(cmd, extent); // Will use external framebuffer
-            } else {
-                // Passes with own framebuffers use them directly
-                renderPass->begin(cmd, extent); // Will use own framebuffer
-            }
-        } else {
-            // Compute and other passes don't need framebuffer setup
-            pass->begin(cmd, frameIndex);
-        }
-
-        pass->execute(cmd, frameIndex);
-        pass->end(cmd);
-
-        // After main pass (pass 0), compute luminance for auto-exposure
-        if (i == 0 && autoExposure.getParams().enabled) {
+        // Auto-exposure after main pass
+        if (autoExposure.getParams().enabled) {
             RenderPass* mainPass = getRenderPass(0);
             if (mainPass) {
                 vk::ImageView hdrView = mainPass->getColorImageView(0);
                 autoExposure.computeLuminance(cmd, hdrView, linearSampler);
+            }
+        }
+    } else {
+        // Original execution path (fallback)
+        for (size_t i = 0; i < passes.size(); ++i) {
+            // Insert explicit barrier between passes if needed
+            if (i > 0) {
+                insertPassTransition(cmd, i);
+            }
+
+            // Execute pass
+            Pass* pass = passes[i].get();
+
+            // Handle swapchain framebuffer for graphics passes
+            if (pass->getType() == PassType::Graphics) {
+                RenderPass* renderPass = static_cast<RenderPass*>(pass);
+                if (renderPass->getConfig().isSwapchainPass) {
+                    // Set external framebuffer for swapchain pass
+                    renderPass->setExternalFramebuffer(framebuffer);
+                    renderPass->begin(cmd, extent); // Will use external framebuffer
+                } else {
+                    // Passes with own framebuffers use them directly
+                    renderPass->begin(cmd, extent); // Will use own framebuffer
+                }
+            } else {
+                // Compute and other passes don't need framebuffer setup
+                pass->begin(cmd, frameIndex);
+            }
+
+            pass->execute(cmd, frameIndex);
+            pass->end(cmd);
+
+            // After main pass (pass 0), compute luminance for auto-exposure
+            if (i == 0 && autoExposure.getParams().enabled) {
+                RenderPass* mainPass = getRenderPass(0);
+                if (mainPass) {
+                    vk::ImageView hdrView = mainPass->getColorImageView(0);
+                    autoExposure.computeLuminance(cmd, hdrView, linearSampler);
+                }
             }
         }
     }
@@ -387,6 +413,126 @@ void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
     postProcessPass->init(context, postProcessConfig);
 
     passes.push_back(eastl::move(postProcessPass));
+
+    // === Setup Render Graph ===
+    if (useRenderGraph) {
+        renderGraph = eastl::make_unique<RenderGraph>();
+
+        // Import resources (from main pass)
+        RenderPass* mainPassPtr = static_cast<RenderPass*>(passes[0].get());
+        RenderPass* postPassPtr = static_cast<RenderPass*>(passes[1].get());
+
+        // Get the image resources from main pass
+        ImageResource colorResource;
+        colorResource.image = mainPassPtr->getColorImage(0);
+        colorResource.format = vk::Format::eR16G16B16A16Sfloat;
+        colorResource.width = currentExtent.width;
+        colorResource.height = currentExtent.height;
+
+        ImageResource depthResource;
+        depthResource.image = mainPassPtr->getDepthImage();
+        depthResource.format = context->findDepthFormat();
+        depthResource.width = currentExtent.width;
+        depthResource.height = currentExtent.height;
+
+        // Import textures to graph
+        auto hdrColorHandle = renderGraph->importTexture("HDRColor", &colorResource);
+        auto depthHandle = renderGraph->importTexture("Depth", &depthResource);
+
+        // Add Main pass
+        renderGraph->addPass("Main")
+            .write(hdrColorHandle, ResourceUsage::ColorAttachment)
+            .write(depthHandle, ResourceUsage::DepthAttachment)
+            .execute([this, mainPassPtr](vk::CommandBuffer cmd, uint32_t frameIndex) {
+                mainPassPtr->begin(cmd, currentExtent);
+                // Execute the main pass logic stored in the pass's config
+                if (currentWorld) {
+                    this->setViewport(cmd, currentExtent);
+
+                    // Render skybox first (if enabled and material exists)
+                    if (environmentMap.isEnabled() && skyboxMaterial && skyboxMaterial->getPipeline()) {
+                        skyboxMaterial->getPipeline()->bind(cmd);
+                        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                            skyboxMaterial->getPipelineLayout(), 0,
+                            globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex), {});
+                        // Bindless descriptor set for cubemap array
+                        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                            skyboxMaterial->getPipelineLayout(), 1,
+                            resourceManager->getDescriptorManager().getBindlessSet(), {});
+                        cmd.draw(3, 1, 0, 0); // Full-screen triangle
+                    }
+
+                    // Then render scene geometry (depth testing enabled)
+                    renderScene(cmd, frameIndex, *currentWorld);
+                }
+                mainPassPtr->end(cmd);
+            })
+            .build();
+
+        // Add PostProcess pass
+        renderGraph->addPass("PostProcess")
+            .read(hdrColorHandle, ResourceUsage::ShaderRead)
+            .read(depthHandle, ResourceUsage::ShaderRead)
+            .execute([this, postPassPtr](vk::CommandBuffer cmd, uint32_t frameIndex) {
+                // Note: For swapchain pass, framebuffer is set externally
+                postPassPtr->begin(cmd, currentExtent);
+
+                // Execute postprocess logic
+                this->setViewport(cmd, currentExtent);
+
+                if (postProcessMaterial && postProcessMaterial->getPipeline()) {
+                    // Bind post-process pipeline
+                    postProcessMaterial->getPipeline()->bind(cmd);
+
+                    // Bind descriptor set with offscreen textures (set 1)
+                    if (postProcessDescriptorSet) {
+                        vk::DescriptorSet descSet = postProcessDescriptorSet->getDescriptorSet(0);
+                        cmd.bindDescriptorSets(
+                            vk::PipelineBindPoint::eGraphics,
+                            postProcessMaterial->getPipelineLayout(),
+                            1,  // MATERIAL_SET = 1
+                            1,
+                            &descSet,
+                            0,
+                            nullptr
+                        );
+                    }
+
+                    // Push constants for tone mapping parameters (EV100 + gamma + tonemap mode)
+                    struct PostProcessParams {
+                        float ev100;
+                        float gamma;
+                        uint32_t tonemapMode;  // 0=ACES Fitted, 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
+                        float padding;  // Alignment
+                    } params;
+                    // Use auto-exposure EV100 if enabled, otherwise use manual value
+                    params.ev100 = autoExposure.getCurrentEV100();
+                    params.gamma = postProcessGamma;
+                    params.tonemapMode = tonemapMode;
+                    params.padding = 0.0f;
+
+                    cmd.pushConstants(
+                        postProcessMaterial->getPipelineLayout(),
+                        vk::ShaderStageFlagBits::eFragment,
+                        0,
+                        sizeof(PostProcessParams),
+                        &params
+                    );
+
+                    // Draw fullscreen quad (3 vertices, no vertex buffer)
+                    cmd.draw(3, 1, 0, 0);
+                }
+
+                postPassPtr->end(cmd);
+            })
+            .build();
+
+        // Compile the graph
+        renderGraph->compile();
+
+        violet::Log::info("Renderer", "Render graph setup complete");
+        renderGraph->debugPrint();
+    }
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
