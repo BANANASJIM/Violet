@@ -22,7 +22,7 @@
 #include "renderer/DebugRenderer.hpp"
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/effect/AutoExposure.hpp"
-#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 
@@ -112,10 +112,8 @@ public:
     void cleanup();
 
     void createMaterials();  // Create materials after MaterialManager is initialized
-    // Get final pass RenderPass for swapchain framebuffer creation
-    vk::RenderPass getFinalPassRenderPass() const;
 
-    // Pass system interface
+    // Frame rendering
     void beginFrame(entt::registry& world, uint32_t frameIndex);
     void renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
     void endFrame();
@@ -149,13 +147,8 @@ public:
     // Scene state management
     void markSceneDirty() { sceneDirty = true; }
 
-    void onSwapchainRecreate(vk::Extent2D newExtent) override;
-
-    // Multi-pass system
-    void setupPasses(vk::Format swapchainFormat);
-    const eastl::vector<eastl::unique_ptr<Pass>>& getPasses() const { return passes; }
-    Pass* getPass(size_t index) { return passes[index].get(); }
-    RenderPass* getRenderPass(size_t index);  // Helper to get RenderPass specifically
+    // Swapchain resize
+    void resize(vk::Extent2D newExtent);
 
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
@@ -163,12 +156,8 @@ public:
 
     // Auto-exposure access
     AutoExposure& getAutoExposure() { return autoExposure; }
-    void initAutoExposure();  // Initialize auto-exposure after shaders are loaded
 
-    // PostProcess access
-    Material* getPostProcessMaterial() const { return postProcessMaterial; }
-    void updatePostProcessDescriptors();  // Update descriptor set with offscreen textures
-
+    // todo remove
     // PostProcess tone mapping parameters (EV100 system)
     void setPostProcessEV100(float ev) { postProcessEV100 = ev; }
     void setPostProcessGamma(float gamma) { postProcessGamma = gamma; }
@@ -192,9 +181,6 @@ private:
     // Declarative descriptor layouts registration
     void registerDescriptorLayouts();
 
-    // Declarative pass helpers
-    void insertPassTransition(vk::CommandBuffer cmd, size_t passIndex);
-
     // Cleanup protection
     bool isCleanedUp = false;
 
@@ -209,15 +195,10 @@ private:
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
     uint32_t currentFrameIndex = 0;
-
-    // Material references from MaterialManager (not owned by renderer)
-    Material* postProcessMaterial = nullptr;
-    Material* pbrBindlessMaterial = nullptr;
-    Material* skyboxMaterial = nullptr;
-
     // Descriptor sets owned by renderer
     eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
 
+    // todo move this to specific class
     // PostProcess tone mapping parameters (EV100 system)
     // EV100 = Exposure Value at ISO 100 (photographic exposure)
     // Typical values: -2 (night), 0 (overcast), 9-10 (sunny), 15 (direct sun)
@@ -229,13 +210,11 @@ private:
     DebugRenderer debugRenderer;
     EnvironmentMap environmentMap;
     AutoExposure autoExposure;
-    eastl::vector<eastl::unique_ptr<Pass>> passes;
 
-    // Render graph for automatic barrier generation
+    // Render graph for automatic resource and barrier management
     eastl::unique_ptr<RenderGraph> renderGraph;
-    bool useRenderGraph = true;  // Flag to enable/disable render graph
 
-    ResourceManager* resourceManager = nullptr;  // Injected dependency (provides DescriptorManager)
+    ResourceManager* resourceManager = nullptr;
 
     // Time tracking for auto-exposure
     std::chrono::steady_clock::time_point lastFrameTime;

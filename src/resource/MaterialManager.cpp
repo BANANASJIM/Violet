@@ -7,7 +7,7 @@
 #include "resource/Material.hpp"
 #include "resource/Texture.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
-#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 
 #include <EASTL/algorithm.h>
@@ -34,8 +34,9 @@ void MaterialManager::init(VulkanContext* ctx, DescriptorManager* descMgr, Textu
 }
 
 void MaterialManager::cleanup() {
-    // Clear global material map first
+    // Clear maps first
     globalMaterialMap.clear();
+    namedMaterials.clear();
 
     // Destroy all material instances
     for (auto& slot : instanceSlots) {
@@ -99,6 +100,11 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
     Material* materialPtr = material.get();
     materials.push_back(eastl::move(material));
 
+    // Register in named materials map if name is provided
+    if (!desc.name.empty()) {
+        namedMaterials[desc.name] = materialPtr;
+    }
+
     violet::Log::debug("MaterialManager", "Created material '{}' (index {})",
                       desc.name.empty() ? "unnamed" : desc.name.c_str(), materials.size() - 1);
 
@@ -110,6 +116,15 @@ Material* MaterialManager::getMaterial(size_t index) const {
         return nullptr;
     }
     return materials[index].get();
+}
+
+Material* MaterialManager::getMaterialByName(const eastl::string& name) const {
+    auto it = namedMaterials.find(name);
+    if (it != namedMaterials.end()) {
+        return it->second;
+    }
+    violet::Log::error("MaterialManager"," Material is not found");
+    return nullptr;
 }
 
 // Predefined material creation shortcuts

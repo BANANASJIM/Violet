@@ -72,7 +72,7 @@ public:
                                   uint32_t width, uint32_t height);
 
     // Async transfer methods (for use within command buffers)
-    // These methods can be batched with ResourceLoader for better performance
+    // These methods can be batched in RenderGraph TransferPass for better performance
     static void copyBufferAsync(VulkanContext* context, vk::CommandBuffer cmd,
                                BufferResource& src, BufferResource& dst, vk::DeviceSize size);
     static void copyBufferToImageAsync(VulkanContext* context, vk::CommandBuffer cmd,

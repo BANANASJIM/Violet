@@ -7,7 +7,7 @@
 #include "resource/Mesh.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
-#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"

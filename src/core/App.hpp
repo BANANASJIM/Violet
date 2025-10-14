@@ -3,7 +3,7 @@
 #include "Window.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/Swapchain.hpp"
-#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "ui/ImGuiVulkanBackend.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>

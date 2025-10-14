@@ -19,7 +19,7 @@
 #include "resource/Material.hpp"
 #include "resource/Mesh.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
-#include "renderer/vulkan/RenderPass.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/graph/RenderGraph.hpp"
@@ -60,7 +60,8 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Declare all descriptor set layouts (declarative registration)
     registerDescriptorLayouts();
 
-    // Setup multi-pass system
+    // DEPRECATED: Old pass system - will be replaced by RenderGraph
+    // TODO: Remove after full RenderGraph migration
     setupPasses(swapchainFormat);
 
     // Initialize subsystems - use first graphics pass for components that need RenderPass
@@ -85,21 +86,23 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Materials will be created later via createMaterials() after MaterialManager is initialized
 }
 
+// DEPRECATED: Uses old pass system
+// TODO: Refactor to use RenderGraph-managed resources
 void ForwardRenderer::createMaterials() {
     // Get PBR bindless material from MaterialManager
     auto* matMgr = getMaterialManager();
     if (matMgr) {
-        pbrBindlessMaterial = matMgr->createPBRBindlessMaterial(getRenderPass(0));
+        pbrBindlessMaterial = matMgr->createPBRBindlessMaterial(getRenderPass(0)); // TODO: Pass RenderPass from RenderGraph
     }
 
     // Create skybox material using MaterialManager
-    RenderPass* mainPass = getRenderPass(0);
+    RenderPass* mainPass = getRenderPass(0); // TODO: Get from RenderGraph
     if (mainPass && matMgr) {
         skyboxMaterial = matMgr->createSkyboxMaterial(mainPass);
     }
 
     // Create post-process material using MaterialManager
-    RenderPass* postProcessPass = getRenderPass(1);  // PostProcess is second pass
+    RenderPass* postProcessPass = getRenderPass(1);  // TODO: Get from RenderGraph
     if (postProcessPass && matMgr) {
         // MaterialManager owns the material, we just keep a reference
         postProcessMaterial = matMgr->createPostProcessMaterial(postProcessPass);
@@ -111,7 +114,7 @@ void ForwardRenderer::createMaterials() {
         postProcessDescriptorSet->init(context, sets);
 
         // Update descriptor set with offscreen textures
-        updatePostProcessDescriptors();
+        updatePostProcessDescriptors(); // TODO: Replace with RenderGraph resource binding
     }
 }
 
@@ -128,8 +131,8 @@ void ForwardRenderer::cleanup() {
     // These may still reference materials/textures, so clean them before destroying resources
     environmentMap.cleanup();
     debugRenderer.cleanup();
-
-    // Step 3: Cleanup render passes
+    // DEPRECATED: Old pass system cleanup
+    // TODO: Remove after RenderGraph migration - RenderGraph will own passes
     for (auto& pass : passes) {
         if (pass) {
             pass->cleanup();
@@ -164,10 +167,13 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     collectRenderables(world);
 }
 
+// DEPRECATED: Uses old pass system - will be completely rewritten for RenderGraph
+// TODO: Replace with RenderGraph::execute() after full migration
 void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
     currentExtent = extent;
 
     // Create sampler for auto-exposure (linear sampling)
+    // TODO: Move to RenderGraph resource management
     static vk::Sampler linearSampler = VK_NULL_HANDLE;
     if (!linearSampler) {
         vk::SamplerCreateInfo samplerInfo{};
@@ -185,7 +191,8 @@ void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebu
         linearSampler = context->getDevice().createSampler(samplerInfo);
     }
 
-    // Use render graph if enabled
+    // DEPRECATED: Old render graph integration path
+    // TODO: Remove conditional - always use RenderGraph
     if (useRenderGraph && renderGraph) {
         // Store current frame data for lambdas
         currentFrameIndex = frameIndex;
@@ -253,16 +260,21 @@ void ForwardRenderer::endFrame() {
     currentWorld = nullptr;
 }
 
+// DEPRECATED: Old pass system resize handler
+// TODO: Replace with resize() method that calls RenderGraph::resize()
 void ForwardRenderer::onSwapchainRecreate(vk::Extent2D newExtent) {
     currentExtent = newExtent;
+    // DEPRECATED: Manual pass resize
     for (auto& pass : passes) {
         if (pass->getType() == PassType::Graphics) {
             static_cast<RenderPass*>(pass.get())->onSwapchainRecreate(newExtent);
         }
     }
-    updatePostProcessDescriptors();
+    updatePostProcessDescriptors(); // TODO: RenderGraph will handle this
 }
 
+// DEPRECATED: Old pass system accessor
+// TODO: Remove - RenderGraph will manage swapchain RenderPass
 vk::RenderPass ForwardRenderer::getFinalPassRenderPass() const {
     // Find the last graphics pass
     for (auto it = passes.rbegin(); it != passes.rend(); ++it) {

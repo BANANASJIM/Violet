@@ -2,7 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 #include <EASTL/vector.h>
-#include <EASTL/hash_map.h>
+#include <EASTL/unordered_map.h>
 #include <EASTL/unique_ptr.h>
 #include <EASTL/string.h>
 #include <EASTL/fixed_vector.h>
@@ -69,6 +69,7 @@ public:
     // === Material Management (using vector for stable storage) ===
     Material* createMaterial(const MaterialDesc& desc);
     Material* getMaterial(size_t index) const;
+    Material* getMaterialByName(const eastl::string& name) const;
     size_t getMaterialCount() const { return materials.size(); }
 
     // Predefined material shortcuts
@@ -122,6 +123,9 @@ private:
     // === Storage ===
     // Materials - stable storage using vector
     eastl::vector<eastl::unique_ptr<Material>> materials;
+
+    // Named material lookup (name -> Material*)
+    eastl::unordered_map<eastl::string, Material*> namedMaterials;
 
     // MaterialInstances - sparse set pattern for dynamic management
     eastl::vector<InstanceSlot> instanceSlots;

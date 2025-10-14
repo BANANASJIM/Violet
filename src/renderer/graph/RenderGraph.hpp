@@ -5,160 +5,117 @@
 #include <EASTL/hash_map.h>
 #include <EASTL/string.h>
 #include <EASTL/functional.h>
-#include <EASTL/algorithm.h>
 
 namespace violet {
 
-// Forward declarations
-class Pass;
 class VulkanContext;
+class TransientPool;
 struct ImageResource;
 struct BufferResource;
 
-/**
- * @brief Logical resource handle for render graph
- *
- * This is just an ID that references a logical resource in the graph.
- * The actual GPU resource is managed externally.
- */
 using ResourceHandle = uint32_t;
 constexpr ResourceHandle InvalidResource = 0;
 
-/**
- * @brief Resource type for logical tracking
- */
 enum class ResourceType {
-    Texture2D,
-    TextureCube,
+    Image,
     Buffer,
     Unknown
 };
 
-/**
- * @brief Resource usage hints for barrier generation
- */
 enum class ResourceUsage {
-    ColorAttachment,      // Written as color attachment
-    DepthAttachment,      // Written as depth/stencil attachment
-    ShaderRead,          // Read in shader (texture sampling)
-    ShaderWrite,         // Written in shader (storage image/buffer)
-    TransferSrc,         // Transfer source
-    TransferDst,         // Transfer destination
-    Present              // Present to swapchain
+    ColorAttachment,
+    DepthAttachment,
+    ShaderRead,
+    ShaderWrite,
+    TransferSrc,
+    TransferDst,
+    Present
 };
 
-/**
- * @brief Logical resource info (decoupled from actual GPU resources)
- */
+struct ImageDesc {
+    vk::Format format = vk::Format::eUndefined;
+    vk::Extent3D extent = {0, 0, 1};
+    vk::ImageUsageFlags usage = {};
+    uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;
+};
+
+struct BufferDesc {
+    vk::DeviceSize size = 0;
+    vk::BufferUsageFlags usage = {};
+};
+
+struct ResourceState {
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+    vk::PipelineStageFlags stage = vk::PipelineStageFlagBits::eTopOfPipe;
+    vk::AccessFlags access = {};
+};
+
 struct LogicalResource {
     eastl::string name;
     ResourceType type = ResourceType::Unknown;
 
-    // Pointer to external GPU resource (not owned)
+    bool isExternal = false;
+    bool isPersistent = false;
+
+    ImageDesc imageDesc;
+    BufferDesc bufferDesc;
+
+    uint32_t firstUse = UINT32_MAX;
+    uint32_t lastUse = 0;
+
+    ResourceState state;
+
     union {
         const ImageResource* imageResource;
         const BufferResource* bufferResource;
-        void* externalHandle;  // For custom resources
+        void* physicalHandle;
     };
 
-    // For barrier generation (tracked state)
-    struct State {
-        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
-        vk::PipelineStageFlags stage = vk::PipelineStageFlagBits::eTopOfPipe;
-        vk::AccessFlags access = {};
-    } currentState;
-
-    // Constructor
-    LogicalResource() : externalHandle(nullptr) {}
+    LogicalResource() : physicalHandle(nullptr) {}
 };
 
-/**
- * @brief Pass node in the render graph
- */
 struct PassNode {
     eastl::string name;
 
-    // Resources accessed by this pass
     struct ResourceAccess {
-        ResourceHandle handle;
+        eastl::string name;
         ResourceUsage usage;
+        ImageDesc imageDesc;
+        BufferDesc bufferDesc;
+        bool isWrite;
     };
-    eastl::vector<ResourceAccess> reads;
-    eastl::vector<ResourceAccess> writes;
 
-    // Execution callback
-    eastl::function<void(vk::CommandBuffer, uint32_t)> execute;
+    eastl::vector<ResourceAccess> accesses;
+    eastl::function<void(vk::CommandBuffer, uint32_t)> executeCallback;
 
-    // Optional wrapped Pass object
-    Pass* wrappedPass = nullptr;
+    bool reachable = false;
+    uint32_t passIndex = 0;
 };
 
-/**
- * @brief Lightweight render graph for pass scheduling and automatic barriers
- *
- * Design principles:
- * - Does NOT create or own GPU resources
- * - Only tracks logical dependencies
- * - Generates barriers automatically
- * - Minimal API surface
- */
 class RenderGraph {
 public:
     RenderGraph() = default;
     ~RenderGraph() = default;
 
-    // Delete copy operations
     RenderGraph(const RenderGraph&) = delete;
     RenderGraph& operator=(const RenderGraph&) = delete;
 
-    // === Resource Declaration ===
+    void init(VulkanContext* ctx);
+    void cleanup();
 
-    /**
-     * @brief Import an external texture resource
-     * @param name Logical name
-     * @param imageRes External image resource (not owned)
-     * @return Handle for referencing in passes
-     */
-    ResourceHandle importTexture(const eastl::string& name, const ImageResource* imageRes);
-
-    /**
-     * @brief Import an external buffer resource
-     * @param name Logical name
-     * @param bufferRes External buffer resource (not owned)
-     * @return Handle for referencing in passes
-     */
+    ResourceHandle importImage(const eastl::string& name, const ImageResource* imageRes);
     ResourceHandle importBuffer(const eastl::string& name, const BufferResource* bufferRes);
+    ResourceHandle declareImage(const eastl::string& name, const ImageDesc& desc, bool persistent);
 
-    /**
-     * @brief Declare a transient resource (created by graph)
-     * @param name Logical name
-     * @param type Resource type
-     * @return Handle for referencing in passes
-     *
-     * Note: In this minimal version, transient resources are not implemented.
-     * This is a placeholder for future extension.
-     */
-    ResourceHandle createTransient(const eastl::string& name, ResourceType type);
-
-    // === Pass Declaration ===
-
-    /**
-     * @brief Begin declaring a new pass
-     * @param name Pass name
-     * @return Pass builder interface
-     */
     class PassBuilder {
     public:
         PassBuilder(RenderGraph* graph, const eastl::string& name);
 
-        // Declare resource access
-        PassBuilder& read(ResourceHandle resource, ResourceUsage usage = ResourceUsage::ShaderRead);
-        PassBuilder& write(ResourceHandle resource, ResourceUsage usage = ResourceUsage::ColorAttachment);
-
-        // Set execution callback
+        PassBuilder& read(const eastl::string& name, ResourceUsage usage = ResourceUsage::ShaderRead);
+        PassBuilder& write(const eastl::string& name, const ImageDesc& desc, ResourceUsage usage = ResourceUsage::ColorAttachment);
         PassBuilder& execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback);
 
-        // Finish building
         void build();
 
     private:
@@ -168,104 +125,51 @@ public:
 
     PassBuilder addPass(const eastl::string& name);
 
-    // === Compilation and Execution ===
-
-    /**
-     * @brief Compile the graph
-     * Analyzes dependencies and generates barriers
-     */
+    void build();
     void compile();
-
-    /**
-     * @brief Execute the graph
-     * @param cmd Command buffer to record into
-     * @param frameIndex Current frame index
-     */
     void execute(vk::CommandBuffer cmd, uint32_t frameIndex);
-
-    /**
-     * @brief Reset the graph for rebuilding
-     */
     void clear();
 
-    // === Debug ===
-
-    /**
-     * @brief Print graph structure for debugging
-     */
     void debugPrint() const;
-
-    /**
-     * @brief Get resource by handle
-     */
-    const LogicalResource* getResource(ResourceHandle handle) const;
+    const LogicalResource* getResource(const eastl::string& name) const;
 
 private:
-    // Resource registry
-    eastl::hash_map<ResourceHandle, LogicalResource> resources;
-    eastl::hash_map<eastl::string, ResourceHandle> resourceNames;
-    uint32_t nextHandle = 1;
+    VulkanContext* context = nullptr;
+    TransientPool* transientPool = nullptr;
 
-    // Pass nodes
+    eastl::hash_map<eastl::string, LogicalResource> resources;
     eastl::vector<PassNode> passes;
+    eastl::vector<PassNode> compiledPasses;
 
-    // Compiled barriers
-    struct ResourceBarrier {
-        size_t passIndex;           // Insert before this pass
-        ResourceHandle resource;     // Resource being transitioned
-
-        // Barrier data
+    struct Barrier {
+        eastl::string resourceName;
         vk::ImageMemoryBarrier imageBarrier;
         vk::BufferMemoryBarrier bufferBarrier;
+        vk::PipelineStageFlags srcStage;
+        vk::PipelineStageFlags dstStage;
         bool isImage;
     };
-    eastl::vector<ResourceBarrier> barriers;
+    //invalidate
+    eastl::vector<eastl::vector<Barrier>> preBarriers;
+    //flush
+    eastl::vector<eastl::vector<Barrier>> postBarriers;
 
-    // Compilation state
+    bool built = false;
     bool compiled = false;
 
-    // Helper methods
+    void buildDependencyGraph();
+    void pruneUnreachable();
+    void computeLifetimes();
+    void allocatePhysicalResources();
     void generateBarriers();
-    void insertBarriers(vk::CommandBuffer cmd, size_t passIndex);
+    void insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
+    void insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
 
-    // State transition helpers
     vk::ImageLayout getLayoutForUsage(ResourceUsage usage) const;
     vk::PipelineStageFlags getStageForUsage(ResourceUsage usage) const;
     vk::AccessFlags getAccessForUsage(ResourceUsage usage) const;
 
-    // Get Vulkan handles from resources
-    vk::Image getImageHandle(const LogicalResource& res) const;
-    vk::Buffer getBufferHandle(const LogicalResource& res) const;
+    ResourceHandle getOrCreateResource(const eastl::string& name);
 };
-
-// === Inline Implementation ===
-
-inline RenderGraph::PassBuilder RenderGraph::addPass(const eastl::string& name) {
-    return PassBuilder(this, name);
-}
-
-inline RenderGraph::PassBuilder::PassBuilder(RenderGraph* g, const eastl::string& n)
-    : graph(g) {
-    node.name = n;
-}
-
-inline RenderGraph::PassBuilder& RenderGraph::PassBuilder::read(ResourceHandle resource, ResourceUsage usage) {
-    node.reads.push_back({resource, usage});
-    return *this;
-}
-
-inline RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(ResourceHandle resource, ResourceUsage usage) {
-    node.writes.push_back({resource, usage});
-    return *this;
-}
-
-inline RenderGraph::PassBuilder& RenderGraph::PassBuilder::execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback) {
-    node.execute = callback;
-    return *this;
-}
-
-inline void RenderGraph::PassBuilder::build() {
-    graph->passes.push_back(node);
-}
 
 } // namespace violet
