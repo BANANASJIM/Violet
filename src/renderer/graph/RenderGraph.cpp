@@ -6,25 +6,23 @@
 
 namespace violet {
 
-RenderGraph::PassBuilder::PassBuilder(RenderGraph* g, const eastl::string& n)
-    : graph(g) {
-    node.name = n;
+RenderGraph::PassBuilder::PassBuilder(PassNode& n)
+    : node(n) {
 }
 
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::read(const eastl::string& name, ResourceUsage usage) {
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::read(const eastl::string& resourceName, ResourceUsage usage) {
     PassNode::ResourceAccess access;
-    access.name = name;
+    access.resourceName = resourceName;
     access.usage = usage;
     access.isWrite = false;
     node.accesses.push_back(access);
     return *this;
 }
 
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(const eastl::string& name, const ImageDesc& desc, ResourceUsage usage) {
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(const eastl::string& resourceName, ResourceUsage usage) {
     PassNode::ResourceAccess access;
-    access.name = name;
+    access.resourceName = resourceName;
     access.usage = usage;
-    access.imageDesc = desc;
     access.isWrite = true;
     node.accesses.push_back(access);
     return *this;
@@ -35,12 +33,10 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::execute(eastl::function<void
     return *this;
 }
 
-void RenderGraph::PassBuilder::build() {
-    graph->passes.push_back(node);
-}
-
 RenderGraph::PassBuilder RenderGraph::addPass(const eastl::string& name) {
-    return PassBuilder(this, name);
+    passes.emplace_back();  // Create PassNode in passes vector
+    passes.back().name = name;
+    return PassBuilder(passes.back());  // Return builder that modifies it in-place
 }
 
 void RenderGraph::init(VulkanContext* ctx) {
@@ -67,14 +63,15 @@ ResourceHandle RenderGraph::importImage(const eastl::string& name, const ImageRe
     }
 
     auto& res = resources[name];
+    res.handle = ResourceHandle::allocate();
     res.name = name;
     res.type = ResourceType::Image;
     res.isExternal = true;
     res.isPersistent = true;
     res.imageResource = imageRes;
 
-    Log::debug("RenderGraph", "Imported external image '{}'", name.c_str());
-    return 1;
+    Log::debug("RenderGraph", "Imported external image '{}' (handle={})", name.c_str(), res.handle.id);
+    return res.handle;
 }
 
 ResourceHandle RenderGraph::importBuffer(const eastl::string& name, const BufferResource* bufferRes) {
@@ -84,26 +81,41 @@ ResourceHandle RenderGraph::importBuffer(const eastl::string& name, const Buffer
     }
 
     auto& res = resources[name];
+    res.handle = ResourceHandle::allocate();
     res.name = name;
     res.type = ResourceType::Buffer;
     res.isExternal = true;
     res.isPersistent = true;
     res.bufferResource = bufferRes;
 
-    Log::debug("RenderGraph", "Imported external buffer '{}'", name.c_str());
-    return 1;
+    Log::debug("RenderGraph", "Imported external buffer '{}' (handle={})", name.c_str(), res.handle.id);
+    return res.handle;
 }
 
-ResourceHandle RenderGraph::declareImage(const eastl::string& name, const ImageDesc& desc, bool persistent) {
+ResourceHandle RenderGraph::createImage(const eastl::string& name, const ImageDesc& desc, bool persistent) {
     auto& res = resources[name];
+    res.handle = ResourceHandle::allocate();
     res.name = name;
     res.type = ResourceType::Image;
     res.isExternal = false;
     res.isPersistent = persistent;
     res.imageDesc = desc;
 
-    Log::debug("RenderGraph", "Declared {} image '{}'", persistent ? "persistent" : "transient", name.c_str());
-    return 1;
+    Log::debug("RenderGraph", "Created {} image '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
+    return res.handle;
+}
+
+ResourceHandle RenderGraph::createBuffer(const eastl::string& name, const BufferDesc& desc, bool persistent) {
+    auto& res = resources[name];
+    res.handle = ResourceHandle::allocate();
+    res.name = name;
+    res.type = ResourceType::Buffer;
+    res.isExternal = false;
+    res.isPersistent = persistent;
+    res.bufferDesc = desc;
+
+    Log::debug("RenderGraph", "Created {} buffer '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
+    return res.handle;
 }
 
 void RenderGraph::build() {
@@ -126,33 +138,19 @@ void RenderGraph::buildDependencyGraph() {
         passes[i].passIndex = i;
     }
 
-    for (auto& pass : passes) {
-        for (const auto& access : pass.accesses) {
-            if (access.isWrite) {
-                auto it = resources.find(access.name);
-                if (it == resources.end()) {
-                    auto& res = resources[access.name];
-                    res.name = access.name;
-                    res.type = ResourceType::Image;
-                    res.isExternal = false;
-                    res.isPersistent = false;
-                    res.imageDesc = access.imageDesc;
-                    Log::debug("RenderGraph", "Auto-created transient resource '{}'", access.name.c_str());
-                }
-            }
-        }
-    }
-
+    // Mark passes as reachable if they access valid resources
     for (auto& pass : passes) {
         bool hasValidAccess = false;
         for (const auto& access : pass.accesses) {
-            if (resources.find(access.name) != resources.end()) {
+            if (resources.find(access.resourceName) != resources.end()) {
                 hasValidAccess = true;
                 break;
             }
         }
         if (hasValidAccess) {
             pass.reachable = true;
+        } else {
+            Log::warn("RenderGraph", "Pass '{}' has no valid resource accesses", pass.name.c_str());
         }
     }
 }
@@ -186,6 +184,7 @@ void RenderGraph::compile() {
 
     computeLifetimes();
     allocatePhysicalResources();
+    buildRenderingInfos();  // Build vk::RenderingAttachmentInfo after resources allocated
     generateBarriers();
 
     uint32_t totalBarriers = 0;
@@ -205,7 +204,7 @@ void RenderGraph::computeLifetimes() {
 
     for (const auto& pass : compiledPasses) {
         for (const auto& access : pass.accesses) {
-            auto it = resources.find(access.name);
+            auto it = resources.find(access.resourceName);
             if (it != resources.end()) {
                 auto& res = it->second;
                 res.firstUse = eastl::min(res.firstUse, pass.passIndex);
@@ -241,7 +240,12 @@ void RenderGraph::allocatePhysicalResources() {
         if (res.type == ResourceType::Image) {
             auto transientImg = transientPool->createImage(res.imageDesc, res.firstUse, res.lastUse);
             res.physicalHandle = reinterpret_cast<void*>(static_cast<VkImage>(transientImg.image));
-            Log::debug("RenderGraph", "Allocated transient image '{}'", name.c_str());
+            res.transientView = transientImg.view;  // Save ImageView for buildRenderingInfos
+            Log::debug("RenderGraph", "Allocated transient image '{}' with view", name.c_str());
+        } else if (res.type == ResourceType::Buffer) {
+            auto transientBuf = transientPool->createBuffer(res.bufferDesc, res.firstUse, res.lastUse);
+            res.physicalHandle = reinterpret_cast<void*>(static_cast<VkBuffer>(transientBuf.buffer));
+            Log::debug("RenderGraph", "Allocated transient buffer '{}'", name.c_str());
         }
     }
 }
@@ -252,48 +256,79 @@ void RenderGraph::generateBarriers() {
 
     for (const auto& pass : compiledPasses) {
         for (const auto& access : pass.accesses) {
-            auto it = resources.find(access.name);
-            if (it == resources.end() || it->second.type != ResourceType::Image) continue;
+            auto it = resources.find(access.resourceName);
+            if (it == resources.end()) continue;
 
             auto& res = it->second;
-            vk::ImageLayout newLayout = getLayoutForUsage(access.usage);
             vk::PipelineStageFlags newStage = getStageForUsage(access.usage);
             vk::AccessFlags newAccess = getAccessForUsage(access.usage);
 
-            if (res.state.layout != newLayout) {
-                Barrier barrier;
-                barrier.resourceName = access.name;
-                barrier.isImage = true;
-                barrier.srcStage = res.state.stage;
-                barrier.dstStage = newStage;
+            if (res.type == ResourceType::Image) {
+                vk::ImageLayout newLayout = getLayoutForUsage(access.usage);
 
-                auto& imgBarrier = barrier.imageBarrier;
-                imgBarrier.oldLayout = res.state.layout;
-                imgBarrier.newLayout = newLayout;
-                imgBarrier.srcAccessMask = res.state.access;
-                imgBarrier.dstAccessMask = newAccess;
-                imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                imgBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                if (res.state.layout != newLayout) {
+                    Barrier barrier;
+                    barrier.resourceName = access.resourceName;
+                    barrier.isImage = true;
+                    barrier.srcStage = res.state.stage;
+                    barrier.dstStage = newStage;
 
-                if (res.isExternal && res.imageResource) {
-                    imgBarrier.image = res.imageResource->image;
-                } else {
-                    imgBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(res.physicalHandle));
+                    auto& imgBarrier = barrier.imageBarrier;
+                    imgBarrier.oldLayout = res.state.layout;
+                    imgBarrier.newLayout = newLayout;
+                    imgBarrier.srcAccessMask = res.state.access;
+                    imgBarrier.dstAccessMask = newAccess;
+                    imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imgBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+                    if (res.isExternal && res.imageResource) {
+                        imgBarrier.image = res.imageResource->image;
+                    } else {
+                        imgBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(res.physicalHandle));
+                    }
+
+                    imgBarrier.subresourceRange.aspectMask =
+                        (access.usage == ResourceUsage::DepthAttachment) ?
+                        vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+                    imgBarrier.subresourceRange.baseMipLevel = 0;
+                    imgBarrier.subresourceRange.levelCount = res.imageDesc.mipLevels;
+                    imgBarrier.subresourceRange.baseArrayLayer = 0;
+                    imgBarrier.subresourceRange.layerCount = res.imageDesc.arrayLayers;
+
+                    preBarriers[pass.passIndex].push_back(barrier);
+
+                    res.state.layout = newLayout;
+                    res.state.stage = newStage;
+                    res.state.access = newAccess;
                 }
+            } else if (res.type == ResourceType::Buffer) {
+                // Buffer barriers: check for access pattern changes (e.g., write→read)
+                if (res.state.access != newAccess || res.state.stage != newStage) {
+                    Barrier barrier;
+                    barrier.resourceName = access.resourceName;
+                    barrier.isImage = false;
+                    barrier.srcStage = res.state.stage;
+                    barrier.dstStage = newStage;
 
-                imgBarrier.subresourceRange.aspectMask =
-                    (access.usage == ResourceUsage::DepthAttachment) ?
-                    vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
-                imgBarrier.subresourceRange.baseMipLevel = 0;
-                imgBarrier.subresourceRange.levelCount = res.imageDesc.mipLevels;
-                imgBarrier.subresourceRange.baseArrayLayer = 0;
-                imgBarrier.subresourceRange.layerCount = res.imageDesc.arrayLayers;
+                    auto& bufBarrier = barrier.bufferBarrier;
+                    bufBarrier.srcAccessMask = res.state.access;
+                    bufBarrier.dstAccessMask = newAccess;
+                    bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
-                preBarriers[pass.passIndex].push_back(barrier);
+                    if (res.isExternal && res.bufferResource) {
+                        bufBarrier.buffer = res.bufferResource->buffer;
+                    } else {
+                        bufBarrier.buffer = static_cast<vk::Buffer>(reinterpret_cast<VkBuffer>(res.physicalHandle));
+                    }
+                    bufBarrier.offset = 0;
+                    bufBarrier.size = res.bufferDesc.size;
 
-                res.state.layout = newLayout;
-                res.state.stage = newStage;
-                res.state.access = newAccess;
+                    preBarriers[pass.passIndex].push_back(barrier);
+
+                    res.state.stage = newStage;
+                    res.state.access = newAccess;
+                }
             }
         }
     }
@@ -403,7 +438,7 @@ void RenderGraph::debugPrint() const {
         Log::info("RenderGraph", "  [{}] {}", pass.passIndex, pass.name.c_str());
         for (const auto& access : pass.accesses) {
             Log::info("RenderGraph", "    {} '{}'",
-                      access.isWrite ? "write" : "read", access.name.c_str());
+                      access.isWrite ? "write" : "read", access.resourceName.c_str());
         }
     }
 
@@ -456,15 +491,81 @@ vk::AccessFlags RenderGraph::getAccessForUsage(ResourceUsage usage) const {
 ResourceHandle RenderGraph::getOrCreateResource(const eastl::string& name) {
     auto it = resources.find(name);
     if (it != resources.end()) {
-        return 1;
+        return it->second.handle;
     }
 
     auto& res = resources[name];
+    res.handle = ResourceHandle::allocate();
     res.name = name;
     res.type = ResourceType::Unknown;
     res.isExternal = false;
     res.isPersistent = false;
-    return 1;
+
+    Log::warn("RenderGraph", "Auto-created resource '{}' with unknown type (handle={})", name.c_str(), res.handle.id);
+    return res.handle;
+}
+
+void RenderGraph::buildRenderingInfos() {
+    // Build vk::RenderingAttachmentInfo for each pass based on resource accesses
+    for (auto& pass : compiledPasses) {
+        pass.colorAttachmentInfos.clear();
+        pass.hasDepth = false;
+        pass.hasStencil = false;
+        pass.renderArea = vk::Extent2D{0, 0};
+
+        for (const auto& access : pass.accesses) {
+            auto it = resources.find(access.resourceName);
+            if (it == resources.end() || it->second.type != ResourceType::Image) {
+                continue;
+            }
+
+            const auto& res = it->second;
+
+            // Get ImageView from either transientView or external imageResource
+            vk::ImageView imageView = VK_NULL_HANDLE;
+            if (res.isExternal && res.imageResource) {
+                imageView = res.imageResource->view;
+            } else if (res.transientView) {
+                imageView = res.transientView;
+            } else {
+                Log::warn("RenderGraph", "Pass '{}': resource '{}' has no valid ImageView",
+                         pass.name.c_str(), access.resourceName.c_str());
+                continue;
+            }
+
+            // Update render area based on resource extent
+            if (res.imageDesc.extent.width > pass.renderArea.width) {
+                pass.renderArea.width = res.imageDesc.extent.width;
+            }
+            if (res.imageDesc.extent.height > pass.renderArea.height) {
+                pass.renderArea.height = res.imageDesc.extent.height;
+            }
+
+            // Build attachment info based on usage
+            if (access.usage == ResourceUsage::ColorAttachment && access.isWrite) {
+                vk::RenderingAttachmentInfo attachmentInfo;
+                attachmentInfo.imageView = imageView;
+                attachmentInfo.imageLayout = getLayoutForUsage(access.usage);
+                attachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;  // TODO: Allow configuration
+                attachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
+                attachmentInfo.clearValue = res.imageDesc.clearValue;
+
+                pass.colorAttachmentInfos.push_back(attachmentInfo);
+
+            } else if (access.usage == ResourceUsage::DepthAttachment && access.isWrite) {
+                pass.depthAttachmentInfo.imageView = imageView;
+                pass.depthAttachmentInfo.imageLayout = getLayoutForUsage(access.usage);
+                pass.depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+                pass.depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
+                pass.depthAttachmentInfo.clearValue = res.imageDesc.clearValue;
+                pass.hasDepth = true;
+            }
+        }
+
+        Log::debug("RenderGraph", "Pass '{}': {} color attachments, {} depth, render area [{}, {}]",
+                  pass.name.c_str(), pass.colorAttachmentInfos.size(),
+                  pass.hasDepth ? "has" : "no", pass.renderArea.width, pass.renderArea.height);
+    }
 }
 
 } // namespace violet

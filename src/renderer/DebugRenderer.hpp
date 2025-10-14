@@ -10,7 +10,6 @@
 #include "resource/Vertex.hpp"
 #include "resource/gpu/GPUResource.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
-#include "renderer/graph/RenderPass.hpp"
 #include "math/AABB.hpp"
 #include "math/Frustum.hpp"
 #include <entt/entt.hpp>
@@ -45,13 +44,10 @@ public:
     DebugRenderer(const DebugRenderer&) = delete;
     DebugRenderer& operator=(const DebugRenderer&) = delete;
 
-    void init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight);
-    void init(VulkanContext* context, RenderPass* renderPass, GlobalUniforms* globalUniforms,
-              DescriptorManager* descMgr, ShaderLibrary* shaderLib, vk::Format swapchainFormat, uint32_t maxFramesInFlight);
+    // Simplified init - no RenderPass dependency
+    void init(VulkanContext* context, GlobalUniforms* globalUniforms,
+              DescriptorManager* descMgr, ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
 
-    // UI support
-    void setUILayer(class UILayer* layer) { uiLayer = layer; }
-    void renderDebugAndUI(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
     void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
 
     void renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum);
@@ -96,11 +92,6 @@ public:
 
 private:
 
-    // UI rendering
-    class UILayer* uiLayer = nullptr;
-    RenderPass overlayPass;
-
-    void setupOverlayPass(vk::Format swapchainFormat);
     void generateFrustumGeometry(const Frustum& frustum, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices);
     void generateAABBGeometry(const AABB& aabb, const glm::vec3& color, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices, uint32_t baseVertexIndex);
     void generateSphereGeometry(const glm::vec3& center, float radius, const glm::vec3& color, eastl::vector<Vertex>& vertices, eastl::vector<uint32_t>& indices, uint32_t segments = 16, uint32_t rings = 12);
@@ -134,12 +125,10 @@ private:
     };
     eastl::vector<FrameData> frameData;
 
-    // Debug pipeline
+    // Line pipeline for frustum, AABB, sphere wireframes
     eastl::unique_ptr<GraphicsPipeline> debugPipeline;
-    // Wireframe pipeline for mesh rendering
-    eastl::unique_ptr<GraphicsPipeline> wireframePipeline;
-    // Solid pipeline for filled mesh rendering
-    eastl::unique_ptr<GraphicsPipeline> solidPipeline;
+    // Triangle pipeline for filled geometry (rays, mesh wireframes)
+    eastl::unique_ptr<GraphicsPipeline> trianglePipeline;
 
     // Batched ray rendering data
     eastl::vector<Vertex> batchedRayVertices;

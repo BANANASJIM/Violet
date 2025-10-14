@@ -1,6 +1,5 @@
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
-#include "renderer/graph/RenderPass.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
 #include "resource/Material.hpp"
 #include "resource/Vertex.hpp"
@@ -11,14 +10,13 @@
 namespace violet {
 
 // ========================================
-// New weak_ptr-based init
+// Dynamic rendering init (no RenderPass dependency)
 // ========================================
 
-void GraphicsPipeline::init(VulkanContext* ctx, RenderPass* rp, Material* mat,
+void GraphicsPipeline::init(VulkanContext* ctx, Material* mat,
                             eastl::weak_ptr<Shader> vert, eastl::weak_ptr<Shader> frag,
                             const PipelineConfig& cfg) {
     context = ctx;
-    renderPass = rp;
     material = mat;
     vertShader = vert;
     fragShader = frag;
@@ -180,8 +178,16 @@ void GraphicsPipeline::buildPipeline() {
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
-    // Graphics pipeline
+    // Dynamic rendering format info (replaces RenderPass)
+    vk::PipelineRenderingCreateInfo renderingInfo;
+    renderingInfo.colorAttachmentCount = static_cast<uint32_t>(config.colorFormats.size());
+    renderingInfo.pColorAttachmentFormats = config.colorFormats.data();
+    renderingInfo.depthAttachmentFormat = config.depthFormat;
+    renderingInfo.stencilAttachmentFormat = config.stencilFormat;
+
+    // Graphics pipeline with dynamic rendering
     vk::GraphicsPipelineCreateInfo pipelineInfo;
+    pipelineInfo.pNext = &renderingInfo;  // Chain dynamic rendering info
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = shaderStages;
     pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -193,8 +199,7 @@ void GraphicsPipeline::buildPipeline() {
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = *pipelineLayout;
-    pipelineInfo.renderPass = renderPass->getRenderPass();
-    pipelineInfo.subpass = 0;
+    // renderPass and subpass removed - using dynamic rendering via pNext chain
 
     graphicsPipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, pipelineInfo);
 }

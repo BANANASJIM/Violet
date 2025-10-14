@@ -22,6 +22,7 @@
 #include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/Swapchain.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 
 namespace violet {
@@ -60,17 +61,16 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Declare all descriptor set layouts (declarative registration)
     registerDescriptorLayouts();
 
-    // DEPRECATED: Old pass system - will be replaced by RenderGraph
-    // TODO: Remove after full RenderGraph migration
-    setupPasses(swapchainFormat);
-
-    // Initialize subsystems - use first graphics pass for components that need RenderPass
+    // Initialize subsystems
     globalUniforms.init(context, &descMgr, maxFramesInFlight);
 
     // Initialize EnvironmentMap with bindless architecture
     // MaterialManager is now guaranteed to exist (ResourceManager already initialized)
     auto* matMgr = getMaterialManager();
     if (matMgr) {
+        // Set rendering formats in MaterialManager for compatible RenderPass creation
+        matMgr->setRenderingFormats(swapchainFormat);
+
         environmentMap.init(context, matMgr, &descMgr, resourceManager->getTextureManager(), resourceManager->getShaderLibrary());
     }
 
@@ -92,20 +92,6 @@ void ForwardRenderer::createMaterials() {
     // Get PBR bindless material from MaterialManager
     auto* matMgr = getMaterialManager();
     if (matMgr) {
-        pbrBindlessMaterial = matMgr->createPBRBindlessMaterial(getRenderPass(0)); // TODO: Pass RenderPass from RenderGraph
-    }
-
-    // Create skybox material using MaterialManager
-    RenderPass* mainPass = getRenderPass(0); // TODO: Get from RenderGraph
-    if (mainPass && matMgr) {
-        skyboxMaterial = matMgr->createSkyboxMaterial(mainPass);
-    }
-
-    // Create post-process material using MaterialManager
-    RenderPass* postProcessPass = getRenderPass(1);  // TODO: Get from RenderGraph
-    if (postProcessPass && matMgr) {
-        // MaterialManager owns the material, we just keep a reference
-        postProcessMaterial = matMgr->createPostProcessMaterial(postProcessPass);
 
         // Create descriptor set for post-process material
         auto& descMgr = resourceManager->getDescriptorManager();
@@ -113,8 +99,7 @@ void ForwardRenderer::createMaterials() {
         postProcessDescriptorSet = eastl::make_unique<DescriptorSet>();
         postProcessDescriptorSet->init(context, sets);
 
-        // Update descriptor set with offscreen textures
-        updatePostProcessDescriptors(); // TODO: Replace with RenderGraph resource binding
+        // TODO: Resource binding will be handled by RenderGraph
     }
 }
 
@@ -131,24 +116,17 @@ void ForwardRenderer::cleanup() {
     // These may still reference materials/textures, so clean them before destroying resources
     environmentMap.cleanup();
     debugRenderer.cleanup();
-    // DEPRECATED: Old pass system cleanup
-    // TODO: Remove after RenderGraph migration - RenderGraph will own passes
-    for (auto& pass : passes) {
-        if (pass) {
-            pass->cleanup();
-        }
-    }
-    passes.clear();
 
-    // Step 4: Samplers are now managed by DescriptorManager (no cleanup needed)
+    // Step 3: Samplers are now managed by DescriptorManager (no cleanup needed)
 
-    // Step 5: Cleanup global uniforms (may reference textures)
+    // Step 4: Cleanup global uniforms (may reference textures)
     globalUniforms.cleanup();
 
-    // Step 6: Clear material references (MaterialManager owns and cleans them)
-    postProcessMaterial = nullptr;
-    pbrBindlessMaterial = nullptr;
-    skyboxMaterial = nullptr;
+    // Step 5: Cleanup RenderGraph
+    if (renderGraph) {
+        renderGraph->cleanup();
+        renderGraph.reset();
+    }
 }
 
 
@@ -167,384 +145,105 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     collectRenderables(world);
 }
 
-// DEPRECATED: Uses old pass system - will be completely rewritten for RenderGraph
-// TODO: Replace with RenderGraph::execute() after full migration
-void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
+void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, vk::Extent2D extent, uint32_t frameIndex) {
     currentExtent = extent;
+    currentFrameIndex = frameIndex;
 
-    // Create sampler for auto-exposure (linear sampling)
-    // TODO: Move to RenderGraph resource management
-    static vk::Sampler linearSampler = VK_NULL_HANDLE;
-    if (!linearSampler) {
-        vk::SamplerCreateInfo samplerInfo{};
-        samplerInfo.magFilter = vk::Filter::eLinear;
-        samplerInfo.minFilter = vk::Filter::eLinear;
-        samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-        samplerInfo.anisotropyEnable = VK_FALSE;
-        samplerInfo.maxAnisotropy = 1.0f;
-        samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
-        samplerInfo.unnormalizedCoordinates = VK_FALSE;
-        samplerInfo.compareEnable = VK_FALSE;
-        samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
-        linearSampler = context->getDevice().createSampler(samplerInfo);
+    if (!renderGraph) {
+        violet::Log::error("Renderer", "RenderGraph not initialized");
+        return;
     }
 
-    // DEPRECATED: Old render graph integration path
-    // TODO: Remove conditional - always use RenderGraph
-    if (useRenderGraph && renderGraph) {
-        // Store current frame data for lambdas
-        currentFrameIndex = frameIndex;
+    // Rebuild graph每帧 (swapchain image changes)
+    rebuildRenderGraph(imageIndex);
 
-        // Special handling for swapchain pass
-        RenderPass* postProcessPass = getRenderPass(1);
-        if (postProcessPass) {
-            postProcessPass->setExternalFramebuffer(framebuffer);
-        }
-
-        // Execute render graph
-        renderGraph->execute(cmd, frameIndex);
-
-        // Auto-exposure after main pass
-        if (autoExposure.getParams().enabled) {
-            RenderPass* mainPass = getRenderPass(0);
-            if (mainPass) {
-                vk::ImageView hdrView = mainPass->getColorImageView(0);
-                autoExposure.computeLuminance(cmd, hdrView, linearSampler);
-            }
-        }
-    } else {
-        // Original execution path (fallback)
-        for (size_t i = 0; i < passes.size(); ++i) {
-            // Insert explicit barrier between passes if needed
-            if (i > 0) {
-                insertPassTransition(cmd, i);
-            }
-
-            // Execute pass
-            Pass* pass = passes[i].get();
-
-            // Handle swapchain framebuffer for graphics passes
-            if (pass->getType() == PassType::Graphics) {
-                RenderPass* renderPass = static_cast<RenderPass*>(pass);
-                if (renderPass->getConfig().isSwapchainPass) {
-                    // Set external framebuffer for swapchain pass
-                    renderPass->setExternalFramebuffer(framebuffer);
-                    renderPass->begin(cmd, extent); // Will use external framebuffer
-                } else {
-                    // Passes with own framebuffers use them directly
-                    renderPass->begin(cmd, extent); // Will use own framebuffer
-                }
-            } else {
-                // Compute and other passes don't need framebuffer setup
-                pass->begin(cmd, frameIndex);
-            }
-
-            pass->execute(cmd, frameIndex);
-            pass->end(cmd);
-
-            // After main pass (pass 0), compute luminance for auto-exposure
-            if (i == 0 && autoExposure.getParams().enabled) {
-                RenderPass* mainPass = getRenderPass(0);
-                if (mainPass) {
-                    vk::ImageView hdrView = mainPass->getColorImageView(0);
-                    autoExposure.computeLuminance(cmd, hdrView, linearSampler);
-                }
-            }
-        }
-    }
+    // Execute graph (automatic barriers + pass execution)
+    renderGraph->execute(cmd, frameIndex);
 }
 
 void ForwardRenderer::endFrame() {
     currentWorld = nullptr;
 }
 
-// DEPRECATED: Old pass system resize handler
-// TODO: Replace with resize() method that calls RenderGraph::resize()
-void ForwardRenderer::onSwapchainRecreate(vk::Extent2D newExtent) {
-    currentExtent = newExtent;
-    // DEPRECATED: Manual pass resize
-    for (auto& pass : passes) {
-        if (pass->getType() == PassType::Graphics) {
-            static_cast<RenderPass*>(pass.get())->onSwapchainRecreate(newExtent);
-        }
-    }
-    updatePostProcessDescriptors(); // TODO: RenderGraph will handle this
+void ForwardRenderer::setupRenderGraph(vk::Format swapchainFmt) {
+    this->swapchainFormat = swapchainFmt;
+
+    // Initialize RenderGraph
+    renderGraph = eastl::make_unique<RenderGraph>();
+    renderGraph->init(context);
+
+    violet::Log::info("Renderer", "RenderGraph initialized with swapchain format");
 }
 
-// DEPRECATED: Old pass system accessor
-// TODO: Remove - RenderGraph will manage swapchain RenderPass
-vk::RenderPass ForwardRenderer::getFinalPassRenderPass() const {
-    // Find the last graphics pass
-    for (auto it = passes.rbegin(); it != passes.rend(); ++it) {
-        if ((*it)->getType() == PassType::Graphics) {
-            RenderPass* renderPass = static_cast<RenderPass*>(it->get());
-            return renderPass->getRenderPass();
-        }
+void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
+    if (!swapchain || !renderGraph) {
+        violet::Log::error("Renderer", "rebuildRenderGraph: swapchain or renderGraph is null");
+        return;
     }
 
-    violet::Log::error("Renderer", "No graphics render passes available");
-    return VK_NULL_HANDLE;
-}
+    // Clear previous graph
+    renderGraph->clear();
 
-RenderPass* ForwardRenderer::getRenderPass(size_t index) {
-    if (index >= passes.size()) {
-        return nullptr;
-    }
+    // 1. Import Swapchain image (External resource)
+    // Create temporary wrapper for swapchain color image
+    ImageResource swapchainWrapper;
+    swapchainWrapper.image = swapchain->getImage(imageIndex);
+    swapchainWrapper.view = swapchain->getImageView(imageIndex);
+    swapchainWrapper.format = swapchain->getImageFormat();
+    // Note: Other ImageResource fields (allocation, debugName) not needed for external resources
 
-    if (passes[index]->getType() == PassType::Graphics) {
-        return static_cast<RenderPass*>(passes[index].get());
-    }
+    renderGraph->importImage("swapchain", &swapchainWrapper);
 
-    return nullptr;
-}
+    // 2. Create Transient resources
+    ImageDesc hdrDesc{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .extent = {currentExtent.width, currentExtent.height, 1},
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .clearValue = vk::ClearColorValue{std::array{0.0f, 0.0f, 0.0f, 1.0f}}
+    };
+    renderGraph->createImage("hdr", hdrDesc, false);
 
-void ForwardRenderer::setupPasses(vk::Format swapchainFormat) {
-    passes.clear();
+    ImageDesc depthDesc{
+        .format = vk::Format::eD32Sfloat,
+        .extent = {currentExtent.width, currentExtent.height, 1},
+        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .clearValue = vk::ClearDepthStencilValue{1.0f, 0}
+    };
+    renderGraph->createImage("depth", depthDesc, false);
 
-    // Clear values
-    vk::ClearValue colorClear;
-    colorClear.color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
-    vk::ClearValue depthClear;
-    depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
-
-    // Pass 1: Main pass - Render scene to offscreen framebuffer (HDR)
-    // Use linear format for HDR rendering, NOT swapchain format (which is sRGB)
-    // Linear format prevents automatic sRGB conversion during writes
-    vk::Format hdrFormat = vk::Format::eR16G16B16A16Sfloat;  // Linear HDR format
-
-    RenderPassConfig mainPassConfig;
-    mainPassConfig.name = "Main";
-    mainPassConfig.colorAttachments = {AttachmentDesc::color(hdrFormat, vk::AttachmentLoadOp::eClear)};
-    mainPassConfig.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore);
-    mainPassConfig.hasDepth = true;
-    mainPassConfig.clearValues = {colorClear, depthClear};
-    mainPassConfig.isSwapchainPass = false;  // Render to offscreen, not swapchain
-    mainPassConfig.createOwnFramebuffer = true;  // Create own offscreen framebuffer
-    mainPassConfig.followsSwapchainSize = true;  // Size follows swapchain
-    mainPassConfig.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    mainPassConfig.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    mainPassConfig.srcAccess = {};
-    mainPassConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    mainPassConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-        if (currentWorld) {
-            this->setViewport(cmd, currentExtent);
-
-            // Render skybox first (if enabled and material exists)
-            if (environmentMap.isEnabled() && skyboxMaterial && skyboxMaterial->getPipeline()) {
-                skyboxMaterial->getPipeline()->bind(cmd);
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                    skyboxMaterial->getPipelineLayout(), 0,
-                    globalUniforms.getDescriptorSet()->getDescriptorSet(frame), {});
-                // Bindless descriptor set for cubemap array
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                    skyboxMaterial->getPipelineLayout(), 1,
-                    resourceManager->getDescriptorManager().getBindlessSet(), {});
-                cmd.draw(3, 1, 0, 0); // Full-screen triangle
-            }
-
-            // Then render scene geometry (depth testing enabled)
+    // 3. Add Main Pass (Scene rendering)
+    renderGraph->addPass("Main")
+        .write("hdr", ResourceUsage::ColorAttachment)
+        .write("depth", ResourceUsage::DepthAttachment)
+        .execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+            // TODO: Implement Main Pass rendering
+            // - Begin dynamic rendering (vkCmdBeginRendering)
+            // - Render scene
+            // - Render skybox
+            // - End rendering
             renderScene(cmd, frame, *currentWorld);
-        }
-    };
+        });
 
-    auto mainPass = eastl::make_unique<RenderPass>();
-    mainPass->init(context, mainPassConfig);
+    // 4. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
+    renderGraph->addPass("Tonemap")
+        .read("hdr", ResourceUsage::ShaderRead)
+        .write("swapchain", ResourceUsage::ColorAttachment)
+        .execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+            // TODO: Implement Tonemap Pass
+            // - Begin dynamic rendering
+            // - Fullscreen quad with tonemap shader
+            // - End rendering
+        });
 
-    // Create offscreen framebuffers
-    if (mainPassConfig.createOwnFramebuffer) {
-        mainPass->createFramebuffers(currentExtent);
-    }
+    // 5. Build & Compile
+    renderGraph->build();
+    renderGraph->compile();
 
-    passes.push_back(eastl::move(mainPass));
-
-    // Pass 2: PostProcess pass - Render fullscreen quad to swapchain
-    RenderPassConfig postProcessConfig;
-    postProcessConfig.name = "PostProcess";
-    postProcessConfig.colorAttachments = {AttachmentDesc::swapchainColor(swapchainFormat, vk::AttachmentLoadOp::eClear)};
-    postProcessConfig.depthAttachment = AttachmentDesc::swapchainDepth(context->findDepthFormat(), vk::AttachmentLoadOp::eClear);
-    postProcessConfig.hasDepth = true;  // Need depth for debug renderer compatibility with swapchain framebuffer
-    postProcessConfig.clearValues = {colorClear, depthClear};
-    postProcessConfig.isSwapchainPass = true;  // Render to swapchain
-    postProcessConfig.createOwnFramebuffer = false;  // Use external swapchain framebuffer
-    postProcessConfig.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    postProcessConfig.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    postProcessConfig.srcAccess = {};
-    postProcessConfig.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    postProcessConfig.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-        this->setViewport(cmd, currentExtent);
-
-        if (!postProcessMaterial || !postProcessMaterial->getPipeline()) {
-            return;
-        }
-
-        // Bind post-process pipeline
-        postProcessMaterial->getPipeline()->bind(cmd);
-
-        // Bind descriptor set with offscreen textures (set 1)
-        if (postProcessDescriptorSet) {
-            vk::DescriptorSet descSet = postProcessDescriptorSet->getDescriptorSet(0);
-            cmd.bindDescriptorSets(
-                vk::PipelineBindPoint::eGraphics,
-                postProcessMaterial->getPipelineLayout(),
-                1,  // MATERIAL_SET = 1
-                1,
-                &descSet,
-                0,
-                nullptr
-            );
-        }
-
-        // Push constants for tone mapping parameters (EV100 + gamma + tonemap mode)
-        struct PostProcessParams {
-            float ev100;
-            float gamma;
-            uint32_t tonemapMode;  // 0=ACES Fitted, 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
-            float padding;  // Alignment
-        } params;
-        // Use auto-exposure EV100 if enabled, otherwise use manual value
-        params.ev100 = autoExposure.getCurrentEV100();
-        params.gamma = postProcessGamma;
-        params.tonemapMode = tonemapMode;
-        params.padding = 0.0f;
-
-        cmd.pushConstants(
-            postProcessMaterial->getPipelineLayout(),
-            vk::ShaderStageFlagBits::eFragment,
-            0,
-            sizeof(PostProcessParams),
-            &params
-        );
-
-        // Draw fullscreen quad (3 vertices, no vertex buffer)
-        cmd.draw(3, 1, 0, 0);
-    };
-
-    auto postProcessPass = eastl::make_unique<RenderPass>();
-    postProcessPass->init(context, postProcessConfig);
-
-    passes.push_back(eastl::move(postProcessPass));
-
-    // === Setup Render Graph ===
-    if (useRenderGraph) {
-        renderGraph = eastl::make_unique<RenderGraph>();
-
-        // Import resources (from main pass)
-        RenderPass* mainPassPtr = static_cast<RenderPass*>(passes[0].get());
-        RenderPass* postPassPtr = static_cast<RenderPass*>(passes[1].get());
-
-        // Get the image resources from main pass
-        ImageResource colorResource;
-        colorResource.image = mainPassPtr->getColorImage(0);
-        colorResource.format = vk::Format::eR16G16B16A16Sfloat;
-        colorResource.width = currentExtent.width;
-        colorResource.height = currentExtent.height;
-
-        ImageResource depthResource;
-        depthResource.image = mainPassPtr->getDepthImage();
-        depthResource.format = context->findDepthFormat();
-        depthResource.width = currentExtent.width;
-        depthResource.height = currentExtent.height;
-
-        // Import textures to graph
-        auto hdrColorHandle = renderGraph->importTexture("HDRColor", &colorResource);
-        auto depthHandle = renderGraph->importTexture("Depth", &depthResource);
-
-        // Add Main pass
-        renderGraph->addPass("Main")
-            .write(hdrColorHandle, ResourceUsage::ColorAttachment)
-            .write(depthHandle, ResourceUsage::DepthAttachment)
-            .execute([this, mainPassPtr](vk::CommandBuffer cmd, uint32_t frameIndex) {
-                mainPassPtr->begin(cmd, currentExtent);
-                // Execute the main pass logic stored in the pass's config
-                if (currentWorld) {
-                    this->setViewport(cmd, currentExtent);
-
-                    // Render skybox first (if enabled and material exists)
-                    if (environmentMap.isEnabled() && skyboxMaterial && skyboxMaterial->getPipeline()) {
-                        skyboxMaterial->getPipeline()->bind(cmd);
-                        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                            skyboxMaterial->getPipelineLayout(), 0,
-                            globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex), {});
-                        // Bindless descriptor set for cubemap array
-                        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                            skyboxMaterial->getPipelineLayout(), 1,
-                            resourceManager->getDescriptorManager().getBindlessSet(), {});
-                        cmd.draw(3, 1, 0, 0); // Full-screen triangle
-                    }
-
-                    // Then render scene geometry (depth testing enabled)
-                    renderScene(cmd, frameIndex, *currentWorld);
-                }
-                mainPassPtr->end(cmd);
-            })
-            .build();
-
-        // Add PostProcess pass
-        renderGraph->addPass("PostProcess")
-            .read(hdrColorHandle, ResourceUsage::ShaderRead)
-            .read(depthHandle, ResourceUsage::ShaderRead)
-            .execute([this, postPassPtr](vk::CommandBuffer cmd, uint32_t frameIndex) {
-                // Note: For swapchain pass, framebuffer is set externally
-                postPassPtr->begin(cmd, currentExtent);
-
-                // Execute postprocess logic
-                this->setViewport(cmd, currentExtent);
-
-                if (postProcessMaterial && postProcessMaterial->getPipeline()) {
-                    // Bind post-process pipeline
-                    postProcessMaterial->getPipeline()->bind(cmd);
-
-                    // Bind descriptor set with offscreen textures (set 1)
-                    if (postProcessDescriptorSet) {
-                        vk::DescriptorSet descSet = postProcessDescriptorSet->getDescriptorSet(0);
-                        cmd.bindDescriptorSets(
-                            vk::PipelineBindPoint::eGraphics,
-                            postProcessMaterial->getPipelineLayout(),
-                            1,  // MATERIAL_SET = 1
-                            1,
-                            &descSet,
-                            0,
-                            nullptr
-                        );
-                    }
-
-                    // Push constants for tone mapping parameters (EV100 + gamma + tonemap mode)
-                    struct PostProcessParams {
-                        float ev100;
-                        float gamma;
-                        uint32_t tonemapMode;  // 0=ACES Fitted, 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
-                        float padding;  // Alignment
-                    } params;
-                    // Use auto-exposure EV100 if enabled, otherwise use manual value
-                    params.ev100 = autoExposure.getCurrentEV100();
-                    params.gamma = postProcessGamma;
-                    params.tonemapMode = tonemapMode;
-                    params.padding = 0.0f;
-
-                    cmd.pushConstants(
-                        postProcessMaterial->getPipelineLayout(),
-                        vk::ShaderStageFlagBits::eFragment,
-                        0,
-                        sizeof(PostProcessParams),
-                        &params
-                    );
-
-                    // Draw fullscreen quad (3 vertices, no vertex buffer)
-                    cmd.draw(3, 1, 0, 0);
-                }
-
-                postPassPtr->end(cmd);
-            })
-            .build();
-
-        // Compile the graph
-        renderGraph->compile();
-
-        violet::Log::info("Renderer", "Render graph setup complete");
-        renderGraph->debugPrint();
-    }
+    violet::Log::debug("Renderer", "RenderGraph rebuilt for frame {}", imageIndex);
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {
@@ -731,6 +430,7 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     renderStats.skippedRenderables = 0;
 
     // ========== BINDLESS RENDERING ==========
+    auto pbrBindlessMaterial = getMaterialManager()->getMaterialByName("PBRBindless");
     if (!pbrBindlessMaterial || !pbrBindlessMaterial->getPipeline()) {
         violet::Log::error("Renderer", "PBR bindless material not available");
         return;
@@ -1160,123 +860,6 @@ void ForwardRenderer::registerDescriptorLayouts() {
     violet::Log::info("Renderer", "Registered all descriptor layouts declaratively");
 }
 
-void ForwardRenderer::updatePostProcessDescriptors() {
-    if (!postProcessDescriptorSet || passes.size() < 2) {
-        return;
-    }
 
-    RenderPass* mainPass = getRenderPass(0);
-    if (!mainPass) {
-        return;
-    }
-
-    // Get offscreen textures from Main pass
-    vk::ImageView colorView = mainPass->getColorImageView(0);
-    vk::ImageView depthView = mainPass->getDepthImageView();
-
-    if (!colorView || !depthView) {
-        violet::Log::warn("Renderer", "Failed to get offscreen textures for post-process");
-        return;
-    }
-
-    // Get sampler from DescriptorManager (reuse cached sampler)
-    auto& descMgr = resourceManager->getDescriptorManager();
-    vk::Sampler sampler = descMgr.getSampler(SamplerType::ClampToEdge);
-
-    // Update descriptor set with color texture (binding 0)
-    vk::DescriptorImageInfo colorImageInfo{};
-    colorImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    colorImageInfo.imageView = colorView;
-    colorImageInfo.sampler = sampler;
-
-    vk::WriteDescriptorSet colorWrite{};
-    colorWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
-    colorWrite.dstBinding = 0;
-    colorWrite.dstArrayElement = 0;
-    colorWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    colorWrite.descriptorCount = 1;
-    colorWrite.pImageInfo = &colorImageInfo;
-
-    // Update descriptor set with depth texture (binding 1)
-    vk::DescriptorImageInfo depthImageInfo{};
-    depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    depthImageInfo.imageView = depthView;
-    depthImageInfo.sampler = sampler;
-
-    vk::WriteDescriptorSet depthWrite{};
-    depthWrite.dstSet = postProcessDescriptorSet->getDescriptorSet(0);
-    depthWrite.dstBinding = 1;
-    depthWrite.dstArrayElement = 0;
-    depthWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    depthWrite.descriptorCount = 1;
-    depthWrite.pImageInfo = &depthImageInfo;
-
-    eastl::array<vk::WriteDescriptorSet, 2> writes = {colorWrite, depthWrite};
-    context->getDevice().updateDescriptorSets(2, writes.data(), 0, nullptr);
-}
-
-void ForwardRenderer::insertPassTransition(vk::CommandBuffer cmd, size_t passIndex) {
-    // Transition from Main pass (index 0) to PostProcess pass (index 1)
-    if (passIndex == 1 && passes.size() >= 2) {
-        RenderPass* mainPass = getRenderPass(0);
-        if (!mainPass) return;
-
-        // Get offscreen color and depth images
-        vk::Image colorImage = mainPass->getColorImage(0);
-        vk::Image depthImage = mainPass->getDepthImage();
-
-        // Transition color attachment from write to read
-        if (colorImage) {
-            vk::ImageMemoryBarrier colorBarrier{};
-            colorBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
-            colorBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-            colorBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            colorBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            colorBarrier.image = colorImage;
-            colorBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-            colorBarrier.subresourceRange.baseMipLevel = 0;
-            colorBarrier.subresourceRange.levelCount = 1;
-            colorBarrier.subresourceRange.baseArrayLayer = 0;
-            colorBarrier.subresourceRange.layerCount = 1;
-            colorBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-            colorBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-            cmd.pipelineBarrier(
-                vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                {},
-                {},
-                {},
-                colorBarrier
-            );
-        }
-
-        // Transition depth attachment from write to read
-        if (depthImage) {
-            vk::ImageMemoryBarrier depthBarrier{};
-            depthBarrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-            depthBarrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-            depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            depthBarrier.image = depthImage;
-            depthBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-            depthBarrier.subresourceRange.baseMipLevel = 0;
-            depthBarrier.subresourceRange.levelCount = 1;
-            depthBarrier.subresourceRange.baseArrayLayer = 0;
-            depthBarrier.subresourceRange.layerCount = 1;
-            depthBarrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-            depthBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-            cmd.pipelineBarrier(
-                vk::PipelineStageFlagBits::eLateFragmentTests,
-                vk::PipelineStageFlagBits::eFragmentShader,
-                {},
-                {},
-                {},
-                depthBarrier
-            );
-        }
-    }
-}
 
 } // namespace violet

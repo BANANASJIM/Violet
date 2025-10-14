@@ -69,10 +69,15 @@ void App::initVulkan() {
 
     createResources();
 
-    // Initialize ImGui backend after renderer is set up
+    // Set swapchain for RenderGraph (after renderer initialized)
     if (forwardRenderer) {
-        imguiBackend.init(&context, window.getHandle(), forwardRenderer->getFinalPassRenderPass(), MAX_FRAMES_IN_FLIGHT);
+        forwardRenderer->setSwapchain(&swapchain);
     }
+
+    // TODO: ImGui backend needs update for dynamic rendering
+    // if (forwardRenderer) {
+    //     imguiBackend.init(&context, window.getHandle(), swapchainFormat, MAX_FRAMES_IN_FLIGHT);
+    // }
     createCommandBuffers();
     createSyncObjects();
 }
@@ -198,20 +203,19 @@ void App::internalCleanup() {
 }
 
 void App::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t frameIndex) {
-    vk::Framebuffer framebuffer = swapchain.getFramebuffer(imageIndex);
     vk::Extent2D extent = swapchain.getExtent();
 
-    // Scene rendering - use shared framebuffer
+    // Scene rendering - RenderGraph manages barriers
     if (forwardRenderer && world) {
         forwardRenderer->beginFrame(*world, frameIndex);
-        forwardRenderer->renderFrame(cmd, framebuffer, extent, frameIndex);
+        forwardRenderer->renderFrame(cmd, imageIndex, extent, frameIndex);
         forwardRenderer->endFrame();
     }
 
-    // Debug and UI rendering - use same framebuffer
-    if (debugRenderer) {
-        debugRenderer->renderDebugAndUI(cmd, framebuffer, extent, frameIndex);
-    }
+    // TODO: Debug and UI rendering needs update for dynamic rendering
+    // if (debugRenderer) {
+    //     debugRenderer->renderDebugAndUI(cmd, extent, frameIndex);
+    // }
 }
 
 bool App::acquireNextImage(uint32_t& imageIndex) {
@@ -270,7 +274,7 @@ void App::recreateSwapchain() {
 
     if (forwardRenderer) {
         forwardRenderer->onSwapchainRecreate(newExtent);
-        swapchain.createFramebuffers(forwardRenderer->getFinalPassRenderPass());
+        // RenderGraph will rebuild automatically on next frame
     }
 
     onWindowResize(width, height);

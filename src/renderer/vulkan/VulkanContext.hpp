@@ -100,7 +100,8 @@ private:
     };
     
     const eastl::vector<const char*> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME  // For advanced rendering techniques
 #ifdef __APPLE__
         ,"VK_KHR_portability_subset"
 #endif

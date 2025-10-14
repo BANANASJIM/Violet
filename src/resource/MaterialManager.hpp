@@ -66,16 +66,19 @@ public:
     void init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
     void cleanup();
 
+    // Set rendering formats for compatible RenderPass creation
+    void setRenderingFormats(vk::Format swapchainFormat);
+
     // === Material Management (using vector for stable storage) ===
     Material* createMaterial(const MaterialDesc& desc);
     Material* getMaterial(size_t index) const;
     Material* getMaterialByName(const eastl::string& name) const;
     size_t getMaterialCount() const { return materials.size(); }
 
-    // Predefined material shortcuts
-    Material* createPBRBindlessMaterial(RenderPass* renderPass);
-    Material* createPostProcessMaterial(RenderPass* renderPass);
-    Material* createSkyboxMaterial(RenderPass* renderPass);
+    // Predefined material shortcuts (no RenderPass parameter - managed internally)
+    Material* createPBRBindlessMaterial();
+    Material* createPostProcessMaterial();
+    Material* createSkyboxMaterial();
 
     // === MaterialInstance Management (dynamic creation/deletion) ===
     uint32_t createMaterialInstance(const MaterialInstanceDesc& desc);
@@ -97,6 +100,14 @@ public:
     // === Texture Management (delegated to TextureManager) ===
     Texture* addTexture(eastl::unique_ptr<Texture> texture);
     Texture* getDefaultTexture(DefaultTextureType type) const;
+
+    // === Format Information (for dynamic rendering) ===
+    struct PipelineRenderingFormats {
+        eastl::vector<vk::Format> colorFormats;
+        vk::Format depthFormat = vk::Format::eUndefined;
+        vk::Format stencilFormat = vk::Format::eUndefined;
+    };
+    PipelineRenderingFormats getFormatsForMaterialType(MaterialType type) const;
 
     // === Statistics ===
     struct Stats {
@@ -141,6 +152,11 @@ private:
     TextureManager* textureManager = nullptr;
     ShaderLibrary* shaderLibrary = nullptr;
     uint32_t maxFramesInFlight = 0;
+
+    // === Format Storage (for dynamic rendering) ===
+    vk::Format swapchainFormat = vk::Format::eUndefined;
+    vk::Format hdrFormat = vk::Format::eR16G16B16A16Sfloat;  // HDR rendering
+    vk::Format depthFormat = vk::Format::eUndefined;
 
     // === Helper Methods ===
     uint32_t allocateInstanceId();

@@ -7,7 +7,6 @@
 
 namespace violet {
 
-class RenderPass;
 class DescriptorSet;
 class Material;
 class Shader;
@@ -22,6 +21,12 @@ struct PipelineConfig {
     vk::CompareOp depthCompareOp = vk::CompareOp::eLess;  // Default to less for normal depth testing
     bool enableBlending = false;
     bool useVertexInput = true;  // Set to false for full-screen effects like skybox
+
+    // Dynamic rendering formats (replaces RenderPass dependency)
+    eastl::vector<vk::Format> colorFormats;
+    vk::Format depthFormat = vk::Format::eUndefined;
+    vk::Format stencilFormat = vk::Format::eUndefined;
+
     eastl::vector<vk::PushConstantRange> pushConstantRanges;  // Custom push constant ranges
     eastl::vector<vk::DescriptorSetLayout> additionalDescriptorSets;  // Additional descriptor sets (e.g., bindless)
     vk::DescriptorSetLayout globalDescriptorSetLayout = nullptr;  // Global descriptor set layout from DescriptorManager
@@ -34,11 +39,12 @@ public:
     ~GraphicsPipeline() override = default;
 
     /**
-     * @brief Initialize pipeline with Shader weak_ptr references
+     * @brief Initialize pipeline with Shader weak_ptr references (dynamic rendering)
      * @param vertShader Vertex shader weak_ptr (managed by ShaderLibrary)
      * @param fragShader Fragment shader weak_ptr (managed by ShaderLibrary)
+     * @param config Pipeline configuration including format information
      */
-    void init(VulkanContext* context, RenderPass* renderPass, Material* material,
+    void init(VulkanContext* context, Material* material,
               eastl::weak_ptr<Shader> vertShader, eastl::weak_ptr<Shader> fragShader,
               const PipelineConfig& config);
 
@@ -76,7 +82,6 @@ private:
     vk::raii::Pipeline graphicsPipeline{nullptr};
 
     // Cached configuration for rebuild
-    RenderPass* renderPass = nullptr;
     Material* material = nullptr;
     PipelineConfig config;
 };

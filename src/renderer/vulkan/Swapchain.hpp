@@ -21,15 +21,15 @@ public:
     uint32_t acquireNextImage(vk::Semaphore semaphore);
     void present(uint32_t imageIndex, vk::Semaphore waitSemaphore);
 
-    void createFramebuffers(vk::RenderPass renderPass);
-    vk::Framebuffer getFramebuffer(size_t index) const { return *framebuffers[index]; }
-    size_t getFramebufferCount() const { return framebuffers.size(); }
-
-    // Getters for renderer to create its own framebuffers
+    // Dynamic rendering accessors (no framebuffers needed)
     const eastl::vector<vk::raii::ImageView>& getImageViews() const { return imageViews; }
     vk::ImageView getImageView(size_t index) const { return *imageViews[index]; }
     vk::ImageView getDepthImageView() const { return *depthImageView; }
     size_t getImageCount() const { return images.size(); }
+
+    // RenderGraph integration - expose vk::Image handles
+    vk::Image getImage(size_t index) const { return images[index]; }
+    vk::Image getDepthImage() const { return depthImage.image; }
 
     void createDepthResources();
 
@@ -48,7 +48,6 @@ private:
     vk::raii::SwapchainKHR swapchain{nullptr};
     eastl::vector<vk::Image> images;
     eastl::vector<vk::raii::ImageView> imageViews;
-    eastl::vector<vk::raii::Framebuffer> framebuffers;
 
     ImageResource depthImage{};
     vk::raii::ImageView depthImageView{nullptr};

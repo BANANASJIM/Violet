@@ -207,11 +207,17 @@ void VulkanContext::createLogicalDevice() {
         violet::Log::warn("Renderer", "wideLines not supported on this device");
     }
     
+    // Vulkan 1.3 core features
     vk::PhysicalDeviceVulkan13Features features13;
     features13.dynamicRendering = VK_TRUE;
 
+    // Dynamic rendering local read extension feature
+    vk::PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR localReadFeatures;
+    localReadFeatures.pNext = &features13;
+    localReadFeatures.dynamicRenderingLocalRead = VK_TRUE;
+
     vk::PhysicalDeviceVulkan12Features features12;
-    features12.pNext = &features13;
+    features12.pNext = &localReadFeatures;
     features12.timelineSemaphore = VK_TRUE;
 
     // Bindless descriptor indexing features (part of Vulkan 1.2 core)

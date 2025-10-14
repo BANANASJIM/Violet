@@ -4,12 +4,12 @@
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
 #include <EASTL/functional.h>
+#include "ResourceHandle.hpp"
 
 namespace violet {
 
 class VulkanContext;
 class RenderGraph;
-using ResourceHandle = uint32_t;
 
 // Pass type enumeration
 enum class PassType {

@@ -57,19 +57,21 @@ void VioletApp::createResources() {
 
     // 3. Create renderer materials
     renderer.createMaterials();
-    debugRenderer.init(getContext(), renderer.getRenderPass(0), &renderer.getGlobalUniforms(), &resourceManager.getDescriptorManager(),
-                       resourceManager.getShaderLibrary(), getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
-    debugRenderer.setUILayer(compositeUI.get());
+
+    // Setup RenderGraph
+    renderer.setupRenderGraph(getSwapchain()->getImageFormat());
+    renderer.setSwapchain(getSwapchain());
+
+    // TODO: debugRenderer needs update for dynamic rendering
+    // debugRenderer.init(getContext(), ..., getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+    // debugRenderer.setUILayer(compositeUI.get());
 
     // Note: initAutoExposure() no longer needed - auto-exposure is initialized in renderer.init()
 
     // Configure App base class
     this->forwardRenderer = &renderer;
-    this->App::debugRenderer = &debugRenderer;
+    // this->App::debugRenderer = &debugRenderer;  // TODO: Re-enable after debugRenderer migrated
     this->App::world = &this->world.getRegistry();
-
-    // Create swapchain framebuffers using final pass RenderPass
-    getSwapchain()->createFramebuffers(renderer.getFinalPassRenderPass());
 
     initializeScene();
 

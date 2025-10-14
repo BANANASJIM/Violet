@@ -1,20 +1,17 @@
 #include "DebugRenderer.hpp"
 
-
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include "resource/Material.hpp"
 #include "resource/Mesh.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
-#include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/ForwardRenderer.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
-#include "ui/UILayer.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 
 namespace violet {
@@ -23,23 +20,11 @@ DebugRenderer::~DebugRenderer() {
     cleanup();
 }
 
-void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, uint32_t framesInFlight) {
-    // Base init - doesn't have GlobalUniforms
+void DebugRenderer::init(VulkanContext* ctx, GlobalUniforms* globalUnif,
+                         DescriptorManager* descMgr, ShaderLibrary* shaderLib, uint32_t framesInFlight) {
     context = ctx;
-    renderPass = rp;
-    maxFramesInFlight = framesInFlight;
-    // We'll need GlobalUniforms for actual debug rendering, so this method doesn't do much
-}
-
-void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* globalUnif,
-                         DescriptorManager* descMgr, ShaderLibrary* shaderLib, vk::Format swapchainFormat, uint32_t framesInFlight) {
-    context = ctx;
-    renderPass = rp;
     maxFramesInFlight = framesInFlight;
     globalUniforms = globalUnif;
-
-    // Setup overlay pass for UI rendering
-    setupOverlayPass(swapchainFormat);
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -72,31 +57,17 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
         config.lineWidth = 1.0f;  // Default line width
     }
 
-    // Use new shader-based init API
-    debugPipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, config);
+    // Use new shader-based init API (dynamic rendering - no RenderPass needed)
+    debugPipeline->init(context, debugMaterial.get(), debugVert, debugFrag, config);
 
-    // Create wireframe pipeline for mesh rendering (TriangleList with wireframe)
-    wireframePipeline = eastl::make_unique<GraphicsPipeline>();
-    PipelineConfig wireframeConfig = config;  // Copy base config (including globalDescriptorSetLayout)
-    wireframeConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
+    // Create triangle pipeline for filled geometry (rays, mesh wireframes converted to lines)
+    trianglePipeline = eastl::make_unique<GraphicsPipeline>();
+    PipelineConfig triangleConfig = config;  // Copy base config (including globalDescriptorSetLayout)
+    triangleConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
+    triangleConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
+    triangleConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for debug geometry
 
-    // Set wireframe mode for triangle rendering
-    if (availableFeatures.fillModeNonSolid) {
-        wireframeConfig.polygonMode = vk::PolygonMode::eLine;
-    } else {
-        wireframeConfig.polygonMode = vk::PolygonMode::eFill;
-    }
-
-    wireframePipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, wireframeConfig);
-
-    // Create solid pipeline for filled triangle rendering
-    solidPipeline = eastl::make_unique<GraphicsPipeline>();
-    PipelineConfig solidConfig = config;  // Copy base config (including globalDescriptorSetLayout)
-    solidConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
-    solidConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
-    solidConfig.cullMode = vk::CullModeFlagBits::eBack;  // Enable back-face culling for solid objects
-
-    solidPipeline->init(context, renderPass, debugMaterial.get(), debugVert, debugFrag, solidConfig);
+    trianglePipeline->init(context, debugMaterial.get(), debugVert, debugFrag, triangleConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);
@@ -125,9 +96,6 @@ void DebugRenderer::init(VulkanContext* ctx, RenderPass* rp, GlobalUniforms* glo
 }
 
 void DebugRenderer::cleanup() {
-    // Cleanup overlay pass
-    overlayPass.cleanup();
-
     // Explicitly clean up BufferResources before clearing frameData
     for (auto& frame : frameData) {
         if (frame.vertexBuffer) {
@@ -144,14 +112,9 @@ void DebugRenderer::cleanup() {
         debugPipeline.reset();
     }
 
-    if (wireframePipeline) {
-        wireframePipeline->cleanup();
-        wireframePipeline.reset();
-    }
-
-    if (solidPipeline) {
-        solidPipeline->cleanup();
-        solidPipeline.reset();
+    if (trianglePipeline) {
+        trianglePipeline->cleanup();
+        trianglePipeline.reset();
     }
 
     if (debugMaterial) {
@@ -496,7 +459,7 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
 }
 
 void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length) {
-    if (!enabled || !solidPipeline) {  // Use solid pipeline for filled mesh
+    if (!enabled || !trianglePipeline) {
         return;
     }
 
@@ -575,12 +538,12 @@ void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameInd
         frame.indexCount = static_cast<uint32_t>(indices.size());
     }
 
-    // Bind solid pipeline for filled mesh rendering
-    solidPipeline->bind(commandBuffer);
+    // Bind triangle pipeline for filled mesh rendering
+    trianglePipeline->bind(commandBuffer);
 
     // Use BaseRenderer's bindGlobalDescriptors helper
     vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-    bindGlobalDescriptors(commandBuffer, solidPipeline->getPipelineLayout(), globalSet, 0);
+    bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -589,7 +552,7 @@ void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameInd
     commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
 
     // Use BaseRenderer's pushModelMatrix helper
-    pushModelMatrix(commandBuffer, solidPipeline->getPipelineLayout(), glm::mat4(1.0f));
+    pushModelMatrix(commandBuffer, trianglePipeline->getPipelineLayout(), glm::mat4(1.0f));
 
     // Draw
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
@@ -711,7 +674,7 @@ void DebugRenderer::addRayToBatch(const glm::vec3& origin, const glm::vec3& dire
 }
 
 void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
-    if (!enabled || !solidPipeline || batchedRayVertices.empty()) {
+    if (!enabled || !trianglePipeline || batchedRayVertices.empty()) {
         return;
     }
 
@@ -735,12 +698,12 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
         }
     }
 
-    // Bind solid pipeline for filled mesh rendering
-    solidPipeline->bind(commandBuffer);
+    // Bind triangle pipeline for filled mesh rendering
+    trianglePipeline->bind(commandBuffer);
 
     // Use BaseRenderer's bindGlobalDescriptors helper
     vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-    bindGlobalDescriptors(commandBuffer, solidPipeline->getPipelineLayout(), globalSet, 0);
+    bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -749,7 +712,7 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
     commandBuffer.bindIndexBuffer(frame.indexBuffer->buffer, 0, vk::IndexType::eUint32);
 
     // Use BaseRenderer's pushModelMatrix helper
-    pushModelMatrix(commandBuffer, solidPipeline->getPipelineLayout(), glm::mat4(1.0f));
+    pushModelMatrix(commandBuffer, trianglePipeline->getPipelineLayout(), glm::mat4(1.0f));
 
     // Draw all batched rays in one call
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
@@ -762,93 +725,17 @@ void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32
     }
 
     // Get entity components
-    auto* meshComp = world.try_get<MeshComponent>(selectedEntity);
     auto* transformComp = world.try_get<TransformComponent>(selectedEntity);
     auto* lightComp = world.try_get<LightComponent>(selectedEntity);
-
-    // Render mesh wireframe if entity has a mesh
-    if (meshComp && meshComp->mesh && transformComp && wireframePipeline) {
-        const Mesh* mesh = meshComp->mesh.get();
-
-        // Bind wireframe pipeline (configured for triangle list wireframe rendering)
-        wireframePipeline->bind(commandBuffer);
-
-        // Use BaseRenderer's bindGlobalDescriptors helper
-        vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
-        bindGlobalDescriptors(commandBuffer, wireframePipeline->getPipelineLayout(), globalSet, 0);
-
-        // Use BaseRenderer's bindVertexIndexBuffers helper
-        bindVertexIndexBuffers(commandBuffer, mesh);
-
-        if (mesh->getVertexBuffer().getBuffer() && mesh->getIndexBuffer().getBuffer()) {
-            // Use BaseRenderer's pushModelMatrix helper
-            pushModelMatrix(commandBuffer, wireframePipeline->getPipelineLayout(), transformComp->world.getMatrix());
-
-            // Render all submeshes as wireframe
-            for (size_t i = 0; i < mesh->getSubMeshCount(); ++i) {
-                const SubMesh& subMesh = mesh->getSubMesh(i);
-                commandBuffer.drawIndexed(subMesh.indexCount, 1, subMesh.firstIndex, 0, 0);
-            }
-        }
-    }
 
     // Render point light influence sphere if entity is a point light
     if (lightComp && lightComp->type == LightType::Point && transformComp) {
         renderSphere(commandBuffer, frameIndex, transformComp->world.position,
                     lightComp->radius, DebugColors::SELECTED_ENTITY);
     }
+    // Note: Mesh wireframe rendering removed for lightweight implementation
+    // Can be re-added later using generateWireframeGeometry() + debugPipeline if needed
 }
 
-void DebugRenderer::setupOverlayPass(vk::Format swapchainFormat) {
-    // Create overlay attachment that transitions from ePresentSrcKHR to eColorAttachmentOptimal to ePresentSrcKHR
-    AttachmentDesc overlayAttachment;
-    overlayAttachment.format = swapchainFormat;
-    overlayAttachment.loadOp = vk::AttachmentLoadOp::eLoad;  // Don't clear, preserve previous content
-    overlayAttachment.storeOp = vk::AttachmentStoreOp::eStore;
-    overlayAttachment.initialLayout = vk::ImageLayout::ePresentSrcKHR;  // Image comes from ForwardRenderer in this layout
-    overlayAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;    // Return to present layout for swapchain
-
-    // Clear values
-    vk::ClearValue colorClear;
-    colorClear.color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
-    vk::ClearValue depthClear;
-    depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
-
-    RenderPassConfig config;
-    config.name = "OverlayPass";
-    config.colorAttachments.push_back(overlayAttachment);
-    // Add depth attachment to match swapchain framebuffer structure
-    config.depthAttachment = AttachmentDesc::depth(context->findDepthFormat(), vk::AttachmentLoadOp::eLoad);
-    config.hasDepth = true;
-    config.clearValues = {colorClear, depthClear};
-    config.isSwapchainPass = true;  // Uses swapchain framebuffer
-    config.createOwnFramebuffer = false;  // Uses external swapchain framebuffer
-    // Match ForwardRenderer main pass dependency configuration exactly
-    config.srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    config.dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    config.srcAccess = {};  // Empty srcAccess to match ForwardRenderer
-    config.dstAccess = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    config.execute = [this](vk::CommandBuffer cmd, uint32_t frame) {
-        // Render debug information
-        if (enabled) {
-            render(cmd, frame);
-        }
-
-        // Render UI
-        if (uiLayer) {
-            uiLayer->beginFrame();
-            uiLayer->onImGuiRender();
-            uiLayer->endFrame(cmd);
-        }
-    };
-
-    overlayPass.init(context, config);
-}
-
-void DebugRenderer::renderDebugAndUI(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex) {
-    overlayPass.begin(cmd, framebuffer, extent);
-    overlayPass.execute(cmd, frameIndex);
-    overlayPass.end(cmd);
-}
 
 } // namespace violet

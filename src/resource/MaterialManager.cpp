@@ -78,17 +78,17 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
         return nullptr;
     }
 
-    // Create graphics pipeline
-    auto pipeline = eastl::make_unique<GraphicsPipeline>();
-    RenderPass* renderPass = desc.renderPass;
-    if (!renderPass) {
-        violet::Log::error("MaterialManager", "RenderPass is required for material creation");
+    // Validate format information is provided
+    if (finalConfig.colorFormats.empty()) {
+        violet::Log::error("MaterialManager", "Material '{}' has no color formats specified",
+                          desc.name.empty() ? "unnamed" : desc.name.c_str());
         return nullptr;
     }
 
+    // Create graphics pipeline with dynamic rendering
+    auto pipeline = eastl::make_unique<GraphicsPipeline>();
     pipeline->init(
         context,
-        renderPass,
         material.get(),
         desc.vertexShader,
         desc.fragmentShader,
@@ -127,80 +127,110 @@ Material* MaterialManager::getMaterialByName(const eastl::string& name) const {
     return nullptr;
 }
 
-// Predefined material creation shortcuts
+// Predefined material creation shortcuts (using dynamic rendering)
 
-Material* MaterialManager::createPBRBindlessMaterial(RenderPass* renderPass) {
-    PipelineConfig bindlessConfig;
-    bindlessConfig.pushConstantRanges.push_back(vk::PushConstantRange{
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-        0,
-        sizeof(BindlessPushConstants)
-    });
+Material* MaterialManager::createPBRBindlessMaterial() {
+    // Get shaders from ShaderLibrary
+    auto vertShader = shaderLibrary->get("pbr_vert");
+    auto fragShader = shaderLibrary->get("pbr_frag");
 
-    // Add bindless descriptor set layouts (set 1: bindless textures, set 2: material data SSBO)
-    bindlessConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
-    bindlessConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("MaterialData"));
+    if (vertShader.expired() || fragShader.expired()) {
+        violet::Log::error("MaterialManager", "Failed to get PBR shaders from ShaderLibrary");
+        return nullptr;
+    }
 
-    MaterialDesc desc{
-        .vertexShader = shaderLibrary->get("pbr_vert"),
-        .fragmentShader = shaderLibrary->get("pbr_frag"),
-        .layoutName = "",  // No traditional material layout needed for bindless
-        .pipelineConfig = bindlessConfig,
-        .renderPass = renderPass,
-        .name = "PBR_Bindless",
-        .type = MaterialType::PBR
-    };
+    // Get format information for PBR material type
+    auto formats = getFormatsForMaterialType(MaterialType::PBR);
 
-    return createMaterial(desc);
-}
+    // Configure pipeline for PBR bindless rendering
+    PipelineConfig config;
+    config.enableDepthTest = true;
+    config.enableDepthWrite = true;
+    config.colorFormats = formats.colorFormats;
+    config.depthFormat = formats.depthFormat;
+    config.stencilFormat = formats.stencilFormat;
 
-Material* MaterialManager::createPostProcessMaterial(RenderPass* renderPass) {
-    PipelineConfig postProcessConfig;
-    postProcessConfig.cullMode = vk::CullModeFlagBits::eNone;
-    postProcessConfig.enableDepthTest = true;
-    postProcessConfig.enableDepthWrite = true;
-    postProcessConfig.depthCompareOp = vk::CompareOp::eAlways;
-    postProcessConfig.useVertexInput = false;
-
-    // Add push constant for tone mapping parameters (ev100 + gamma + tonemapMode + padding)
-    vk::PushConstantRange pushConstant;
-    pushConstant.stageFlags = vk::ShaderStageFlagBits::eFragment;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(float) * 4;  // ev100 + gamma + tonemapMode + padding (16 bytes total)
-    postProcessConfig.pushConstantRanges.push_back(pushConstant);
-
-    MaterialDesc desc{
-        .vertexShader = shaderLibrary->get("postprocess_vert"),
-        .fragmentShader = shaderLibrary->get("postprocess_frag"),
-        .layoutName = "PostProcess",
-        .pipelineConfig = postProcessConfig,
-        .renderPass = renderPass,
-        .name = "PostProcess",
-        .type = MaterialType::PostProcess
-    };
+    // Create material descriptor
+    MaterialDesc desc;
+    desc.vertexShader = vertShader;
+    desc.fragmentShader = fragShader;
+    desc.layoutName = "Material";  // Material descriptor layout from DescriptorManager
+    desc.pipelineConfig = config;
+    desc.name = "PBRBindless";
+    desc.type = MaterialType::PBR;
+    desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
     return createMaterial(desc);
 }
 
-Material* MaterialManager::createSkyboxMaterial(RenderPass* renderPass) {
-    PipelineConfig skyboxConfig;
-    skyboxConfig.enableDepthTest = false;
-    skyboxConfig.enableDepthWrite = false;
-    skyboxConfig.cullMode = vk::CullModeFlagBits::eFront;  // Cull front faces for inside view
-    skyboxConfig.useVertexInput = false;  // Skybox generates vertices procedurally
+Material* MaterialManager::createPostProcessMaterial() {
+    // Get shaders from ShaderLibrary
+    auto vertShader = shaderLibrary->get("postprocess_vert");
+    auto fragShader = shaderLibrary->get("postprocess_frag");
 
-    // Add bindless descriptor set (set 1) for cubemap array access
-    skyboxConfig.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
+    if (vertShader.expired() || fragShader.expired()) {
+        violet::Log::error("MaterialManager", "Failed to get PostProcess shaders from ShaderLibrary");
+        return nullptr;
+    }
 
-    MaterialDesc desc{
-        .vertexShader = shaderLibrary->get("skybox_vert"),
-        .fragmentShader = shaderLibrary->get("skybox_frag"),
-        .layoutName = "Global",  // Skybox uses global descriptor set (set 0)
-        .pipelineConfig = skyboxConfig,
-        .renderPass = renderPass,
-        .name = "Skybox",
-        .type = MaterialType::Skybox
-    };
+    // Get format information for PostProcess material type
+    auto formats = getFormatsForMaterialType(MaterialType::PostProcess);
+
+    // Configure pipeline for post-processing
+    PipelineConfig config;
+    config.useVertexInput = false;  // Full-screen triangle
+    config.enableDepthTest = false;
+    config.enableDepthWrite = false;
+    config.colorFormats = formats.colorFormats;
+    config.depthFormat = vk::Format::eUndefined;  // No depth for post-process
+    config.stencilFormat = formats.stencilFormat;
+
+    // Create material descriptor
+    MaterialDesc desc;
+    desc.vertexShader = vertShader;
+    desc.fragmentShader = fragShader;
+    desc.layoutName = "";  // PostProcess uses no material descriptor set
+    desc.pipelineConfig = config;
+    desc.name = "PostProcess";
+    desc.type = MaterialType::PostProcess;
+    desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
+
+    return createMaterial(desc);
+}
+
+Material* MaterialManager::createSkyboxMaterial() {
+    // Get shaders from ShaderLibrary
+    auto vertShader = shaderLibrary->get("skybox_vert");
+    auto fragShader = shaderLibrary->get("skybox_frag");
+
+    if (vertShader.expired() || fragShader.expired()) {
+        violet::Log::error("MaterialManager", "Failed to get Skybox shaders from ShaderLibrary");
+        return nullptr;
+    }
+
+    // Get format information for Skybox material type
+    auto formats = getFormatsForMaterialType(MaterialType::Skybox);
+
+    // Configure pipeline for skybox rendering
+    PipelineConfig config;
+    config.useVertexInput = false;  // Skybox uses procedural geometry
+    config.enableDepthTest = true;
+    config.enableDepthWrite = false;  // Skybox drawn last with equal depth
+    config.depthCompareOp = vk::CompareOp::eLessOrEqual;
+    config.cullMode = vk::CullModeFlagBits::eNone;
+    config.colorFormats = formats.colorFormats;
+    config.depthFormat = formats.depthFormat;
+    config.stencilFormat = formats.stencilFormat;
+
+    // Create material descriptor
+    MaterialDesc desc;
+    desc.vertexShader = vertShader;
+    desc.fragmentShader = fragShader;
+    desc.layoutName = "";  // Skybox uses no material descriptor set
+    desc.pipelineConfig = config;
+    desc.name = "Skybox";
+    desc.type = MaterialType::Skybox;
+    desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
     return createMaterial(desc);
 }
@@ -441,6 +471,46 @@ uint32_t MaterialManager::getInstanceGeneration(uint32_t id) const {
 uint32_t MaterialManager::makeInstanceId(uint32_t index, uint32_t generation) const {
     // Combine index and generation into single ID
     return (index & 0xFFFFF) | ((generation & 0xFFF) << 20);
+}
+
+// === Format Management (for dynamic rendering) ===
+
+void MaterialManager::setRenderingFormats(vk::Format newSwapchainFormat) {
+    if (swapchainFormat != newSwapchainFormat) {
+        swapchainFormat = newSwapchainFormat;
+        depthFormat = context->findDepthFormat();
+
+        violet::Log::info("MaterialManager", "Updated rendering formats (Swapchain: {}, Depth: {})",
+            vk::to_string(swapchainFormat).c_str(),
+            vk::to_string(depthFormat).c_str());
+    }
+}
+
+MaterialManager::PipelineRenderingFormats MaterialManager::getFormatsForMaterialType(MaterialType type) const {
+    PipelineRenderingFormats formats;
+    formats.depthFormat = depthFormat;
+
+    switch (type) {
+        case MaterialType::PBR:
+        case MaterialType::Skybox:
+            // HDR offscreen rendering
+            formats.colorFormats.push_back(hdrFormat);
+            break;
+
+        case MaterialType::PostProcess:
+            // Swapchain rendering
+            formats.colorFormats.push_back(swapchainFormat);
+            break;
+
+        case MaterialType::Unlit:
+        case MaterialType::Custom:
+        default:
+            // Default to HDR format
+            formats.colorFormats.push_back(hdrFormat);
+            break;
+    }
+
+    return formats;
 }
 
 } // namespace violet

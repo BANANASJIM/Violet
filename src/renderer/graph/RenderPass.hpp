@@ -10,9 +10,10 @@ namespace violet {
 
 class VulkanContext;
 
+// RenderPass for RenderGraph - uses dynamic rendering (no vk::RenderPass/Framebuffer)
 class RenderPass : public Pass {
 public:
-    void init(VulkanContext* ctx, vk::RenderPass renderPass, const eastl::string& name);
+    void init(VulkanContext* ctx, const eastl::string& name);
     void cleanup() override;
 
     void execute(vk::CommandBuffer cmd, uint32_t frameIndex) override;
@@ -26,24 +27,14 @@ public:
     void setReadResources(const eastl::vector<ResourceHandle>& r) { reads = r; }
     void setWriteResources(const eastl::vector<ResourceHandle>& w) { writes = w; }
 
-    void setFramebuffer(vk::Framebuffer fb) { framebuffer = fb; }
-    void setRenderArea(vk::Extent2D extent) { renderArea = extent; }
-    void setClearValues(const eastl::vector<vk::ClearValue>& cv) { clearValues = cv; }
-
-    // Execution callback
+    // Execution callback - user code renders inside beginRendering/endRendering
     void setExecuteCallback(eastl::function<void(vk::CommandBuffer, uint32_t)> cb) {
         executeCallback = eastl::move(cb);
     }
 
-    vk::RenderPass getRenderPass() const { return renderPass; }
-
 private:
     VulkanContext* context = nullptr;
     eastl::string name;
-    vk::RenderPass renderPass;  
-    vk::Framebuffer framebuffer = VK_NULL_HANDLE;  
-    vk::Extent2D renderArea = {};
-    eastl::vector<vk::ClearValue> clearValues;
 
     eastl::vector<ResourceHandle> reads;
     eastl::vector<ResourceHandle> writes;

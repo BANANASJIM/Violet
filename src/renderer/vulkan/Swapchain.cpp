@@ -17,7 +17,6 @@ void Swapchain::init(VulkanContext* ctx) {
 void Swapchain::cleanup() {
     // RAII objects will automatically clean themselves up
     // Reset in reverse order of creation
-    framebuffers.clear();
 
     // Destroy depth resources in correct order
     if (depthImageView != nullptr) {
@@ -114,8 +113,9 @@ void Swapchain::createImageViews() {
 
 uint32_t Swapchain::acquireNextImage(vk::Semaphore semaphore) {
     try {
+        // vk::raii::SwapchainKHR::acquireNextImage returns vk::ResultValue<uint32_t>
         auto result = swapchain.acquireNextImage(UINT64_MAX, semaphore);
-        return result.second;
+        return result.value;  // Extract value from ResultValue
     } catch (const vk::OutOfDateKHRError&) {
         // Swapchain is out of date, caller should handle recreation
         throw;
@@ -182,30 +182,6 @@ vk::Extent2D Swapchain::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capab
                                      capabilities.maxImageExtent.height);
     
     return actualExtent;
-}
-
-void Swapchain::createFramebuffers(vk::RenderPass renderPass) {
-    framebuffers.clear();
-    framebuffers.reserve(imageViews.size());
-
-    for (size_t i = 0; i < imageViews.size(); i++) {
-        eastl::array<vk::ImageView, 2> attachments = {
-            *imageViews[i],
-            *depthImageView
-        };
-
-        vk::FramebufferCreateInfo framebufferInfo(
-            {}, // flags
-            renderPass,
-            static_cast<uint32_t>(attachments.size()),
-            attachments.data(),
-            extent.width,
-            extent.height,
-            1 // layers
-        );
-
-        framebuffers.emplace_back(context->getDeviceRAII(), framebufferInfo);
-    }
 }
 
 void Swapchain::createDepthResources() {

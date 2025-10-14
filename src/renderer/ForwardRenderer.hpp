@@ -115,8 +115,12 @@ public:
 
     // Frame rendering
     void beginFrame(entt::registry& world, uint32_t frameIndex);
-    void renderFrame(vk::CommandBuffer cmd, vk::Framebuffer framebuffer, vk::Extent2D extent, uint32_t frameIndex);
+    void renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, vk::Extent2D extent, uint32_t frameIndex);
     void endFrame();
+
+    // RenderGraph setup
+    void setupRenderGraph(vk::Format swapchainFormat);
+    void rebuildRenderGraph(uint32_t imageIndex);
 
     void collectRenderables(entt::registry& world);
     void updateGlobalUniforms(entt::registry& world, uint32_t frameIndex);
@@ -150,6 +154,9 @@ public:
     // Swapchain resize
     void resize(vk::Extent2D newExtent);
 
+    // Swapchain access (for RenderGraph to import swapchain images)
+    void setSwapchain(class Swapchain* swapchain) { this->swapchain = swapchain; }
+
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
     GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
@@ -167,7 +174,10 @@ public:
     uint32_t getTonemapMode() const { return tonemapMode; }
 
     // PBR Bindless Material access (shared material for all PBR instances)
-    Material* getPBRBindlessMaterial() const { return pbrBindlessMaterial; }
+    Material* getPBRBindlessMaterial() const {
+        auto* matMgr = getMaterialManager();
+        return matMgr ? matMgr->getMaterialByName("PBRBindless") : nullptr;
+    }
 
     // Descriptor manager access (delegates to ResourceManager)
     DescriptorManager& getDescriptorManager();
@@ -213,8 +223,10 @@ private:
 
     // Render graph for automatic resource and barrier management
     eastl::unique_ptr<RenderGraph> renderGraph;
+    vk::Format swapchainFormat = vk::Format::eB8G8R8A8Srgb;  // Store swapchain format for graph rebuild
 
     ResourceManager* resourceManager = nullptr;
+    class Swapchain* swapchain = nullptr;  // For RenderGraph swapchain image import
 
     // Time tracking for auto-exposure
     std::chrono::steady_clock::time_point lastFrameTime;

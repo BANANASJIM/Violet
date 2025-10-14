@@ -5,6 +5,7 @@
 #include <EASTL/hash_map.h>
 #include <EASTL/string.h>
 #include <EASTL/functional.h>
+#include "ResourceHandle.hpp"
 
 namespace violet {
 
@@ -12,9 +13,6 @@ class VulkanContext;
 class TransientPool;
 struct ImageResource;
 struct BufferResource;
-
-using ResourceHandle = uint32_t;
-constexpr ResourceHandle InvalidResource = 0;
 
 enum class ResourceType {
     Image,
@@ -38,6 +36,7 @@ struct ImageDesc {
     vk::ImageUsageFlags usage = {};
     uint32_t mipLevels = 1;
     uint32_t arrayLayers = 1;
+    vk::ClearValue clearValue = {};  // For attachment clear operations
 };
 
 struct BufferDesc {
@@ -52,6 +51,7 @@ struct ResourceState {
 };
 
 struct LogicalResource {
+    ResourceHandle handle{0};
     eastl::string name;
     ResourceType type = ResourceType::Unknown;
 
@@ -72,6 +72,9 @@ struct LogicalResource {
         void* physicalHandle;
     };
 
+    // For transient images: ImageView created during compile phase
+    vk::ImageView transientView = VK_NULL_HANDLE;
+
     LogicalResource() : physicalHandle(nullptr) {}
 };
 
@@ -79,11 +82,10 @@ struct PassNode {
     eastl::string name;
 
     struct ResourceAccess {
-        eastl::string name;
+        eastl::string resourceName;  // Reference to LogicalResource
         ResourceUsage usage;
-        ImageDesc imageDesc;
-        BufferDesc bufferDesc;
         bool isWrite;
+        // Removed: ImageDesc and BufferDesc (stored in LogicalResource)
     };
 
     eastl::vector<ResourceAccess> accesses;
@@ -91,6 +93,14 @@ struct PassNode {
 
     bool reachable = false;
     uint32_t passIndex = 0;
+
+    // Compiled rendering state (built during compile phase)
+    eastl::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
+    vk::RenderingAttachmentInfo depthAttachmentInfo;
+    vk::RenderingAttachmentInfo stencilAttachmentInfo;
+    bool hasDepth = false;
+    bool hasStencil = false;
+    vk::Extent2D renderArea = {0, 0};
 };
 
 class RenderGraph {
@@ -104,23 +114,24 @@ public:
     void init(VulkanContext* ctx);
     void cleanup();
 
+    // Import external resources
     ResourceHandle importImage(const eastl::string& name, const ImageResource* imageRes);
     ResourceHandle importBuffer(const eastl::string& name, const BufferResource* bufferRes);
-    ResourceHandle declareImage(const eastl::string& name, const ImageDesc& desc, bool persistent);
+
+    // Create internal resources
+    ResourceHandle createImage(const eastl::string& name, const ImageDesc& desc, bool persistent);
+    ResourceHandle createBuffer(const eastl::string& name, const BufferDesc& desc, bool persistent);
 
     class PassBuilder {
     public:
-        PassBuilder(RenderGraph* graph, const eastl::string& name);
+        PassBuilder(PassNode& node);
 
-        PassBuilder& read(const eastl::string& name, ResourceUsage usage = ResourceUsage::ShaderRead);
-        PassBuilder& write(const eastl::string& name, const ImageDesc& desc, ResourceUsage usage = ResourceUsage::ColorAttachment);
+        PassBuilder& read(const eastl::string& resourceName, ResourceUsage usage = ResourceUsage::ShaderRead);
+        PassBuilder& write(const eastl::string& resourceName, ResourceUsage usage = ResourceUsage::ColorAttachment);
         PassBuilder& execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback);
 
-        void build();
-
     private:
-        RenderGraph* graph;
-        PassNode node;
+        PassNode& node;  // Reference to node already in RenderGraph::passes
     };
 
     PassBuilder addPass(const eastl::string& name);
@@ -161,6 +172,7 @@ private:
     void pruneUnreachable();
     void computeLifetimes();
     void allocatePhysicalResources();
+    void buildRenderingInfos();  // Build vk::RenderingInfo for each pass
     void generateBarriers();
     void insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
     void insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
