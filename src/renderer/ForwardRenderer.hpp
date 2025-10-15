@@ -228,9 +228,6 @@ private:
     ResourceManager* resourceManager = nullptr;
     class Swapchain* swapchain = nullptr;  // For RenderGraph swapchain image import
 
-    // Time tracking for auto-exposure
-    std::chrono::steady_clock::time_point lastFrameTime;
-
 };
 
 } // namespace violet

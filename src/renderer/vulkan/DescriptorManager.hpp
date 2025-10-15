@@ -99,6 +99,11 @@ struct ResourceBindingDesc {
             vk::Sampler sampler;
         } imageInfo;
         vk::ImageView storageImageView;
+        struct {
+            vk::Buffer buffer;
+            vk::DeviceSize offset;
+            vk::DeviceSize range;
+        } storageBufferInfo;
     };
 
     vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -108,6 +113,7 @@ struct ResourceBindingDesc {
 
     // Helper constructors for type safety
     static ResourceBindingDesc uniformBuffer(uint32_t binding, UniformBuffer* buffer);
+    static ResourceBindingDesc storageBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
     static ResourceBindingDesc texture(uint32_t binding, Texture* texture);
     static ResourceBindingDesc storageImage(uint32_t binding, vk::ImageView imageView);
     static ResourceBindingDesc sampledImage(uint32_t binding, vk::ImageView imageView, vk::Sampler sampler);
@@ -134,7 +140,6 @@ public:
     // Get layout for pipeline creation
     vk::DescriptorSetLayout getLayout(const eastl::string& layoutName) const;
 
-    // Check if layout exists
     bool hasLayout(const eastl::string& layoutName) const;
 
     // Sampler management - centralized sampler creation and caching

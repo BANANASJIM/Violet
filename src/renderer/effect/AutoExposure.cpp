@@ -2,362 +2,153 @@
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/graph/RenderGraph.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Log.hpp"
 #include <cmath>
 
 namespace violet {
 
-void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Extent2D extent, ShaderLibrary* shaderLib) {
+void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Extent2D extent, ShaderLibrary* shaderLib, RenderGraph* graph, const eastl::string& hdrName) {
     context = ctx;
     descriptorManager = descMgr;
     sceneExtent = extent;
     shaderLibrary = shaderLib;
+    renderGraph = graph;
+    hdrImageName = hdrName;
+    updateTimer.reset();
 
-    violet::Log::info("AutoExposure", "Initializing auto-exposure system ({}x{})", extent.width, extent.height);
+    luminanceBuffer = ResourceFactory::createBuffer(context, {
+        .size = sizeof(LuminanceData),
+        .usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        .memoryUsage = MemoryUsage::GPU_TO_CPU,
+        .debugName = "LuminanceBuffer"
+    });
+    mappedLuminanceData = static_cast<LuminanceData*>(luminanceBuffer.mappedData);
+    *mappedLuminanceData = {};
 
-    // ===== Simple Method Resources =====
-    {
-        BufferInfo bufferInfo{};
-        bufferInfo.size = sizeof(LuminanceData);
-        bufferInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
-        bufferInfo.memoryUsage = MemoryUsage::GPU_TO_CPU;
-        bufferInfo.debugName = "LuminanceBuffer";
+    luminanceDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
+    descriptorManager->updateSet(luminanceDescriptorSet, {
+        ResourceBindingDesc::storageBuffer(1, luminanceBuffer.buffer, 0, sizeof(LuminanceData))
+    });
 
-        luminanceBuffer = ResourceFactory::createBuffer(context, bufferInfo);
-        mappedLuminanceData = static_cast<LuminanceData*>(luminanceBuffer.mappedData);
+    luminancePipeline = eastl::make_unique<ComputePipeline>();
+    ComputePipelineConfig config{};
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
+    luminancePipeline->init(context, shaderLibrary->get("luminance_average"), config);
 
-        if (!mappedLuminanceData) {
-            violet::Log::error("AutoExposure", "Failed to map luminance buffer");
-            return;
-        }
+    histogramBuffer = ResourceFactory::createBuffer(context, {
+        .size = sizeof(HistogramData),
+        .usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        .memoryUsage = MemoryUsage::GPU_TO_CPU,
+        .debugName = "HistogramBuffer"
+    });
+    mappedHistogramData = static_cast<HistogramData*>(histogramBuffer.mappedData);
+    *mappedHistogramData = {};
+    mappedHistogramData->minLogLuminance = params.minLogLuminance;
+    mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
 
-        // Initialize buffer
-        mappedLuminanceData->avgLogLuminance = 0.0f;
-        mappedLuminanceData->minLuminance = 0.0f;
-        mappedLuminanceData->maxLuminance = 0.0f;
-        mappedLuminanceData->sampleCount = 0;
+    histogramDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
+    descriptorManager->updateSet(histogramDescriptorSet, {
+        ResourceBindingDesc::storageBuffer(1, histogramBuffer.buffer, 0, sizeof(HistogramData))
+    });
 
-        // Allocate descriptor set
-        luminanceDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
-
-        // Update descriptor set with buffer (binding 1)
-        vk::DescriptorBufferInfo bufferDescInfo{};
-        bufferDescInfo.buffer = luminanceBuffer.buffer;
-        bufferDescInfo.offset = 0;
-        bufferDescInfo.range = sizeof(LuminanceData);
-
-        vk::WriteDescriptorSet bufferWrite{};
-        bufferWrite.dstSet = luminanceDescriptorSet;
-        bufferWrite.dstBinding = 1;
-        bufferWrite.dstArrayElement = 0;
-        bufferWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
-        bufferWrite.descriptorCount = 1;
-        bufferWrite.pBufferInfo = &bufferDescInfo;
-
-        context->getDevice().updateDescriptorSets(1, &bufferWrite, 0, nullptr);
-
-        // Create pipeline
-        luminancePipeline = eastl::make_unique<ComputePipeline>();
-        auto shader = shaderLibrary->get("luminance_average");
-        ComputePipelineConfig pipelineConfig{};
-        pipelineConfig.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
-        luminancePipeline->init(context, shader, pipelineConfig);
-    }
-
-    // ===== Histogram Method Resources =====
-    {
-        BufferInfo bufferInfo{};
-        bufferInfo.size = sizeof(HistogramData);
-        bufferInfo.usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
-        bufferInfo.memoryUsage = MemoryUsage::GPU_TO_CPU;
-        bufferInfo.debugName = "HistogramBuffer";
-
-        histogramBuffer = ResourceFactory::createBuffer(context, bufferInfo);
-        mappedHistogramData = static_cast<HistogramData*>(histogramBuffer.mappedData);
-
-        if (!mappedHistogramData) {
-            violet::Log::error("AutoExposure", "Failed to map histogram buffer");
-            return;
-        }
-
-        // Initialize histogram
-        for (int i = 0; i < 64; ++i) {
-            mappedHistogramData->bins[i] = 0;
-        }
-        mappedHistogramData->minLogLuminance = params.minLogLuminance;
-        mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
-        mappedHistogramData->pixelCount = 0;
-
-        // Allocate descriptor set (reuse same layout)
-        histogramDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
-
-        // Update descriptor set with histogram buffer (binding 1)
-        vk::DescriptorBufferInfo bufferDescInfo{};
-        bufferDescInfo.buffer = histogramBuffer.buffer;
-        bufferDescInfo.offset = 0;
-        bufferDescInfo.range = sizeof(HistogramData);
-
-        vk::WriteDescriptorSet bufferWrite{};
-        bufferWrite.dstSet = histogramDescriptorSet;
-        bufferWrite.dstBinding = 1;
-        bufferWrite.dstArrayElement = 0;
-        bufferWrite.descriptorType = vk::DescriptorType::eStorageBuffer;
-        bufferWrite.descriptorCount = 1;
-        bufferWrite.pBufferInfo = &bufferDescInfo;
-
-        context->getDevice().updateDescriptorSets(1, &bufferWrite, 0, nullptr);
-
-        // Create pipeline with push constants
-        histogramPipeline = eastl::make_unique<ComputePipeline>();
-        auto shader = shaderLibrary->get("luminance_histogram");
-        ComputePipelineConfig pipelineConfig{};
-        pipelineConfig.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
-
-        // Push constants for histogram parameters
-        vk::PushConstantRange pushConstantRange{};
-        pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
-        pushConstantRange.offset = 0;
-        pushConstantRange.size = 4 * sizeof(float); // 4 floats: minLogLum, maxLogLum, centerWeightPower, enabled
-        pipelineConfig.pushConstantRanges.push_back(pushConstantRange);
-
-        histogramPipeline->init(context, shader, pipelineConfig);
-    }
-
-    violet::Log::info("AutoExposure", "Auto-exposure initialized (Simple + Histogram)");
+    histogramPipeline = eastl::make_unique<ComputePipeline>();
+    config = {};
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
+    config.pushConstantRanges.push_back({vk::ShaderStageFlagBits::eCompute, 0, 4 * sizeof(float)});
+    histogramPipeline->init(context, shaderLibrary->get("luminance_histogram"), config);
 }
 
 void AutoExposure::cleanup() {
     if (!context) return;
 
-    // Clean up Simple method resources
     luminancePipeline.reset();
+    histogramPipeline.reset();
+
     if (luminanceBuffer.buffer) {
         ResourceFactory::destroyBuffer(context, luminanceBuffer);
     }
-    mappedLuminanceData = nullptr;
-
-    // Clean up Histogram method resources
-    histogramPipeline.reset();
     if (histogramBuffer.buffer) {
         ResourceFactory::destroyBuffer(context, histogramBuffer);
     }
-    mappedHistogramData = nullptr;
 
+    mappedLuminanceData = nullptr;
+    mappedHistogramData = nullptr;
     descriptorManager = nullptr;
     context = nullptr;
 }
 
-void AutoExposure::computeLuminance(vk::CommandBuffer cmd, vk::ImageView hdrSceneView, vk::Sampler sampler) {
-    if (!params.enabled) {
-        return;
-    }
+void AutoExposure::addToRenderGraph() {
+    if (!params.enabled || !renderGraph) return;
 
-    // Update descriptor set with HDR scene (binding 0) - shared for both methods
-    vk::DescriptorImageInfo imageInfo{};
-    imageInfo.sampler = sampler;
-    imageInfo.imageView = hdrSceneView;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    renderGraph->importBuffer(getActiveBufferName(), getActiveReadbackBuffer());
+    renderGraph->addPass("AutoExposure")
+        .read(hdrImageName, ResourceUsage::ShaderRead)
+        .write(getActiveBufferName(), ResourceUsage::ShaderWrite)
+        .execute([this](vk::CommandBuffer cmd, uint32_t frame) { executeComputePass(cmd, frame); });
+}
+
+void AutoExposure::executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
+    const LogicalResource* hdrRes = renderGraph->getResource(hdrImageName);
+    if (!hdrRes) return;
+
+    vk::ImageView hdrView = hdrRes->isExternal ? hdrRes->imageResource->view : hdrRes->transientView;
+    if (!hdrView) return;
+
+    if (hdrView != cachedHDRView) {
+        vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ? luminanceDescriptorSet : histogramDescriptorSet;
+        descriptorManager->updateSet(descSet, {
+            ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge))
+        });
+        cachedHDRView = hdrView;
+    }
 
     if (params.method == AutoExposureMethod::Simple) {
-        if (!luminancePipeline) return;
-
-        // Clear luminance buffer
-        cmd.fillBuffer(luminanceBuffer.buffer, 0, sizeof(LuminanceData), 0);
-
-        vk::BufferMemoryBarrier clearBarrier{};
-        clearBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        clearBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-        clearBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        clearBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        clearBarrier.buffer = luminanceBuffer.buffer;
-        clearBarrier.offset = 0;
-        clearBarrier.size = sizeof(LuminanceData);
-
-        cmd.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTransfer,
-            vk::PipelineStageFlagBits::eComputeShader,
-            {},
-            0, nullptr,
-            1, &clearBarrier,
-            0, nullptr
-        );
-
-        // Update descriptor
-        vk::WriteDescriptorSet imageWrite{};
-        imageWrite.dstSet = luminanceDescriptorSet;
-        imageWrite.dstBinding = 0;
-        imageWrite.dstArrayElement = 0;
-        imageWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        imageWrite.descriptorCount = 1;
-        imageWrite.pImageInfo = &imageInfo;
-        context->getDevice().updateDescriptorSets(1, &imageWrite, 0, nullptr);
-
-        // Bind and dispatch
+        cmd.fillBuffer(luminanceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipeline());
-        cmd.bindDescriptorSets(
-            vk::PipelineBindPoint::eCompute,
-            luminancePipeline->getPipelineLayout(),
-            0, 1, &luminanceDescriptorSet, 0, nullptr
-        );
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipelineLayout(), 0, 1, &luminanceDescriptorSet, 0, nullptr);
         cmd.dispatch(1, 1, 1);
+    } else {
+        cmd.fillBuffer(histogramBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
 
-        // Barrier for CPU read
-        vk::BufferMemoryBarrier computeBarrier{};
-        computeBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-        computeBarrier.dstAccessMask = vk::AccessFlagBits::eHostRead;
-        computeBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        computeBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        computeBarrier.buffer = luminanceBuffer.buffer;
-        computeBarrier.offset = 0;
-        computeBarrier.size = sizeof(LuminanceData);
+        struct { float minLogLum, maxLogLum, centerWeightPower; uint32_t enabled; } pushConstants{
+            params.minLogLuminance, params.maxLogLuminance, params.centerWeightPower, 1
+        };
 
-        cmd.pipelineBarrier(
-            vk::PipelineStageFlagBits::eComputeShader,
-            vk::PipelineStageFlagBits::eHost,
-            {},
-            0, nullptr,
-            1, &computeBarrier,
-            0, nullptr
-        );
-    }
-    else if (params.method == AutoExposureMethod::Histogram) {
-        if (!histogramPipeline) return;
-
-        // Clear histogram buffer
-        cmd.fillBuffer(histogramBuffer.buffer, 0, sizeof(HistogramData), 0);
-
-        vk::BufferMemoryBarrier clearBarrier{};
-        clearBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        clearBarrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-        clearBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        clearBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        clearBarrier.buffer = histogramBuffer.buffer;
-        clearBarrier.offset = 0;
-        clearBarrier.size = sizeof(HistogramData);
-
-        cmd.pipelineBarrier(
-            vk::PipelineStageFlagBits::eTransfer,
-            vk::PipelineStageFlagBits::eComputeShader,
-            {},
-            0, nullptr,
-            1, &clearBarrier,
-            0, nullptr
-        );
-
-        // Update descriptor
-        vk::WriteDescriptorSet imageWrite{};
-        imageWrite.dstSet = histogramDescriptorSet;
-        imageWrite.dstBinding = 0;
-        imageWrite.dstArrayElement = 0;
-        imageWrite.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        imageWrite.descriptorCount = 1;
-        imageWrite.pImageInfo = &imageInfo;
-        context->getDevice().updateDescriptorSets(1, &imageWrite, 0, nullptr);
-
-        // Push constants
-        struct HistogramPushConstants {
-            float minLogLum;
-            float maxLogLum;
-            float centerWeightPower;
-            uint32_t enabled;
-        } pushConstants;
-
-        pushConstants.minLogLum = params.minLogLuminance;
-        pushConstants.maxLogLum = params.maxLogLuminance;
-        pushConstants.centerWeightPower = params.centerWeightPower;
-        pushConstants.enabled = 1;
-
-        // Bind and dispatch
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipeline());
-        cmd.bindDescriptorSets(
-            vk::PipelineBindPoint::eCompute,
-            histogramPipeline->getPipelineLayout(),
-            0, 1, &histogramDescriptorSet, 0, nullptr
-        );
-        cmd.pushConstants(
-            histogramPipeline->getPipelineLayout(),
-            vk::ShaderStageFlagBits::eCompute,
-            0, sizeof(HistogramPushConstants), &pushConstants
-        );
-
-        // Dispatch: cover entire scene with 16x16 workgroups
-        uint32_t groupsX = (sceneExtent.width + 15) / 16;
-        uint32_t groupsY = (sceneExtent.height + 15) / 16;
-        cmd.dispatch(groupsX, groupsY, 1);
-
-        // Barrier for CPU read
-        vk::BufferMemoryBarrier computeBarrier{};
-        computeBarrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-        computeBarrier.dstAccessMask = vk::AccessFlagBits::eHostRead;
-        computeBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        computeBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        computeBarrier.buffer = histogramBuffer.buffer;
-        computeBarrier.offset = 0;
-        computeBarrier.size = sizeof(HistogramData);
-
-        cmd.pipelineBarrier(
-            vk::PipelineStageFlagBits::eComputeShader,
-            vk::PipelineStageFlagBits::eHost,
-            {},
-            0, nullptr,
-            1, &computeBarrier,
-            0, nullptr
-        );
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipelineLayout(), 0, 1, &histogramDescriptorSet, 0, nullptr);
+        cmd.pushConstants(histogramPipeline->getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pushConstants), &pushConstants);
+        cmd.dispatch((sceneExtent.width + 15) / 16, (sceneExtent.height + 15) / 16, 1);
     }
 }
 
-void AutoExposure::update(float deltaTime) {
+void AutoExposure::updateExposure() {
     if (!params.enabled) {
-        // Use manual EV100 when auto-exposure disabled
         currentEV100 = manualEV100;
         return;
     }
 
     frameCounter++;
-
-    // Read luminance data with frame delay (avoid pipeline stall)
     if (frameCounter >= READBACK_DELAY) {
-        if (params.method == AutoExposureMethod::Simple) {
-            readLuminanceData();
-        } else if (params.method == AutoExposureMethod::Histogram) {
-            readHistogramData();
-        }
+        params.method == AutoExposureMethod::Simple ? readLuminanceData() : readHistogramData();
     }
 
-    // Smooth interpolation to target EV100
-    float lerpFactor = 1.0f - std::exp(-params.adaptationSpeed * deltaTime);
-    currentEV100 = currentEV100 + (targetEV100 - currentEV100) * lerpFactor;
-
-    // Clamp to min/max range
-    currentEV100 = std::clamp(currentEV100, params.minEV100, params.maxEV100);
+    float lerpFactor = 1.0f - std::exp(-params.adaptationSpeed * updateTimer.tick());
+    currentEV100 = std::clamp(currentEV100 + (targetEV100 - currentEV100) * lerpFactor, params.minEV100, params.maxEV100);
 }
 
 void AutoExposure::readLuminanceData() {
     if (!mappedLuminanceData) return;
 
-    // Read from persistent mapping
-    uint32_t sampleCount = mappedLuminanceData->sampleCount;
-    if (sampleCount == 0) {
-        // No data yet, use default
+    if (mappedLuminanceData->sampleCount == 0) {
         targetEV100 = 9.0f;
         return;
     }
 
-    // Average log luminance is already computed in shader (single workgroup)
-    float avgLogLuminance = mappedLuminanceData->avgLogLuminance;
-
-    // Convert from log2 space to linear
-    float avgLuminance = std::pow(2.0f, avgLogLuminance);
-
-    // Compute target EV100 from average luminance
+    float avgLuminance = std::pow(2.0f, mappedLuminanceData->avgLogLuminance);
     float ev100 = computeEV100FromLuminance(avgLuminance);
-
-    // Apply exposure compensation
-    targetEV100 = ev100 + params.exposureCompensation;
-
-    // Clamp target to valid range
-    targetEV100 = std::clamp(targetEV100, params.minEV100, params.maxEV100);
+    targetEV100 = std::clamp(ev100 + params.exposureCompensation, params.minEV100, params.maxEV100);
 }
 
 float AutoExposure::computeEV100FromLuminance(float avgLuminance) {
@@ -376,94 +167,63 @@ float AutoExposure::computeEV100FromLuminance(float avgLuminance) {
 void AutoExposure::readHistogramData() {
     if (!mappedHistogramData) return;
 
-    // Read from persistent mapping
-    uint32_t pixelCount = mappedHistogramData->pixelCount;
-    if (pixelCount == 0) {
-        // No data yet, use default
+    if (mappedHistogramData->pixelCount == 0) {
         targetEV100 = 9.0f;
         return;
     }
 
-    // Analyze histogram to compute weighted average log luminance
     float avgLogLuminance = analyzeHistogram(*mappedHistogramData);
-
-    // Convert from log2 space to linear
     float avgLuminance = std::pow(2.0f, avgLogLuminance);
-
-    // Compute target EV100 from average luminance
     float ev100 = computeEV100FromLuminance(avgLuminance);
+    targetEV100 = std::clamp(ev100 + params.exposureCompensation, params.minEV100, params.maxEV100);
+}
 
-    // Apply exposure compensation
-    targetEV100 = ev100 + params.exposureCompensation;
+const BufferResource* AutoExposure::getActiveReadbackBuffer() const {
+    return params.method == AutoExposureMethod::Simple ? &luminanceBuffer : &histogramBuffer;
+}
 
-    // Clamp target to valid range
-    targetEV100 = std::clamp(targetEV100, params.minEV100, params.maxEV100);
+eastl::string AutoExposure::getActiveBufferName() const {
+    return params.method == AutoExposureMethod::Simple ? "luminanceBuffer" : "histogramBuffer";
+}
+
+void AutoExposure::resize(vk::Extent2D newExtent) {
+    sceneExtent = newExtent;
 }
 
 float AutoExposure::analyzeHistogram(const HistogramData& histogram) {
-    // Calculate total weighted pixel count
     uint64_t totalCount = 0;
+    for (int i = 0; i < 64; ++i) totalCount += histogram.bins[i];
+    if (totalCount == 0) return 0.0f;
+
+    uint64_t lowThreshold = totalCount * params.lowPercentile;
+    uint64_t highThreshold = totalCount * params.highPercentile;
+
+    int startBin = 0, endBin = 63;
+    uint64_t accumulated = 0;
+
     for (int i = 0; i < 64; ++i) {
-        totalCount += histogram.bins[i];
+        accumulated += histogram.bins[i];
+        if (accumulated >= lowThreshold) { startBin = i; break; }
     }
 
-    if (totalCount == 0) {
-        return 0.0f; // No data
-    }
-
-    // Find percentile thresholds to filter outliers
-    uint64_t lowThreshold = static_cast<uint64_t>(totalCount * params.lowPercentile);
-    uint64_t highThreshold = static_cast<uint64_t>(totalCount * params.highPercentile);
-
-    // Accumulate counts to find valid range
-    uint64_t accumulatedCount = 0;
-    int startBin = 0;
-    int endBin = 63;
-
-    // Find start bin (skip darkest percentile)
-    for (int i = 0; i < 64; ++i) {
-        accumulatedCount += histogram.bins[i];
-        if (accumulatedCount >= lowThreshold) {
-            startBin = i;
-            break;
-        }
-    }
-
-    // Find end bin (skip brightest percentile)
-    accumulatedCount = 0;
+    accumulated = 0;
     for (int i = 63; i >= 0; --i) {
-        accumulatedCount += histogram.bins[i];
-        if ((totalCount - accumulatedCount) >= highThreshold) {
-            endBin = i;
-            break;
-        }
+        accumulated += histogram.bins[i];
+        if (totalCount - accumulated >= highThreshold) { endBin = i; break; }
     }
 
-    // Compute weighted average log luminance in valid range
-    float sumWeightedLogLum = 0.0f;
+    float sumWeighted = 0.0f;
     uint64_t validCount = 0;
-
-    float logLumRange = histogram.maxLogLuminance - histogram.minLogLuminance;
+    float binSize = (histogram.maxLogLuminance - histogram.minLogLuminance) / 64.0f;
 
     for (int i = startBin; i <= endBin; ++i) {
-        if (histogram.bins[i] == 0) continue;
-
-        // Bin center in log space
-        float binCenter = histogram.minLogLuminance + (i + 0.5f) * (logLumRange / 64.0f);
-
-        sumWeightedLogLum += binCenter * histogram.bins[i];
-        validCount += histogram.bins[i];
+        if (histogram.bins[i] > 0) {
+            sumWeighted += (histogram.minLogLuminance + (i + 0.5f) * binSize) * histogram.bins[i];
+            validCount += histogram.bins[i];
+        }
     }
 
-    if (validCount == 0) {
-        // Fallback to middle of range
-        return (histogram.minLogLuminance + histogram.maxLogLuminance) * 0.5f;
-    }
-
-    // Average log luminance
-    float avgLogLum = sumWeightedLogLum / static_cast<float>(validCount);
-
-    return avgLogLum;
+    return validCount > 0 ? sumWeighted / validCount : (histogram.minLogLuminance + histogram.maxLogLuminance) * 0.5f;
 }
 
 } // namespace violet

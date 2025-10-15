@@ -4,11 +4,14 @@
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
+#include "core/Timer.hpp"
 #include <EASTL/unique_ptr.h>
+#include <EASTL/string.h>
 
 namespace violet {
 
 class ShaderLibrary;
+class RenderGraph;
 
 // Auto-exposure method
 enum class AutoExposureMethod {
@@ -50,17 +53,7 @@ struct HistogramData {
 };
 
 /**
- * @brief Auto-exposure system using compute shader luminance analysis
- *
- * Implements automatic exposure adjustment based on scene luminance,
- * following Frostbite/UE4 approach with log-average luminance.
- *
- * Pipeline:
- * 1. Compute Pass: Calculate average scene luminance
- * 2. CPU: Read luminance, compute target EV100
- * 3. CPU: Smooth interpolation to target EV100
- * 4. PostProcess: Use auto-computed EV100
- *
+
  * Reference:
  * - https://bruop.github.io/exposure/
  * - https://knarkowicz.wordpress.com/2016/01/09/automatic-exposure/
@@ -73,49 +66,17 @@ public:
     AutoExposure(const AutoExposure&) = delete;
     AutoExposure& operator=(const AutoExposure&) = delete;
 
-    /**
-     * @brief Initialize auto-exposure system
-     * @param context Vulkan context
-     * @param descriptorManager Descriptor manager for layout/set allocation
-     * @param sceneExtent Size of the HDR scene texture
-     * @param shaderLibrary Shader library for loading shaders
-     */
-    void init(VulkanContext* context, class DescriptorManager* descriptorManager, vk::Extent2D sceneExtent, ShaderLibrary* shaderLibrary);
+    void init(VulkanContext* context, class DescriptorManager* descriptorManager, vk::Extent2D sceneExtent, ShaderLibrary* shaderLibrary, RenderGraph* renderGraph, const eastl::string& hdrImageName);
 
-    /**
-     * @brief Cleanup resources
-     */
     void cleanup();
 
-    /**
-     * @brief Compute luminance statistics from HDR scene
-     * @param cmd Command buffer for compute commands
-     * @param hdrSceneView Image view of HDR scene texture
-     * @param sampler Sampler for HDR scene
-     */
-    void computeLuminance(vk::CommandBuffer cmd, vk::ImageView hdrSceneView, vk::Sampler sampler);
+    void addToRenderGraph();
 
-    /**
-     * @brief Update auto-exposure state (call once per frame on CPU)
-     * @param deltaTime Time since last frame (seconds)
-     */
-    void update(float deltaTime);
+    void updateExposure();
 
-    /**
-     * @brief Get current EV100 value (auto or manual)
-     * @return Current exposure value
-     */
     float getCurrentEV100() const { return currentEV100; }
 
-    /**
-     * @brief Get target EV100 computed from scene luminance
-     * @return Target exposure value
-     */
     float getTargetEV100() const { return targetEV100; }
-
-    /**
-     * @brief Get auto-exposure parameters (for UI)
-     */
     AutoExposureParams& getParams() { return params; }
     const AutoExposureParams& getParams() const { return params; }
 
@@ -125,7 +86,24 @@ public:
     void setManualEV100(float ev100) { manualEV100 = ev100; }
     float getManualEV100() const { return manualEV100; }
 
+    /**
+     * @brief Get active readback buffer for RenderGraph import
+     */
+    const BufferResource* getActiveReadbackBuffer() const;
+
+    /**
+     * @brief Get active buffer name based on current method
+     */
+    eastl::string getActiveBufferName() const;
+
+    /**
+     * @brief Handle window resize
+     */
+    void resize(vk::Extent2D newExtent);
+
 private:
+    void executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex);
+
     /**
      * @brief Convert average luminance to EV100
      * Formula from Frostbite: EV100 = log2(avgLuminance * S / K)
@@ -154,6 +132,8 @@ private:
     VulkanContext* context = nullptr;
     class DescriptorManager* descriptorManager = nullptr;
     ShaderLibrary* shaderLibrary = nullptr;
+    RenderGraph* renderGraph = nullptr;
+    eastl::string hdrImageName;
 
     // Simple method resources
     eastl::unique_ptr<ComputePipeline> luminancePipeline;
@@ -178,6 +158,12 @@ private:
     uint32_t frameCounter = 0;
 
     vk::Extent2D sceneExtent = {1280, 720};
+
+    // Internal time tracking
+    Timer updateTimer;
+
+    // Cached for descriptor update optimization
+    vk::ImageView cachedHDRView = VK_NULL_HANDLE;
 };
 
 } // namespace violet

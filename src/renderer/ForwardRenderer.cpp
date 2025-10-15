@@ -64,6 +64,10 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize subsystems
     globalUniforms.init(context, &descMgr, maxFramesInFlight);
 
+    // Initialize RenderGraph early so it can be passed to sub-systems
+    renderGraph = eastl::make_unique<RenderGraph>();
+    renderGraph->init(context);
+
     // Initialize EnvironmentMap with bindless architecture
     // MaterialManager is now guaranteed to exist (ResourceManager already initialized)
     auto* matMgr = getMaterialManager();
@@ -75,7 +79,7 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     }
 
     // Initialize auto-exposure (now safe since shaders are loaded)
-    autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary());
+    autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
     // Initialize bindless through DescriptorManager
     descMgr.initBindless(1024);
@@ -133,13 +137,8 @@ void ForwardRenderer::cleanup() {
 void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     currentWorld = &world;
 
-    // Calculate deltaTime for auto-exposure
-    auto currentTime = std::chrono::steady_clock::now();
-    float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
-    lastFrameTime = currentTime;
-
-    // Update auto-exposure (smooth interpolation)
-    autoExposure.update(deltaTime);
+    // Update auto-exposure (internal time tracking)
+    autoExposure.updateExposure();
 
     updateGlobalUniforms(world, frameIndex);
     collectRenderables(world);
@@ -215,7 +214,10 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     };
     renderGraph->createImage("depth", depthDesc, false);
 
-    // 3. Add Main Pass (Scene rendering)
+    // 3. Add auto-exposure pass (if enabled)
+    autoExposure.addToRenderGraph();
+
+    // 4. Add Main Pass (Scene rendering)
     renderGraph->addPass("Main")
         .write("hdr", ResourceUsage::ColorAttachment)
         .write("depth", ResourceUsage::DepthAttachment)

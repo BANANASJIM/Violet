@@ -135,6 +135,16 @@ ResourceBindingDesc ResourceBindingDesc::uniformBuffer(uint32_t binding, Uniform
     return desc;
 }
 
+ResourceBindingDesc ResourceBindingDesc::storageBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range) {
+    ResourceBindingDesc desc;
+    desc.binding = binding;
+    desc.type = vk::DescriptorType::eStorageBuffer;
+    desc.storageBufferInfo.buffer = buffer;
+    desc.storageBufferInfo.offset = offset;
+    desc.storageBufferInfo.range = range;
+    return desc;
+}
+
 ResourceBindingDesc ResourceBindingDesc::texture(uint32_t binding, Texture* texture) {
     ResourceBindingDesc desc;
     desc.binding = binding;
@@ -395,6 +405,15 @@ void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<Res
                 imageInfo.sampler = nullptr;
                 imageInfos.push_back(imageInfo);
                 write.pImageInfo = &imageInfos.back();
+                break;
+            }
+            case vk::DescriptorType::eStorageBuffer: {
+                vk::DescriptorBufferInfo bufferInfo;
+                bufferInfo.buffer = binding.storageBufferInfo.buffer;
+                bufferInfo.offset = binding.storageBufferInfo.offset;
+                bufferInfo.range = binding.storageBufferInfo.range;
+                bufferInfos.push_back(bufferInfo);
+                write.pBufferInfo = &bufferInfos.back();
                 break;
             }
             default:
