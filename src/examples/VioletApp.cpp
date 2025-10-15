@@ -55,9 +55,6 @@ void VioletApp::createResources() {
     // 2. Initialize Renderer (all dependencies are ready - DescriptorManager, MaterialManager, etc.)
     renderer.init(getContext(), &resourceManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
 
-    // 3. Create renderer materials
-    renderer.createMaterials();
-
     // Setup RenderGraph
     renderer.setupRenderGraph(getSwapchain()->getImageFormat());
     renderer.setSwapchain(getSwapchain());

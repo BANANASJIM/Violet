@@ -189,7 +189,7 @@ Material* MaterialManager::createPostProcessMaterial() {
     MaterialDesc desc;
     desc.vertexShader = vertShader;
     desc.fragmentShader = fragShader;
-    desc.layoutName = "";  // PostProcess uses no material descriptor set
+    desc.layoutName = "PostProcess";  // Set 1: HDR color and depth textures
     desc.pipelineConfig = config;
     desc.name = "PostProcess";
     desc.type = MaterialType::PostProcess;

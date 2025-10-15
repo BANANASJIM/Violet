@@ -1638,9 +1638,10 @@ void SceneDebugLayer::renderEnvironmentPanel() {
 
             // Tonemap operator selection
             const char* tonemapModes[] = { "ACES Fitted", "ACES Narkowicz", "Uncharted 2", "Reinhard", "None (Linear)" };
-            int currentMode = static_cast<int>(renderer->getTonemapMode());
+            auto& tonemapParams = renderer->getTonemap().getParams();
+            int currentMode = static_cast<int>(tonemapParams.mode);
             if (ImGui::Combo("Tone Mapper", &currentMode, tonemapModes, 5)) {
-                renderer->setTonemapMode(static_cast<uint32_t>(currentMode));
+                renderer->getTonemap().setMode(static_cast<TonemapMode>(currentMode));
             }
             ImGui::SameLine();
             ImGui::TextDisabled("(?)");
@@ -1656,13 +1657,13 @@ void SceneDebugLayer::renderEnvironmentPanel() {
             ImGui::Separator();
 
             // Gamma control
-            float ppGamma = renderer->getPostProcessGamma();
+            float ppGamma = tonemapParams.gamma;
             if (ImGui::SliderFloat("Gamma", &ppGamma, 1.8f, 2.6f, "%.2f")) {
-                renderer->setPostProcessGamma(ppGamma);
+                renderer->getTonemap().setGamma(ppGamma);
             }
             ImGui::SameLine();
             if (ImGui::SmallButton("Reset##Gamma")) {
-                renderer->setPostProcessGamma(2.2f);
+                renderer->getTonemap().setGamma(2.2f);
             }
 
             ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),

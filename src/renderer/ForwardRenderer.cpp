@@ -81,30 +81,20 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
+    // Create PostProcess material for Tonemap
+    if (matMgr) {
+        matMgr->createPostProcessMaterial();
+    }
+
+    // Initialize Tonemap effect
+    tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
+
     // Initialize bindless through DescriptorManager
     descMgr.initBindless(1024);
 
     // Initialize material data SSBO for bindless architecture
     descMgr.initMaterialDataBuffer(1024);
 
-    // Materials will be created later via createMaterials() after MaterialManager is initialized
-}
-
-// DEPRECATED: Uses old pass system
-// TODO: Refactor to use RenderGraph-managed resources
-void ForwardRenderer::createMaterials() {
-    // Get PBR bindless material from MaterialManager
-    auto* matMgr = getMaterialManager();
-    if (matMgr) {
-
-        // Create descriptor set for post-process material
-        auto& descMgr = resourceManager->getDescriptorManager();
-        auto sets = descMgr.allocateSets("PostProcess", 1);  // Only need 1 set (not per-frame)
-        postProcessDescriptorSet = eastl::make_unique<DescriptorSet>();
-        postProcessDescriptorSet->init(context, sets);
-
-        // TODO: Resource binding will be handled by RenderGraph
-    }
 }
 
 void ForwardRenderer::cleanup() {
@@ -119,6 +109,7 @@ void ForwardRenderer::cleanup() {
     // Step 2: Cleanup high-level rendering components
     // These may still reference materials/textures, so clean them before destroying resources
     environmentMap.cleanup();
+    tonemap.cleanup();
     debugRenderer.cleanup();
 
     // Step 3: Samplers are now managed by DescriptorManager (no cleanup needed)
@@ -139,6 +130,9 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
 
     // Update auto-exposure (internal time tracking)
     autoExposure.updateExposure();
+
+    // Pass auto-exposure EV100 to tonemap
+    tonemap.setEV100(autoExposure.getCurrentEV100());
 
     updateGlobalUniforms(world, frameIndex);
     collectRenderables(world);
@@ -222,24 +216,11 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
         .write("hdr", ResourceUsage::ColorAttachment)
         .write("depth", ResourceUsage::DepthAttachment)
         .execute([this](vk::CommandBuffer cmd, uint32_t frame) {
-            // TODO: Implement Main Pass rendering
-            // - Begin dynamic rendering (vkCmdBeginRendering)
-            // - Render scene
-            // - Render skybox
-            // - End rendering
             renderScene(cmd, frame, *currentWorld);
         });
 
-    // 4. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
-    renderGraph->addPass("Tonemap")
-        .read("hdr", ResourceUsage::ShaderRead)
-        .write("swapchain", ResourceUsage::ColorAttachment)
-        .execute([this](vk::CommandBuffer cmd, uint32_t frame) {
-            // TODO: Implement Tonemap Pass
-            // - Begin dynamic rendering
-            // - Fullscreen quad with tonemap shader
-            // - End rendering
-        });
+    // 5. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
+    tonemap.addToRenderGraph();
 
     // 5. Build & Compile
     renderGraph->build();

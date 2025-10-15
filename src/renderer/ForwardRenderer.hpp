@@ -22,6 +22,7 @@
 #include "renderer/DebugRenderer.hpp"
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/effect/AutoExposure.hpp"
+#include "renderer/effect/Tonemap.hpp"
 #include "renderer/graph/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 #include "renderer/graph/RenderGraph.hpp"
@@ -111,8 +112,6 @@ public:
     void init(VulkanContext* context, ResourceManager* resMgr, vk::Format wapchainFormat, uint32_t maxFramesInFlight);
     void cleanup();
 
-    void createMaterials();  // Create materials after MaterialManager is initialized
-
     // Frame rendering
     void beginFrame(entt::registry& world, uint32_t frameIndex);
     void renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, vk::Extent2D extent, uint32_t frameIndex);
@@ -164,14 +163,8 @@ public:
     // Auto-exposure access
     AutoExposure& getAutoExposure() { return autoExposure; }
 
-    // todo remove
-    // PostProcess tone mapping parameters (EV100 system)
-    void setPostProcessEV100(float ev) { postProcessEV100 = ev; }
-    void setPostProcessGamma(float gamma) { postProcessGamma = gamma; }
-    void setTonemapMode(uint32_t mode) { tonemapMode = mode; }
-    float getPostProcessEV100() const { return postProcessEV100; }
-    float getPostProcessGamma() const { return postProcessGamma; }
-    uint32_t getTonemapMode() const { return tonemapMode; }
+    // Tonemap access
+    Tonemap& getTonemap() { return tonemap; }
 
     // PBR Bindless Material access (shared material for all PBR instances)
     Material* getPBRBindlessMaterial() const {
@@ -205,21 +198,13 @@ private:
     entt::registry* currentWorld = nullptr;
     vk::Extent2D currentExtent = {1280, 720};
     uint32_t currentFrameIndex = 0;
-    // Descriptor sets owned by renderer
-    eastl::unique_ptr<DescriptorSet> postProcessDescriptorSet;
-
-    // todo move this to specific class
-    // PostProcess tone mapping parameters (EV100 system)
-    // EV100 = Exposure Value at ISO 100 (photographic exposure)
-    // Typical values: -2 (night), 0 (overcast), 9-10 (sunny), 15 (direct sun)
-    float postProcessEV100 = 9.0f;  // Default: sunny day
-    float postProcessGamma = 2.2f;
-    uint32_t tonemapMode = 0;  // 0=ACES Fitted (default), 1=ACES Narkowicz, 2=Uncharted2, 3=Reinhard, 4=None
 
     GlobalUniforms globalUniforms;
     DebugRenderer debugRenderer;
+
     EnvironmentMap environmentMap;
     AutoExposure autoExposure;
+    Tonemap tonemap;
 
     // Render graph for automatic resource and barrier management
     eastl::unique_ptr<RenderGraph> renderGraph;
