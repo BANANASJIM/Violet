@@ -36,7 +36,7 @@ enum class MaterialType {
 struct MaterialDesc {
     eastl::weak_ptr<Shader> vertexShader;    // Vertex shader from ShaderLibrary
     eastl::weak_ptr<Shader> fragmentShader;  // Fragment shader from ShaderLibrary
-    eastl::string layoutName;                // Descriptor layout name from DescriptorManager
+    eastl::vector<eastl::string> descriptorSetLayouts;  // Descriptor set layout names (Set 0, Set 1, Set 2, ...)
     PipelineConfig pipelineConfig;
     RenderPass* renderPass = nullptr;
     eastl::string name;                      // Optional material name for debugging

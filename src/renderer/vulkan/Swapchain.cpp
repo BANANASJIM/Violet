@@ -109,6 +109,20 @@ void Swapchain::createImageViews() {
 
         imageViews.emplace_back(context->getDeviceRAII(), createInfo);
     }
+
+    // Create ImageResource wrappers for RenderGraph
+    imageResources.clear();
+    imageResources.reserve(images.size());
+    for (size_t i = 0; i < images.size(); i++) {
+        ImageResource res;
+        res.image = images[i];
+        res.view = *imageViews[i];
+        res.format = imageFormat;
+        res.width = extent.width;
+        res.height = extent.height;
+        res.layout = vk::ImageLayout::ePresentSrcKHR;  // Swapchain images default to PresentSrcKHR per Vulkan spec
+        imageResources.push_back(res);
+    }
 }
 
 uint32_t Swapchain::acquireNextImage(vk::Semaphore semaphore) {
@@ -223,6 +237,18 @@ void Swapchain::createDepthResources() {
     );
 
     depthImageView = vk::raii::ImageView(context->getDeviceRAII(), viewInfo);
+}
+
+const ImageResource* Swapchain::getImageResource(size_t index) const {
+    if (index >= imageResources.size()) {
+        violet::Log::error("Swapchain", "Invalid image index {} (total: {})", index, imageResources.size());
+        return nullptr;
+    }
+    return &imageResources[index];
+}
+
+const ImageResource* Swapchain::getDepthImageResource() const {
+    return &depthImage;
 }
 
 }

@@ -161,9 +161,6 @@ private:
 
     // Internal time tracking
     Timer updateTimer;
-
-    // Cached for descriptor update optimization
-    vk::ImageView cachedHDRView = VK_NULL_HANDLE;
 };
 
 } // namespace violet

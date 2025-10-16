@@ -50,11 +50,12 @@ struct BufferResource {
 
 struct ImageResource {
     vk::Image image = VK_NULL_HANDLE;
-    vk::ImageView view = VK_NULL_HANDLE;  
+    vk::ImageView view = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     uint32_t width = 0;
     uint32_t height = 0;
     vk::Format format = vk::Format::eUndefined;
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;  // Current layout for RenderGraph import
 };
 
 class ResourceFactory {

@@ -97,13 +97,11 @@ void AutoExposure::executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex
     vk::ImageView hdrView = hdrRes->isExternal ? hdrRes->imageResource->view : hdrRes->transientView;
     if (!hdrView) return;
 
-    if (hdrView != cachedHDRView) {
-        vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ? luminanceDescriptorSet : histogramDescriptorSet;
-        descriptorManager->updateSet(descSet, {
-            ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge))
-        });
-        cachedHDRView = hdrView;
-    }
+    // Update descriptor set (always update since RenderGraph rebuilds each frame)
+    vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ? luminanceDescriptorSet : histogramDescriptorSet;
+    descriptorManager->updateSet(descSet, {
+        ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge))
+    });
 
     if (params.method == AutoExposureMethod::Simple) {
         cmd.fillBuffer(luminanceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);

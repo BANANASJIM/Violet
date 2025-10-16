@@ -220,6 +220,7 @@ void App::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t frame
         forwardRenderer->endFrame();
     }
 
+    // todo warp this to debug renderer
     // UI rendering (after scene, before present)
     // Transition swapchain to ColorAttachmentOptimal for UI rendering
     vk::ImageMemoryBarrier uiBarrier{};

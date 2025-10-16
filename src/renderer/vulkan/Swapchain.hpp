@@ -31,6 +31,10 @@ public:
     vk::Image getImage(size_t index) const { return images[index]; }
     vk::Image getDepthImage() const { return depthImage.image; }
 
+    // RenderGraph integration - get ImageResource wrappers (unified API)
+    const ImageResource* getImageResource(size_t index) const;
+    const ImageResource* getDepthImageResource() const;
+
     void createDepthResources();
 
 private:
@@ -44,10 +48,11 @@ private:
 
 private:
     VulkanContext* context;
-    
+
     vk::raii::SwapchainKHR swapchain{nullptr};
     eastl::vector<vk::Image> images;
     eastl::vector<vk::raii::ImageView> imageViews;
+    eastl::vector<ImageResource> imageResources;  // Persistent wrappers for RenderGraph
 
     ImageResource depthImage{};
     vk::raii::ImageView depthImageView{nullptr};

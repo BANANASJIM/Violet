@@ -32,10 +32,6 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
         descriptorSets[i] = sets[i];
     }
 
-    // Initialize cache vectors (one entry per frame)
-    cachedHDRViews.resize(framesInFlight, VK_NULL_HANDLE);
-    cachedDepthViews.resize(framesInFlight, VK_NULL_HANDLE);
-
     violet::Log::info("Tonemap", "Initialized with {} -> {} ({} frames)", hdrName.c_str(), swapchainName.c_str(), framesInFlight);
 }
 
@@ -50,11 +46,10 @@ void Tonemap::cleanup() {
 void Tonemap::addToRenderGraph() {
     if (!renderGraph) return;
 
-    //todo fix read depth
     renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
         b.read(hdrImageName, ResourceUsage::ShaderRead);
-        b.read("depth",ResourceUsage::ShaderRead);
-        b.write(swapchainImageName, ResourceUsage::ColorAttachment);
+        b.read("depth", ResourceUsage::ShaderRead);  // Read depth from Main pass
+        b.write(swapchainImageName, ResourceUsage::Present);  // Present to swapchain (auto post-barrier to PresentSrcKHR)
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executePass(cmd, frame); });
     });
 }
@@ -95,25 +90,21 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    // Update descriptor set for this frame if views changed
+    // Update descriptor set for this frame (always update since RenderGraph rebuilds each frame)
     vk::DescriptorSet currentSet = descriptorSets[frameIndex];
-    if (hdrView != cachedHDRViews[frameIndex] || depthView != cachedDepthViews[frameIndex]) {
-        descriptorManager->updateSet(currentSet, {
-            ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge)),
-            ResourceBindingDesc::sampledImage(1, depthView, descriptorManager->getSampler(SamplerType::ClampToEdge))
-        });
-        cachedHDRViews[frameIndex] = hdrView;
-        cachedDepthViews[frameIndex] = depthView;
-    }
+    descriptorManager->updateSet(currentSet, {
+        ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge)),
+        ResourceBindingDesc::sampledImage(1, depthView, descriptorManager->getSampler(SamplerType::ClampToEdge))
+    });
 
     // Bind pipeline
     postProcessMaterial->getPipeline()->bind(cmd);
 
-    // Bind descriptor sets (set 0: Global, set 1: PostProcess textures)
+    // Bind PostProcess descriptor set (Set 0)
     cmd.bindDescriptorSets(
         vk::PipelineBindPoint::eGraphics,
         postProcessMaterial->getPipelineLayout(),
-        1,  // Start at set 1 (PostProcess)
+        0,  // Set 0
         1,  // Bind 1 set
         &currentSet,
         0, nullptr

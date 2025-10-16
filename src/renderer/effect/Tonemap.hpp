@@ -11,6 +11,7 @@ class DescriptorManager;
 class MaterialManager;
 class RenderGraph;
 class Material;
+class GlobalUniforms;
 
 // Tonemap operator modes
 enum class TonemapMode : uint32_t {
@@ -73,10 +74,6 @@ private:
     // Resource names for RenderGraph
     eastl::string hdrImageName;
     eastl::string swapchainImageName;
-
-    // Cache descriptor updates per frame (triple buffering requires separate cache per frame)
-    eastl::vector<vk::ImageView> cachedHDRViews;
-    eastl::vector<vk::ImageView> cachedDepthViews;
 };
 
 } // namespace violet
