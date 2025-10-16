@@ -68,25 +68,22 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     renderGraph = eastl::make_unique<RenderGraph>();
     renderGraph->init(context);
 
-    // Initialize EnvironmentMap with bindless architecture
-    // MaterialManager is now guaranteed to exist (ResourceManager already initialized)
+
     auto* matMgr = getMaterialManager();
     if (matMgr) {
         // Set rendering formats in MaterialManager for compatible RenderPass creation
         matMgr->setRenderingFormats(swapchainFormat);
 
-        environmentMap.init(context, matMgr, &descMgr, resourceManager->getTextureManager(), resourceManager->getShaderLibrary());
+        environmentMap.init(context, matMgr, &descMgr, resourceManager->getTextureManager(), resourceManager->getShaderLibrary(), renderGraph.get());
     }
 
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
-    // Create PostProcess material for Tonemap
-    if (matMgr) {
-        matMgr->createPostProcessMaterial();
-    }
+    matMgr->createPostProcessMaterial();
+    matMgr->createPBRBindlessMaterial();
+    matMgr->createSkyboxMaterial();
 
-    // Initialize Tonemap effect
     tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
 
     // Initialize bindless through DescriptorManager
@@ -158,16 +155,6 @@ void ForwardRenderer::endFrame() {
     currentWorld = nullptr;
 }
 
-void ForwardRenderer::setupRenderGraph(vk::Format swapchainFmt) {
-    this->swapchainFormat = swapchainFmt;
-
-    // Initialize RenderGraph
-    renderGraph = eastl::make_unique<RenderGraph>();
-    renderGraph->init(context);
-
-    violet::Log::info("Renderer", "RenderGraph initialized with swapchain format");
-}
-
 void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     if (!swapchain || !renderGraph) {
         violet::Log::error("Renderer", "rebuildRenderGraph: swapchain or renderGraph is null");
@@ -183,6 +170,8 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     swapchainWrapper.image = swapchain->getImage(imageIndex);
     swapchainWrapper.view = swapchain->getImageView(imageIndex);
     swapchainWrapper.format = swapchain->getImageFormat();
+    swapchainWrapper.width = currentExtent.width;
+    swapchainWrapper.height = currentExtent.height;
     // Note: Other ImageResource fields (allocation, debugName) not needed for external resources
 
     renderGraph->importImage("swapchain", &swapchainWrapper);
@@ -201,7 +190,7 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     ImageDesc depthDesc{
         .format = vk::Format::eD32Sfloat,
         .extent = {currentExtent.width, currentExtent.height, 1},
-        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
         .mipLevels = 1,
         .arrayLayers = 1,
         .clearValue = vk::ClearDepthStencilValue{1.0f, 0}
@@ -212,17 +201,63 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     autoExposure.addToRenderGraph();
 
     // 4. Add Main Pass (Scene rendering)
-    renderGraph->addPass("Main")
-        .write("hdr", ResourceUsage::ColorAttachment)
-        .write("depth", ResourceUsage::DepthAttachment)
-        .execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+    renderGraph->addPass("Main", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+        b.write("hdr", ResourceUsage::ColorAttachment);
+        b.write("depth", ResourceUsage::DepthAttachment);
+        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
             renderScene(cmd, frame, *currentWorld);
         });
+    });
 
-    // 5. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
+    // 5. Add Skybox Pass (if environment map enabled) - handled by ForwardRenderer to properly bind descriptor sets
+    if (environmentMap.isEnabled()) {
+        auto* skyboxMaterial = getMaterialManager()->getMaterialByName("Skybox");
+        if (skyboxMaterial && skyboxMaterial->getPipeline()) {
+            renderGraph->addPass("Skybox", [this, skyboxMaterial](RenderGraph::PassBuilder& b, RenderPass& p) {
+                b.read("depth", ResourceUsage::DepthAttachment);
+                b.write("hdr", ResourceUsage::ColorAttachment);
+
+                b.execute([this, skyboxMaterial](vk::CommandBuffer cmd, uint32_t frame) {
+                    // Bind Skybox pipeline
+                    skyboxMaterial->getPipeline()->bind(cmd);
+
+                    // Rebind descriptor sets with Skybox's pipeline layout (different from PBR due to no push constants)
+                    // This is required by Vulkan spec: pipeline layouts with different push constant ranges are incompatible
+                    auto& descMgr = resourceManager->getDescriptorManager();
+                    vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frame);
+                    vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
+
+                    eastl::array<vk::DescriptorSet, 2> descriptorSets = {globalSet, bindlessSet};
+                    cmd.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        skyboxMaterial->getPipelineLayout(),
+                        0,  // First set = 0
+                        2,  // Bind 2 sets (Global + Bindless)
+                        descriptorSets.data(),
+                        0,
+                        nullptr
+                    );
+
+                    // Draw fullscreen triangle (no vertex buffer needed)
+                    cmd.draw(3, 1, 0, 0);
+                });
+            });
+        }
+    }
+
+    // 6. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
     tonemap.addToRenderGraph();
 
-    // 5. Build & Compile
+    // 7. Add Present Pass (Transition swapchain to PRESENT_SRC_KHR layout)
+    // Note: We declare write even though we don't actually write, so RenderGraph sets up renderArea
+    renderGraph->addPass("Present", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+        b.write("swapchain", ResourceUsage::Present);
+        b.execute([](vk::CommandBuffer cmd, uint32_t frame) {
+            // Empty pass - only for layout transition to PRESENT_SRC_KHR
+        });
+    });
+
+    // 8. Build & Compile
     renderGraph->build();
     renderGraph->compile();
 

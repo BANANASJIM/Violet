@@ -41,7 +41,7 @@ private:
     struct AllocationBlock {
         VmaAllocation allocation;
         vk::DeviceSize size;
-        uint32_t memoryTypeIndex;
+        uint32_t firstUse;
         uint32_t lastUse;
         bool inUse;
     };
@@ -52,7 +52,7 @@ private:
     eastl::vector<TransientBuffer> buffers;
     eastl::vector<AllocationBlock> allocationPool;
 
-    VmaAllocation findOrCreateAllocation(vk::DeviceSize size, uint32_t memoryTypeBits, uint32_t firstUse, uint32_t lastUse);
+    VmaAllocation findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse);
 };
 
 } // namespace violet

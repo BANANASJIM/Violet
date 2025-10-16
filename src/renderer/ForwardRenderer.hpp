@@ -118,7 +118,6 @@ public:
     void endFrame();
 
     // RenderGraph setup
-    void setupRenderGraph(vk::Format swapchainFormat);
     void rebuildRenderGraph(uint32_t imageIndex);
 
     void collectRenderables(entt::registry& world);

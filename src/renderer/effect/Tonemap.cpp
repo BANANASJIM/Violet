@@ -24,10 +24,19 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
         return;
     }
 
-    // Allocate descriptor set for HDR color and depth textures
-    descriptorSet = descriptorManager->allocateSet("PostProcess", 0);
+    // Allocate descriptor sets for HDR color and depth textures (one per frame in flight)
+    constexpr uint32_t framesInFlight = 3;
+    auto sets = descriptorManager->allocateSets("PostProcess", framesInFlight);
+    descriptorSets.resize(framesInFlight);
+    for (uint32_t i = 0; i < framesInFlight; ++i) {
+        descriptorSets[i] = sets[i];
+    }
 
-    violet::Log::info("Tonemap", "Initialized with {} -> {}", hdrName.c_str(), swapchainName.c_str());
+    // Initialize cache vectors (one entry per frame)
+    cachedHDRViews.resize(framesInFlight, VK_NULL_HANDLE);
+    cachedDepthViews.resize(framesInFlight, VK_NULL_HANDLE);
+
+    violet::Log::info("Tonemap", "Initialized with {} -> {} ({} frames)", hdrName.c_str(), swapchainName.c_str(), framesInFlight);
 }
 
 void Tonemap::cleanup() {
@@ -41,15 +50,23 @@ void Tonemap::cleanup() {
 void Tonemap::addToRenderGraph() {
     if (!renderGraph) return;
 
-    renderGraph->addPass("Tonemap")
-        .read(hdrImageName, ResourceUsage::ShaderRead)
-        .write(swapchainImageName, ResourceUsage::ColorAttachment)
-        .execute([this](vk::CommandBuffer cmd, uint32_t frame) { executePass(cmd, frame); });
+    //todo fix read depth
+    renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+        b.read(hdrImageName, ResourceUsage::ShaderRead);
+        b.read("depth",ResourceUsage::ShaderRead);
+        b.write(swapchainImageName, ResourceUsage::ColorAttachment);
+        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executePass(cmd, frame); });
+    });
 }
 
 void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     if (!postProcessMaterial || !postProcessMaterial->getPipeline()) {
         violet::Log::error("Tonemap", "PostProcess material or pipeline not available");
+        return;
+    }
+
+    if (frameIndex >= descriptorSets.size()) {
+        violet::Log::error("Tonemap", "Invalid frame index: {}", frameIndex);
         return;
     }
 
@@ -67,22 +84,26 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    vk::ImageView hdrView = hdrRes->isExternal ? hdrRes->imageResource->view : hdrRes->transientView;
-    vk::ImageView depthView = depthRes->isExternal ? depthRes->imageResource->view : depthRes->transientView;
+    // Get image views - check for null imageResource before accessing view
+    vk::ImageView hdrView = (hdrRes->isExternal && hdrRes->imageResource) ?
+        hdrRes->imageResource->view : hdrRes->transientView;
+    vk::ImageView depthView = (depthRes->isExternal && depthRes->imageResource) ?
+        depthRes->imageResource->view : depthRes->transientView;
 
     if (!hdrView || !depthView) {
         violet::Log::error("Tonemap", "Invalid HDR or depth image view");
         return;
     }
 
-    // Update descriptor set if views changed
-    if (hdrView != cachedHDRView || depthView != cachedDepthView) {
-        descriptorManager->updateSet(descriptorSet, {
+    // Update descriptor set for this frame if views changed
+    vk::DescriptorSet currentSet = descriptorSets[frameIndex];
+    if (hdrView != cachedHDRViews[frameIndex] || depthView != cachedDepthViews[frameIndex]) {
+        descriptorManager->updateSet(currentSet, {
             ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge)),
             ResourceBindingDesc::sampledImage(1, depthView, descriptorManager->getSampler(SamplerType::ClampToEdge))
         });
-        cachedHDRView = hdrView;
-        cachedDepthView = depthView;
+        cachedHDRViews[frameIndex] = hdrView;
+        cachedDepthViews[frameIndex] = depthView;
     }
 
     // Bind pipeline
@@ -94,7 +115,7 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         postProcessMaterial->getPipelineLayout(),
         1,  // Start at set 1 (PostProcess)
         1,  // Bind 1 set
-        &descriptorSet,
+        &currentSet,
         0, nullptr
     );
 
@@ -106,9 +127,10 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         float padding;
     } push{params.ev100, params.gamma, static_cast<uint32_t>(params.mode), 0.0f};
 
+    // Push constants must match the pipeline layout's stage flags (VERTEX|FRAGMENT)
     cmd.pushConstants(
         postProcessMaterial->getPipelineLayout(),
-        vk::ShaderStageFlagBits::eFragment,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
         0, sizeof(PushConstants), &push
     );
 

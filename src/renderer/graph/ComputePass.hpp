@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Pass.hpp"
-#include "renderer/vulkan/ComputePipeline.hpp"
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
@@ -17,7 +16,7 @@ public:
     ComputePass() = default;
     ~ComputePass() override { cleanup(); }
 
-    void init(VulkanContext* ctx, ComputePipeline* pipeline, const eastl::string& name);
+    void init(VulkanContext* ctx, const eastl::string& name);
     void cleanup() override;
 
     void execute(vk::CommandBuffer cmd, uint32_t frameIndex) override;
@@ -35,12 +34,9 @@ public:
         executeCallback = eastl::move(cb);
     }
 
-    ComputePipeline* getPipeline() { return pipeline; }
-
 private:
     VulkanContext* context = nullptr;
     eastl::string name;
-    ComputePipeline* pipeline = nullptr;  // Not owned (owned by caller or RenderGraph)
 
     eastl::vector<ResourceHandle> reads;
     eastl::vector<ResourceHandle> writes;

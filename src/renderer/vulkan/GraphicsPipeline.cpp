@@ -159,22 +159,15 @@ void GraphicsPipeline::buildPipeline() {
         setLayouts.push_back(config.materialDescriptorSetLayout);
     }
 
-    // Pipeline layout
+    // Pipeline layout - use push constants from config (no defaults)
+    // Copy to local vector to ensure data lifetime during pipeline layout creation
+    eastl::vector<vk::PushConstantRange> localPushConstants = config.pushConstantRanges;
+
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
     pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-
-    if (!config.pushConstantRanges.empty()) {
-        pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size());
-        pipelineLayoutInfo.pPushConstantRanges = config.pushConstantRanges.data();
-    } else {
-        vk::PushConstantRange pushConstantRange;
-        pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
-        pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(glm::mat4);
-        pipelineLayoutInfo.pushConstantRangeCount = 1;
-        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-    }
+    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(localPushConstants.size());
+    pipelineLayoutInfo.pPushConstantRanges = localPushConstants.empty() ? nullptr : localPushConstants.data();
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
@@ -199,7 +192,6 @@ void GraphicsPipeline::buildPipeline() {
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = *pipelineLayout;
-    // renderPass and subpass removed - using dynamic rendering via pNext chain
 
     graphicsPipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, pipelineInfo);
 }

@@ -123,7 +123,7 @@ Material* MaterialManager::getMaterialByName(const eastl::string& name) const {
     if (it != namedMaterials.end()) {
         return it->second;
     }
-    violet::Log::error("MaterialManager"," Material is not found");
+    violet::Log::error("MaterialManager", "Material '{}' is not found", name.c_str());
     return nullptr;
 }
 
@@ -147,20 +147,58 @@ Material* MaterialManager::createPBRBindlessMaterial() {
     config.enableDepthTest = true;
     config.enableDepthWrite = true;
     config.colorFormats = formats.colorFormats;
-    config.depthFormat = formats.depthFormat;
-    config.stencilFormat = formats.stencilFormat;
+   config.depthFormat = formats.depthFormat;
+   config.stencilFormat = formats.stencilFormat;
+
+    // Bindless rendering requires descriptor sets in a specific order:
+    // set 0: Global (camera, lighting)
+    // set 1: Bindless texture array
+    // set 2: Material data SSBO
+    auto globalLayout = descriptorManager->getLayout("Global");
+    if (!globalLayout) {
+        violet::Log::error("MaterialManager", "Failed to create PBR bindless material - 'Global' layout is missing");
+        return nullptr;
+    }
+    config.globalDescriptorSetLayout = globalLayout;
+
+    if (!descriptorManager->hasLayout("Bindless")) {
+        violet::Log::error("MaterialManager", "Failed to create PBR bindless material - 'Bindless' layout is not registered");
+        return nullptr;
+    }
+    config.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
+
+    if (!descriptorManager->hasLayout("MaterialData")) {
+        violet::Log::error("MaterialManager", "Failed to create PBR bindless material - 'MaterialData' layout is not registered");
+        return nullptr;
+    }
+    config.additionalDescriptorSets.push_back(descriptorManager->getLayout("MaterialData"));
+
+    // Push constants for PBR: mat4 model (64 bytes) + uint materialID (4 bytes) = 68 bytes
+    // Round up to 16-byte alignment = 80 bytes
+    // IMPORTANT: Both vertex and fragment shaders access push constants (materialID is used in fragment shader)
+    vk::PushConstantRange pushConstantRange;
+    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = 80;  // 68 bytes rounded up to 16-byte alignment
+    config.pushConstantRanges.push_back(pushConstantRange);
 
     // Create material descriptor
     MaterialDesc desc;
     desc.vertexShader = vertShader;
     desc.fragmentShader = fragShader;
-    desc.layoutName = "Material";  // Material descriptor layout from DescriptorManager
     desc.pipelineConfig = config;
     desc.name = "PBRBindless";
     desc.type = MaterialType::PBR;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
-    return createMaterial(desc);
+    Material* material = createMaterial(desc);
+    if (!material) {
+        violet::Log::error("MaterialManager", "Failed to create PBRBindless material");
+        return nullptr;
+    }
+
+    violet::Log::info("MaterialManager", "PBRBindless material created successfully");
+    return material;
 }
 
 Material* MaterialManager::createPostProcessMaterial() {
@@ -184,6 +222,15 @@ Material* MaterialManager::createPostProcessMaterial() {
     config.colorFormats = formats.colorFormats;
     config.depthFormat = vk::Format::eUndefined;  // No depth for post-process
     config.stencilFormat = formats.stencilFormat;
+
+    // Push constants for tonemap parameters (ev100, gamma, tonemapMode, padding = 16 bytes)
+    // IMPORTANT: Even though only fragment shader uses push constants, we need to include
+    // both Vertex and Fragment stages due to Vulkan validation requirements
+    vk::PushConstantRange pushConstantRange;
+    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = 16;  // float ev100, float gamma, uint tonemapMode, float padding
+    config.pushConstantRanges.push_back(pushConstantRange);
 
     // Create material descriptor
     MaterialDesc desc;
@@ -222,11 +269,20 @@ Material* MaterialManager::createSkyboxMaterial() {
     config.depthFormat = formats.depthFormat;
     config.stencilFormat = formats.stencilFormat;
 
+    // Skybox needs Bindless descriptor set for cubemap access
+    // set 0: Global (camera, lighting)
+    // set 1: Bindless cubemap array
+    if (!descriptorManager->hasLayout("Bindless")) {
+        violet::Log::error("MaterialManager", "Failed to create Skybox material - 'Bindless' layout is not registered");
+        return nullptr;
+    }
+    config.additionalDescriptorSets.push_back(descriptorManager->getLayout("Bindless"));
+
     // Create material descriptor
     MaterialDesc desc;
     desc.vertexShader = vertShader;
     desc.fragmentShader = fragShader;
-    desc.layoutName = "";  // Skybox uses no material descriptor set
+    desc.layoutName = "";  // Skybox uses no material descriptor set (set 2)
     desc.pipelineConfig = config;
     desc.name = "Skybox";
     desc.type = MaterialType::Skybox;
@@ -476,13 +532,17 @@ uint32_t MaterialManager::makeInstanceId(uint32_t index, uint32_t generation) co
 // === Format Management (for dynamic rendering) ===
 
 void MaterialManager::setRenderingFormats(vk::Format newSwapchainFormat) {
+    // Always ensure hdrFormat is initialized (important for first-time setup)
+    hdrFormat = vk::Format::eR16G16B16A16Sfloat;
+
     if (swapchainFormat != newSwapchainFormat) {
         swapchainFormat = newSwapchainFormat;
         depthFormat = context->findDepthFormat();
 
-        violet::Log::info("MaterialManager", "Updated rendering formats (Swapchain: {}, Depth: {})",
+        violet::Log::info("MaterialManager", "Updated rendering formats (Swapchain: {}, Depth: {}, HDR: {})",
             vk::to_string(swapchainFormat).c_str(),
-            vk::to_string(depthFormat).c_str());
+            vk::to_string(depthFormat).c_str(),
+            vk::to_string(hdrFormat).c_str());
     }
 }
 

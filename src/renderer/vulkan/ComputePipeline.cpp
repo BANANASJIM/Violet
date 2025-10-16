@@ -63,7 +63,8 @@ void ComputePipeline::buildPipeline() {
     computePipelineCreateInfo.stage = computeShaderStageInfo;
     computePipelineCreateInfo.layout = *pipelineLayout;
 
-    computePipeline = vk::raii::Pipeline(context->getDeviceRAII(), nullptr, computePipelineCreateInfo);
+    // Use createComputePipeline to avoid ambiguity with graphics pipeline constructor
+    computePipeline = context->getDeviceRAII().createComputePipeline(nullptr, computePipelineCreateInfo);
 
     violet::Log::debug("Renderer", "Compute pipeline created: {}", shader->getName().c_str());
 }

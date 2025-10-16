@@ -90,6 +90,10 @@ struct ResourceBindingDesc {
     uint32_t binding = 0;
     vk::DescriptorType type = vk::DescriptorType::eUniformBuffer;
 
+    // Flag to distinguish between Texture* and raw ImageView/Sampler
+    // Required due to union aliasing issues
+    bool usesRawImageView = false;
+
     // Resource union (only one should be valid based on type)
     union {
         UniformBuffer* bufferPtr;

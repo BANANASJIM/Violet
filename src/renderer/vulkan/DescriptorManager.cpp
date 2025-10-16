@@ -149,6 +149,7 @@ ResourceBindingDesc ResourceBindingDesc::texture(uint32_t binding, Texture* text
     ResourceBindingDesc desc;
     desc.binding = binding;
     desc.type = vk::DescriptorType::eCombinedImageSampler;
+    desc.usesRawImageView = false;  // Using Texture*
     desc.texturePtr = texture;
     desc.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
     return desc;
@@ -167,6 +168,7 @@ ResourceBindingDesc ResourceBindingDesc::sampledImage(uint32_t binding, vk::Imag
     ResourceBindingDesc desc;
     desc.binding = binding;
     desc.type = vk::DescriptorType::eCombinedImageSampler;
+    desc.usesRawImageView = true;  // Using raw ImageView/Sampler
     desc.imageInfo.imageView = imageView;
     desc.imageInfo.sampler = sampler;
     desc.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -385,11 +387,14 @@ void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<Res
             }
             case vk::DescriptorType::eCombinedImageSampler: {
                 vk::DescriptorImageInfo imageInfo;
-                if (binding.texturePtr) {
+                // Check usesRawImageView flag to distinguish between Texture* and raw ImageView/Sampler
+                if (!binding.usesRawImageView && binding.texturePtr) {
+                    // Use Texture*
                     imageInfo.imageLayout = binding.imageLayout;
                     imageInfo.imageView = binding.texturePtr->getImageView();
                     imageInfo.sampler = binding.texturePtr->getSampler();
                 } else {
+                    // Use raw ImageView/Sampler
                     imageInfo.imageLayout = binding.imageLayout;
                     imageInfo.imageView = binding.imageInfo.imageView;
                     imageInfo.sampler = binding.imageInfo.sampler;

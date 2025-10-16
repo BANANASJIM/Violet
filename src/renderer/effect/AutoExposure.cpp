@@ -83,10 +83,11 @@ void AutoExposure::addToRenderGraph() {
     if (!params.enabled || !renderGraph) return;
 
     renderGraph->importBuffer(getActiveBufferName(), getActiveReadbackBuffer());
-    renderGraph->addPass("AutoExposure")
-        .read(hdrImageName, ResourceUsage::ShaderRead)
-        .write(getActiveBufferName(), ResourceUsage::ShaderWrite)
-        .execute([this](vk::CommandBuffer cmd, uint32_t frame) { executeComputePass(cmd, frame); });
+    renderGraph->addComputePass("AutoExposure", [this](RenderGraph::PassBuilder& b, ComputePass& p) {
+        b.read(hdrImageName, ResourceUsage::ShaderRead);
+        b.write(getActiveBufferName(), ResourceUsage::ShaderWrite);
+        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executeComputePass(cmd, frame); });
+    });
 }
 
 void AutoExposure::executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex) {

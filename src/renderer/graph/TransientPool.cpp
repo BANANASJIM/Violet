@@ -29,43 +29,20 @@ void TransientPool::cleanup() {
     context = nullptr;
 }
 
-VmaAllocation TransientPool::findOrCreateAllocation(vk::DeviceSize size, uint32_t memoryTypeBits, uint32_t firstUse, uint32_t lastUse) {
+VmaAllocation TransientPool::findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse) {
     // 查找可复用的 allocation（生命周期不重叠）
     for (auto& block : allocationPool) {
         if (!block.inUse && block.lastUse < firstUse && block.size >= size) {
             block.inUse = true;
+            block.firstUse = firstUse;
             block.lastUse = lastUse;
             return block.allocation;
         }
     }
 
-    // 创建新 allocation
-    VkMemoryRequirements memReqs = {};
-    memReqs.size = size;
-    memReqs.alignment = 0;
-    memReqs.memoryTypeBits = memoryTypeBits;
-
-    VmaAllocationCreateInfo allocInfo = {};
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-    allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-
-    VmaAllocation allocation;
-    VkResult result = vmaAllocateMemory(allocator, &memReqs, &allocInfo, &allocation, nullptr);
-
-    if (result != VK_SUCCESS) {
-        Log::error("TransientPool", "Failed to allocate memory");
-        return VK_NULL_HANDLE;
-    }
-
-    AllocationBlock block;
-    block.allocation = allocation;
-    block.size = size;
-    block.memoryTypeIndex = 0;
-    block.lastUse = lastUse;
-    block.inUse = true;
-
-    allocationPool.push_back(block);
-    return allocation;
+    // 如果没有找到可复用的，返回nullptr，让调用者创建新的
+    // 新的allocation会在createImage/createBuffer中通过vmaCreateImage/vmaCreateBuffer创建
+    return VK_NULL_HANDLE;
 }
 
 TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstUse, uint32_t lastUse) {
@@ -81,36 +58,72 @@ TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstU
     imageInfo.sharingMode = vk::SharingMode::eExclusive;
     imageInfo.initialLayout = vk::ImageLayout::eUndefined;
 
-    VkImage vkImage;
+    // Calculate size requirement (need a dummy image for this)
+    VkImage dummyImage;
     VkResult result = vkCreateImage(context->getDevice(),
-        reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), nullptr, &vkImage);
-
+        reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), nullptr, &dummyImage);
     if (result != VK_SUCCESS) {
-        Log::error("TransientPool", "Failed to create image");
+        Log::error("TransientPool", "Failed to create dummy image for size calculation");
         return {};
     }
 
     VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(context->getDevice(), vkImage, &memReqs);
+    vkGetImageMemoryRequirements(context->getDevice(), dummyImage, &memReqs);
+    vkDestroyImage(context->getDevice(), dummyImage, nullptr);
 
-    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, memReqs.memoryTypeBits, firstUse, lastUse);
-    if (!allocation) {
-        vkDestroyImage(context->getDevice(), vkImage, nullptr);
-        return {};
+    // Try to find a reusable allocation
+    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse);
+
+    VkImage vkImage;
+    if (allocation) {
+        // Reuse existing allocation with aliasing
+        result = vmaCreateAliasingImage(allocator, allocation,
+            reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &vkImage);
+
+        if (result != VK_SUCCESS) {
+            Log::error("TransientPool", "Failed to create aliasing image");
+            return {};
+        }
+    } else {
+        // Create new image with new allocation
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+        result = vmaCreateImage(allocator,
+            reinterpret_cast<const VkImageCreateInfo*>(&imageInfo),
+            &allocInfo,
+            &vkImage,
+            &allocation,
+            nullptr);
+
+        if (result != VK_SUCCESS) {
+            Log::error("TransientPool", "Failed to create image with allocation");
+            return {};
+        }
+
+        // Add this new allocation to the pool for future reuse
+        AllocationBlock block;
+        block.allocation = allocation;
+        block.size = memReqs.size;
+        block.firstUse = firstUse;
+        block.lastUse = lastUse;
+        block.inUse = true;
+        allocationPool.push_back(block);
     }
 
-    result = vmaBindImageMemory(allocator, allocation, vkImage);
-    if (result != VK_SUCCESS) {
-        Log::error("TransientPool", "Failed to bind image memory");
-        vkDestroyImage(context->getDevice(), vkImage, nullptr);
-        return {};
-    }
+    // Determine aspect mask based on format (depth vs color)
+    bool isDepthFormat = (desc.format == vk::Format::eD32Sfloat ||
+                         desc.format == vk::Format::eD24UnormS8Uint ||
+                         desc.format == vk::Format::eD16Unorm ||
+                         desc.format == vk::Format::eD32SfloatS8Uint);
 
     vk::ImageViewCreateInfo viewInfo;
     viewInfo.image = vkImage;
     viewInfo.viewType = vk::ImageViewType::e2D;
     viewInfo.format = desc.format;
-    viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    viewInfo.subresourceRange.aspectMask = isDepthFormat ?
+        vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = desc.mipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
@@ -133,30 +146,58 @@ TransientBuffer TransientPool::createBuffer(const BufferDesc& desc, uint32_t fir
     bufferInfo.usage = desc.usage;
     bufferInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    VkBuffer vkBuffer;
+    // Calculate size requirement (need a dummy buffer for this)
+    VkBuffer dummyBuffer;
     VkResult result = vkCreateBuffer(context->getDevice(),
-        reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), nullptr, &vkBuffer);
-
+        reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), nullptr, &dummyBuffer);
     if (result != VK_SUCCESS) {
-        Log::error("TransientPool", "Failed to create buffer");
+        Log::error("TransientPool", "Failed to create dummy buffer for size calculation");
         return {};
     }
 
     VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(context->getDevice(), vkBuffer, &memReqs);
+    vkGetBufferMemoryRequirements(context->getDevice(), dummyBuffer, &memReqs);
+    vkDestroyBuffer(context->getDevice(), dummyBuffer, nullptr);
 
-    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, memReqs.memoryTypeBits, firstUse, lastUse);
-    if (!allocation) {
-        vkDestroyBuffer(context->getDevice(), vkBuffer, nullptr);
-        Log::error("TransientPool", "Failed to allocate transientBuffer memory");
-        return {};
-    }
+    // Try to find a reusable allocation
+    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse);
 
-    result = vmaBindBufferMemory(allocator, allocation, vkBuffer);
-    if (result != VK_SUCCESS) {
-        Log::error("TransientPool", "Failed to bind buffer memory");
-        vkDestroyBuffer(context->getDevice(), vkBuffer, nullptr);
-        return {};
+    VkBuffer vkBuffer;
+    if (allocation) {
+        // Reuse existing allocation with aliasing
+        result = vmaCreateAliasingBuffer(allocator, allocation,
+            reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &vkBuffer);
+
+        if (result != VK_SUCCESS) {
+            Log::error("TransientPool", "Failed to create aliasing buffer");
+            return {};
+        }
+    } else {
+        // Create new buffer with new allocation
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+        result = vmaCreateBuffer(allocator,
+            reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo),
+            &allocInfo,
+            &vkBuffer,
+            &allocation,
+            nullptr);
+
+        if (result != VK_SUCCESS) {
+            Log::error("TransientPool", "Failed to create buffer with allocation");
+            return {};
+        }
+
+        // Add this new allocation to the pool for future reuse
+        AllocationBlock block;
+        block.allocation = allocation;
+        block.size = memReqs.size;
+        block.firstUse = firstUse;
+        block.lastUse = lastUse;
+        block.inUse = true;
+        allocationPool.push_back(block);
     }
 
     TransientBuffer transientBuf;

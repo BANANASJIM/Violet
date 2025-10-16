@@ -14,6 +14,7 @@ class TextureManager;
 class Texture;
 class DescriptorSet;
 class ShaderLibrary;
+class RenderGraph;
 
 class EnvironmentMap {
 public:
@@ -34,7 +35,7 @@ public:
     EnvironmentMap& operator=(EnvironmentMap&& other) noexcept;
 
     // Initialization (all resources managed by injected managers)
-    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib);
+    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, RenderGraph* graph);
     void cleanup();
 
     // Loading methods
@@ -43,6 +44,9 @@ public:
 
     // IBL generation
     void generateIBLMaps();
+
+    // RenderGraph integration
+    void addToRenderGraph();
 
     // Bindless texture indices for GlobalUBO
     uint32_t getEnvironmentMapIndex() const { return environmentMapIndex; }
@@ -74,6 +78,7 @@ private:
     DescriptorManager* descriptorManager = nullptr;
     TextureManager* textureManager = nullptr;
     ShaderLibrary* shaderLibrary = nullptr;
+    RenderGraph* renderGraph = nullptr;
 
     // Texture handles (references to TextureManager-owned resources)
     TextureHandle environmentTextureHandle;

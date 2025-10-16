@@ -3,11 +3,14 @@
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/MaterialManager.hpp"
+#include "resource/Material.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
+#include "renderer/graph/RenderGraph.hpp"
+#include "renderer/graph/RenderPass.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include <EASTL/unique_ptr.h>
@@ -87,12 +90,13 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     return *this;
 }
 
-void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib) {
+void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, RenderGraph* graph) {
     context = ctx;
     materialManager = matMgr;
     descriptorManager = descMgr;
     textureManager = texMgr;
     shaderLibrary = shaderLib;
+    renderGraph = graph;
 
     violet::Log::info("Renderer", "EnvironmentMap initialized (resources managed by TextureManager, MaterialManager, DescriptorManager)");
 }
@@ -718,6 +722,45 @@ void EnvironmentMap::generateBRDFLUT() {
     brdfLUTIndex = descriptorManager->allocateBindlessTexture(textureManager->getTexture(brdfLUTHandle));
 
     violet::Log::info("Renderer", "BRDF LUT generated (bindless index: {})", brdfLUTIndex);
+}
+
+void EnvironmentMap::addToRenderGraph() {
+    if (!renderGraph || !params.enabled || !materialManager) {
+        return;
+    }
+
+    // Get Skybox material from MaterialManager
+    auto* skyboxMaterial = materialManager->getMaterialByName("Skybox");
+    if (!skyboxMaterial) {
+        // Create Skybox material if it doesn't exist
+        skyboxMaterial = materialManager->createSkyboxMaterial();
+        if (!skyboxMaterial) {
+            violet::Log::error("Renderer", "Failed to create Skybox material");
+            return;
+        }
+    }
+
+    // Should be merged with main pass
+    renderGraph->addPass("Skybox", [this, skyboxMaterial](RenderGraph::PassBuilder& b, RenderPass& p) {
+        // Skybox reads HDR buffer and depth, writes to HDR buffer
+        b.read("depth", ResourceUsage::DepthAttachment);
+        b.write("hdr", ResourceUsage::ColorAttachment);
+
+        b.execute([this, skyboxMaterial](vk::CommandBuffer cmd, uint32_t frame) {
+            if (!skyboxMaterial || !skyboxMaterial->getPipeline()) {
+                return;
+            }
+
+            // Bind Skybox pipeline
+            skyboxMaterial->getPipeline()->bind(cmd);
+
+            // Note: Global descriptor set (set 0) and bindless set (set 1) are already bound
+            // by the Main pass, so we don't need to bind them again
+
+            // Draw fullscreen triangle (no vertex buffer needed)
+            cmd.draw(3, 1, 0, 0);
+        });
+    });
 }
 
 } // namespace violet

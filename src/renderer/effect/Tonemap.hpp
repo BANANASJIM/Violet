@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
+#include <EASTL/vector.h>
 
 namespace violet {
 
@@ -65,7 +66,7 @@ private:
     RenderGraph* renderGraph = nullptr;
 
     Material* postProcessMaterial = nullptr;  // Reference from MaterialManager, not owned
-    vk::DescriptorSet descriptorSet;
+    eastl::vector<vk::DescriptorSet> descriptorSets;  // One per frame in flight (triple buffering)
 
     TonemapParams params;
 
@@ -73,9 +74,9 @@ private:
     eastl::string hdrImageName;
     eastl::string swapchainImageName;
 
-    // Cache descriptor updates
-    vk::ImageView cachedHDRView = VK_NULL_HANDLE;
-    vk::ImageView cachedDepthView = VK_NULL_HANDLE;
+    // Cache descriptor updates per frame (triple buffering requires separate cache per frame)
+    eastl::vector<vk::ImageView> cachedHDRViews;
+    eastl::vector<vk::ImageView> cachedDepthViews;
 };
 
 } // namespace violet

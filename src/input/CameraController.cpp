@@ -99,7 +99,8 @@ bool CameraController::onKeyReleased(const KeyReleasedEvent& event) {
 }
 
 bool CameraController::onMousePressed(const MousePressedEvent& event) {
-    if (ImGui::GetIO().WantCaptureMouse) {
+    // Check if ImGui context exists before calling GetIO()
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) {
         return false;
     }
 
@@ -119,7 +120,8 @@ bool CameraController::onMouseReleased(const MouseReleasedEvent& event) {
 }
 
 bool CameraController::onMouseMoved(const MouseMovedEvent& event) {
-    if (ImGui::GetIO().WantCaptureMouse) {
+    // Check if ImGui context exists before calling GetIO()
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) {
         return false;
     }
 
@@ -148,7 +150,8 @@ bool CameraController::onMouseMoved(const MouseMovedEvent& event) {
 }
 
 bool CameraController::onScroll(const ScrollEvent& event) {
-    if (ImGui::GetIO().WantCaptureMouse) {
+    // Check if ImGui context exists before calling GetIO()
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse) {
         return false;
     }
 

@@ -1,5 +1,7 @@
 #include "RenderGraph.hpp"
 #include "TransientPool.hpp"
+#include "RenderPass.hpp"
+#include "ComputePass.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "core/Log.hpp"
@@ -29,14 +31,55 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(const eastl::string& r
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback) {
-    node.executeCallback = callback;
+    // Set callback on the Pass object
+    if (auto* renderPass = dynamic_cast<RenderPass*>(node.pass.get())) {
+        renderPass->setExecuteCallback(callback);
+    } else if (auto* computePass = dynamic_cast<ComputePass*>(node.pass.get())) {
+        computePass->setExecuteCallback(callback);
+    }
     return *this;
 }
 
-RenderGraph::PassBuilder RenderGraph::addPass(const eastl::string& name) {
-    passes.emplace_back();  // Create PassNode in passes vector
-    passes.back().name = name;
-    return PassBuilder(passes.back());  // Return builder that modifies it in-place
+void RenderGraph::addPass(const eastl::string& name, eastl::function<void(PassBuilder&, RenderPass&)> setupCallback) {
+    // Create RenderPass object
+    auto renderPass = eastl::make_unique<RenderPass>();
+    renderPass->init(context, name);
+
+    // Create PassNode and store Pass
+    auto node = eastl::make_unique<PassNode>();
+    node->pass = eastl::move(renderPass);
+
+    // Create PassBuilder for configuration
+    PassBuilder builder(*node);
+
+    // Call user setup callback
+    setupCallback(builder, *static_cast<RenderPass*>(node->pass.get()));
+
+    // Store PassNode
+    passes.push_back(eastl::move(node));
+
+    Log::debug("RenderGraph", "Added graphics pass '{}'", name.c_str());
+}
+
+void RenderGraph::addComputePass(const eastl::string& name, eastl::function<void(PassBuilder&, ComputePass&)> setupCallback) {
+    // Create ComputePass object
+    auto computePass = eastl::make_unique<ComputePass>();
+    computePass->init(context, name);
+
+    // Create PassNode and store Pass
+    auto node = eastl::make_unique<PassNode>();
+    node->pass = eastl::move(computePass);
+
+    // Create PassBuilder for configuration
+    PassBuilder builder(*node);
+
+    // Call user setup callback
+    setupCallback(builder, *static_cast<ComputePass*>(node->pass.get()));
+
+    // Store PassNode
+    passes.push_back(eastl::move(node));
+
+    Log::debug("RenderGraph", "Added compute pass '{}'", name.c_str());
 }
 
 void RenderGraph::init(VulkanContext* ctx) {
@@ -70,7 +113,14 @@ ResourceHandle RenderGraph::importImage(const eastl::string& name, const ImageRe
     res.isPersistent = true;
     res.imageResource = imageRes;
 
-    Log::debug("RenderGraph", "Imported external image '{}' (handle={})", name.c_str(), res.handle.id);
+    // Populate imageDesc from external image for proper renderArea calculation
+    res.imageDesc.format = imageRes->format;
+    res.imageDesc.extent = vk::Extent3D{imageRes->width, imageRes->height, 1};
+    res.imageDesc.mipLevels = 1;
+    res.imageDesc.arrayLayers = 1;
+
+    Log::debug("RenderGraph", "Imported external image '{}' (handle={}, extent={}x{})",
+              name.c_str(), res.handle.id, imageRes->width, imageRes->height);
     return res.handle;
 }
 
@@ -135,22 +185,23 @@ void RenderGraph::build() {
 
 void RenderGraph::buildDependencyGraph() {
     for (uint32_t i = 0; i < passes.size(); ++i) {
-        passes[i].passIndex = i;
+        passes[i]->passIndex = i;
     }
 
     // Mark passes as reachable if they access valid resources
     for (auto& pass : passes) {
         bool hasValidAccess = false;
-        for (const auto& access : pass.accesses) {
+        for (const auto& access : pass->accesses) {
             if (resources.find(access.resourceName) != resources.end()) {
                 hasValidAccess = true;
                 break;
             }
         }
         if (hasValidAccess) {
-            pass.reachable = true;
+            pass->reachable = true;
         } else {
-            Log::warn("RenderGraph", "Pass '{}' has no valid resource accesses", pass.name.c_str());
+            const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
+            Log::warn("RenderGraph", "Pass '{}' has no valid resource accesses", passName);
         }
     }
 }
@@ -159,15 +210,16 @@ void RenderGraph::pruneUnreachable() {
     compiledPasses.clear();
 
     for (auto& pass : passes) {
-        if (pass.reachable) {
-            compiledPasses.push_back(pass);
+        if (pass->reachable) {
+            compiledPasses.push_back(pass.get());
         } else {
-            Log::debug("RenderGraph", "Pruned unreachable pass '{}'", pass.name.c_str());
+            const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
+            Log::debug("RenderGraph", "Pruned unreachable pass '{}'", passName);
         }
     }
 
     for (uint32_t i = 0; i < compiledPasses.size(); ++i) {
-        compiledPasses[i].passIndex = i;
+        compiledPasses[i]->passIndex = i;
     }
 }
 
@@ -203,12 +255,12 @@ void RenderGraph::computeLifetimes() {
     }
 
     for (const auto& pass : compiledPasses) {
-        for (const auto& access : pass.accesses) {
+        for (const auto& access : pass->accesses) {
             auto it = resources.find(access.resourceName);
             if (it != resources.end()) {
                 auto& res = it->second;
-                res.firstUse = eastl::min(res.firstUse, pass.passIndex);
-                res.lastUse = eastl::max(res.lastUse, pass.passIndex);
+                res.firstUse = eastl::min(res.firstUse, pass->passIndex);
+                res.lastUse = eastl::max(res.lastUse, pass->passIndex);
             }
         }
     }
@@ -255,7 +307,7 @@ void RenderGraph::generateBarriers() {
     for (auto& barriers : postBarriers) barriers.clear();
 
     for (const auto& pass : compiledPasses) {
-        for (const auto& access : pass.accesses) {
+        for (const auto& access : pass->accesses) {
             auto it = resources.find(access.resourceName);
             if (it == resources.end()) continue;
 
@@ -287,15 +339,19 @@ void RenderGraph::generateBarriers() {
                         imgBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(res.physicalHandle));
                     }
 
-                    imgBarrier.subresourceRange.aspectMask =
-                        (access.usage == ResourceUsage::DepthAttachment) ?
+                    // Determine aspect mask based on format, not usage
+                    bool isDepthFormat = (res.imageDesc.format == vk::Format::eD32Sfloat ||
+                                         res.imageDesc.format == vk::Format::eD24UnormS8Uint ||
+                                         res.imageDesc.format == vk::Format::eD16Unorm ||
+                                         res.imageDesc.format == vk::Format::eD32SfloatS8Uint);
+                    imgBarrier.subresourceRange.aspectMask = isDepthFormat ?
                         vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
                     imgBarrier.subresourceRange.baseMipLevel = 0;
                     imgBarrier.subresourceRange.levelCount = res.imageDesc.mipLevels;
                     imgBarrier.subresourceRange.baseArrayLayer = 0;
                     imgBarrier.subresourceRange.layerCount = res.imageDesc.arrayLayers;
 
-                    preBarriers[pass.passIndex].push_back(barrier);
+                    preBarriers[pass->passIndex].push_back(barrier);
 
                     res.state.layout = newLayout;
                     res.state.stage = newStage;
@@ -324,7 +380,7 @@ void RenderGraph::generateBarriers() {
                     bufBarrier.offset = 0;
                     bufBarrier.size = res.bufferDesc.size;
 
-                    preBarriers[pass.passIndex].push_back(barrier);
+                    preBarriers[pass->passIndex].push_back(barrier);
 
                     res.state.stage = newStage;
                     res.state.access = newAccess;
@@ -340,19 +396,61 @@ void RenderGraph::execute(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    for (const auto& pass : compiledPasses) {
-        insertPreBarriers(cmd, pass.passIndex);
+    for (const auto& passNode : compiledPasses) {
+        if (!passNode->pass) continue;
 
-        if (pass.executeCallback) {
-            pass.executeCallback(cmd, frameIndex);
+        insertPreBarriers(cmd, passNode->passIndex);
+
+        PassType type = passNode->pass->getType();
+
+        // Graphics pass: auto beginRendering/endRendering
+        if (type == PassType::Graphics) {
+            vk::RenderingInfo renderingInfo;
+            renderingInfo.renderArea = vk::Rect2D{{0, 0}, passNode->renderArea};
+            renderingInfo.layerCount = 1;
+            renderingInfo.colorAttachmentCount = passNode->colorAttachmentInfos.size();
+            renderingInfo.pColorAttachments = passNode->colorAttachmentInfos.data();
+
+            if (passNode->hasDepth) {
+                renderingInfo.pDepthAttachment = &passNode->depthAttachmentInfo;
+            }
+            if (passNode->hasStencil) {
+                renderingInfo.pStencilAttachment = &passNode->stencilAttachmentInfo;
+            }
+
+            cmd.beginRendering(renderingInfo);
+
+            // Set dynamic viewport and scissor
+            vk::Viewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(passNode->renderArea.width);
+            viewport.height = static_cast<float>(passNode->renderArea.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            cmd.setViewport(0, viewport);
+
+            vk::Rect2D scissor{};
+            scissor.offset = vk::Offset2D{0, 0};
+            scissor.extent = passNode->renderArea;
+            cmd.setScissor(0, scissor);
+
+            passNode->pass->execute(cmd, frameIndex);
+            cmd.endRendering();
+        }
+        // Compute/Transfer pass: direct execution
+        else {
+            passNode->pass->execute(cmd, frameIndex);
         }
 
-        insertPostBarriers(cmd, pass.passIndex);
+        insertPostBarriers(cmd, passNode->passIndex);
     }
 
-    if (transientPool) {
-        transientPool->reset();
-    }
+    // DO NOT reset transientPool here! With triple buffering (3 frames in flight),
+    // the GPU might still be using transient resources from previous frames.
+    // TransientPool manages memory aliasing based on lifetime analysis,
+    // so resources will be reused automatically when safe.
+    // Only reset on cleanup() or before recompile().
 }
 
 void RenderGraph::insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex) {
@@ -435,8 +533,9 @@ void RenderGraph::debugPrint() const {
 
     Log::info("RenderGraph", "Compiled Passes: {}", compiledPasses.size());
     for (const auto& pass : compiledPasses) {
-        Log::info("RenderGraph", "  [{}] {}", pass.passIndex, pass.name.c_str());
-        for (const auto& access : pass.accesses) {
+        const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
+        Log::info("RenderGraph", "  [{}] {}", pass->passIndex, passName);
+        for (const auto& access : pass->accesses) {
             Log::info("RenderGraph", "    {} '{}'",
                       access.isWrite ? "write" : "read", access.resourceName.c_str());
         }
@@ -508,12 +607,12 @@ ResourceHandle RenderGraph::getOrCreateResource(const eastl::string& name) {
 void RenderGraph::buildRenderingInfos() {
     // Build vk::RenderingAttachmentInfo for each pass based on resource accesses
     for (auto& pass : compiledPasses) {
-        pass.colorAttachmentInfos.clear();
-        pass.hasDepth = false;
-        pass.hasStencil = false;
-        pass.renderArea = vk::Extent2D{0, 0};
+        pass->colorAttachmentInfos.clear();
+        pass->hasDepth = false;
+        pass->hasStencil = false;
+        pass->renderArea = vk::Extent2D{0, 0};
 
-        for (const auto& access : pass.accesses) {
+        for (const auto& access : pass->accesses) {
             auto it = resources.find(access.resourceName);
             if (it == resources.end() || it->second.type != ResourceType::Image) {
                 continue;
@@ -528,17 +627,18 @@ void RenderGraph::buildRenderingInfos() {
             } else if (res.transientView) {
                 imageView = res.transientView;
             } else {
+                const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
                 Log::warn("RenderGraph", "Pass '{}': resource '{}' has no valid ImageView",
-                         pass.name.c_str(), access.resourceName.c_str());
+                         passName, access.resourceName.c_str());
                 continue;
             }
 
             // Update render area based on resource extent
-            if (res.imageDesc.extent.width > pass.renderArea.width) {
-                pass.renderArea.width = res.imageDesc.extent.width;
+            if (res.imageDesc.extent.width > pass->renderArea.width) {
+                pass->renderArea.width = res.imageDesc.extent.width;
             }
-            if (res.imageDesc.extent.height > pass.renderArea.height) {
-                pass.renderArea.height = res.imageDesc.extent.height;
+            if (res.imageDesc.extent.height > pass->renderArea.height) {
+                pass->renderArea.height = res.imageDesc.extent.height;
             }
 
             // Build attachment info based on usage
@@ -550,21 +650,22 @@ void RenderGraph::buildRenderingInfos() {
                 attachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
                 attachmentInfo.clearValue = res.imageDesc.clearValue;
 
-                pass.colorAttachmentInfos.push_back(attachmentInfo);
+                pass->colorAttachmentInfos.push_back(attachmentInfo);
 
             } else if (access.usage == ResourceUsage::DepthAttachment && access.isWrite) {
-                pass.depthAttachmentInfo.imageView = imageView;
-                pass.depthAttachmentInfo.imageLayout = getLayoutForUsage(access.usage);
-                pass.depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-                pass.depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
-                pass.depthAttachmentInfo.clearValue = res.imageDesc.clearValue;
-                pass.hasDepth = true;
+                pass->depthAttachmentInfo.imageView = imageView;
+                pass->depthAttachmentInfo.imageLayout = getLayoutForUsage(access.usage);
+                pass->depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+                pass->depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
+                pass->depthAttachmentInfo.clearValue = res.imageDesc.clearValue;
+                pass->hasDepth = true;
             }
         }
 
+        const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
         Log::debug("RenderGraph", "Pass '{}': {} color attachments, {} depth, render area [{}, {}]",
-                  pass.name.c_str(), pass.colorAttachmentInfos.size(),
-                  pass.hasDepth ? "has" : "no", pass.renderArea.width, pass.renderArea.height);
+                  passName, pass->colorAttachmentInfos.size(),
+                  pass->hasDepth ? "has" : "no", pass->renderArea.width, pass->renderArea.height);
     }
 }
 

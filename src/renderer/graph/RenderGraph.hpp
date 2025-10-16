@@ -5,7 +5,9 @@
 #include <EASTL/hash_map.h>
 #include <EASTL/string.h>
 #include <EASTL/functional.h>
+#include <EASTL/unique_ptr.h>
 #include "ResourceHandle.hpp"
+#include "Pass.hpp"
 
 namespace violet {
 
@@ -13,6 +15,8 @@ class VulkanContext;
 class TransientPool;
 struct ImageResource;
 struct BufferResource;
+class RenderPass;
+class ComputePass;
 
 enum class ResourceType {
     Image,
@@ -79,17 +83,15 @@ struct LogicalResource {
 };
 
 struct PassNode {
-    eastl::string name;
+    eastl::unique_ptr<Pass> pass;  // Pass object (created during build())
 
     struct ResourceAccess {
         eastl::string resourceName;  // Reference to LogicalResource
         ResourceUsage usage;
         bool isWrite;
-        // Removed: ImageDesc and BufferDesc (stored in LogicalResource)
     };
 
     eastl::vector<ResourceAccess> accesses;
-    eastl::function<void(vk::CommandBuffer, uint32_t)> executeCallback;
 
     bool reachable = false;
     uint32_t passIndex = 0;
@@ -131,10 +133,12 @@ public:
         PassBuilder& execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback);
 
     private:
-        PassNode& node;  // Reference to node already in RenderGraph::passes
+        PassNode& node;  // Reference to PassNode being configured
     };
 
-    PassBuilder addPass(const eastl::string& name);
+    // Callback-style API (option 2)
+    void addPass(const eastl::string& name, eastl::function<void(PassBuilder&, RenderPass&)> setupCallback);
+    void addComputePass(const eastl::string& name, eastl::function<void(PassBuilder&, ComputePass&)> setupCallback);
 
     void build();
     void compile();
@@ -149,8 +153,10 @@ private:
     TransientPool* transientPool = nullptr;
 
     eastl::hash_map<eastl::string, LogicalResource> resources;
-    eastl::vector<PassNode> passes;
-    eastl::vector<PassNode> compiledPasses;
+
+    // Pass objects created immediately in addPass()
+    eastl::vector<eastl::unique_ptr<PassNode>> passes;
+    eastl::vector<PassNode*> compiledPasses;  // Non-owning pointers to reachable passes
 
     struct Barrier {
         eastl::string resourceName;
