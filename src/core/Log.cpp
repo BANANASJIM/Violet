@@ -69,8 +69,13 @@ void Log::loadConfigFromEnvironment() {
         }
     }
 
+    // Check VIOLET_DEBUG first - if set to 1, enable debug logging
+    const char* debugEnv = std::getenv("VIOLET_DEBUG");
+    bool debugMode = debugEnv && (eastl::string(debugEnv) == "1");
+
     const char* logLevelEnv = std::getenv("VIOLET_LOG_LEVEL");
     if (logLevelEnv) {
+        // VIOLET_LOG_LEVEL takes priority if explicitly set
         eastl::string level(logLevelEnv);
         if (level == "trace") {
             setGlobalLevel(spdlog::level::trace);
@@ -84,6 +89,13 @@ void Log::loadConfigFromEnvironment() {
             setGlobalLevel(spdlog::level::err);
         } else if (level == "critical") {
             setGlobalLevel(spdlog::level::critical);
+        }
+    } else {
+        // If VIOLET_LOG_LEVEL not set, use VIOLET_DEBUG to determine level
+        if (debugMode) {
+            setGlobalLevel(spdlog::level::debug);
+        } else {
+            setGlobalLevel(spdlog::level::info);
         }
     }
 }

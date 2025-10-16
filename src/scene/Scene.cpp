@@ -382,8 +382,6 @@ eastl::unique_ptr<Scene> Scene::createFromAsset(
         texture->setSampler(renderer.getDescriptorManager().getSampler(SamplerType::Default));
         Texture* texturePtr = materialManager->addTexture(eastl::move(texture));
         textures[i] = texturePtr;
-
-        violet::Log::debug("Scene", "Loaded texture {}: sRGB={}", i, isSRGB[i]);
     }
 
     // Step 2: Create materials

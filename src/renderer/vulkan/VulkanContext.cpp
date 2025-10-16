@@ -216,8 +216,12 @@ void VulkanContext::createLogicalDevice() {
     localReadFeatures.pNext = &features13;
     localReadFeatures.dynamicRenderingLocalRead = VK_TRUE;
 
+    // Vulkan 1.1 features for memory aliasing
+    vk::PhysicalDeviceVulkan11Features features11;
+    features11.pNext = &localReadFeatures;
+
     vk::PhysicalDeviceVulkan12Features features12;
-    features12.pNext = &localReadFeatures;
+    features12.pNext = &features11;
     features12.timelineSemaphore = VK_TRUE;
 
     // Bindless descriptor indexing features (part of Vulkan 1.2 core)
@@ -226,7 +230,7 @@ void VulkanContext::createLogicalDevice() {
     features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    
+
     vk::DeviceCreateInfo createInfo;
     createInfo.pNext = &features12;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());

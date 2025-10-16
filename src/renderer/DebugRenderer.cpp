@@ -44,6 +44,13 @@ void DebugRenderer::init(VulkanContext* ctx, GlobalUniforms* globalUnif,
     config.enableBlending = true;
     config.globalDescriptorSetLayout = descMgr->getLayout("Global");  // Use DescriptorManager for layout
 
+    // Add push constant range for model matrix (used in debug.vert)
+    vk::PushConstantRange pushConstant;
+    pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    pushConstant.offset = 0;
+    pushConstant.size = 64;  // sizeof(mat4)
+    config.pushConstantRanges.push_back(pushConstant);
+
     // Query available device features to determine what we can use
     vk::PhysicalDeviceFeatures availableFeatures = context->getPhysicalDevice().getFeatures();
 

@@ -14,11 +14,13 @@ struct TransientImage {
     vk::Image image;
     vk::ImageView view;
     VmaAllocation allocation;
+    uint32_t frameIndex = 0;  // Which frame in flight allocated this resource
 };
 
 struct TransientBuffer {
     vk::Buffer buffer;
     VmaAllocation allocation;
+    uint32_t frameIndex = 0;  // Which frame in flight allocated this resource
 };
 
 class TransientPool {
@@ -32,10 +34,14 @@ public:
     void init(VulkanContext* ctx);
     void cleanup();
 
-    TransientImage createImage(const ImageDesc& desc, uint32_t firstUse, uint32_t lastUse);
-    TransientBuffer createBuffer(const BufferDesc& desc, uint32_t firstUse, uint32_t lastUse);
+    // Begin a new frame: recycle allocations from previous frame with same index
+    // Safe: App waits on fence before calling, ensuring GPU finished with old resources
+    void beginFrame(uint32_t frameIndex);
 
-    void reset();
+    TransientImage createImage(const ImageDesc& desc, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex);
+    TransientBuffer createBuffer(const BufferDesc& desc, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex);
+
+    void reset();  // Deprecated: cleanup all resources (use cleanup() instead)
 
 private:
     struct AllocationBlock {
@@ -43,6 +49,7 @@ private:
         vk::DeviceSize size;
         uint32_t firstUse;
         uint32_t lastUse;
+        uint32_t frameIndex;  // Frame index that last used this allocation (for triple buffering)
         bool inUse;
     };
 
@@ -52,7 +59,7 @@ private:
     eastl::vector<TransientBuffer> buffers;
     eastl::vector<AllocationBlock> allocationPool;
 
-    VmaAllocation findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse);
+    VmaAllocation findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex);
 };
 
 } // namespace violet

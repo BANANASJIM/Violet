@@ -58,7 +58,7 @@ void RenderGraph::addPass(const eastl::string& name, eastl::function<void(PassBu
     // Store PassNode
     passes.push_back(eastl::move(node));
 
-    Log::debug("RenderGraph", "Added graphics pass '{}'", name.c_str());
+    Log::trace("RenderGraph", "Added graphics pass '{}'", name.c_str());
 }
 
 void RenderGraph::addComputePass(const eastl::string& name, eastl::function<void(PassBuilder&, ComputePass&)> setupCallback) {
@@ -79,7 +79,7 @@ void RenderGraph::addComputePass(const eastl::string& name, eastl::function<void
     // Store PassNode
     passes.push_back(eastl::move(node));
 
-    Log::debug("RenderGraph", "Added compute pass '{}'", name.c_str());
+    Log::trace("RenderGraph", "Added compute pass '{}'", name.c_str());
 }
 
 void RenderGraph::init(VulkanContext* ctx) {
@@ -119,7 +119,7 @@ ResourceHandle RenderGraph::importImage(const eastl::string& name, const ImageRe
     res.imageDesc.mipLevels = 1;
     res.imageDesc.arrayLayers = 1;
 
-    Log::debug("RenderGraph", "Imported external image '{}' (handle={}, extent={}x{})",
+    Log::trace("RenderGraph", "Imported external image '{}' (handle={}, extent={}x{})",
               name.c_str(), res.handle.id, imageRes->width, imageRes->height);
     return res.handle;
 }
@@ -138,7 +138,7 @@ ResourceHandle RenderGraph::importBuffer(const eastl::string& name, const Buffer
     res.isPersistent = true;
     res.bufferResource = bufferRes;
 
-    Log::debug("RenderGraph", "Imported external buffer '{}' (handle={})", name.c_str(), res.handle.id);
+    Log::trace("RenderGraph", "Imported external buffer '{}' (handle={})", name.c_str(), res.handle.id);
     return res.handle;
 }
 
@@ -151,7 +151,7 @@ ResourceHandle RenderGraph::createImage(const eastl::string& name, const ImageDe
     res.isPersistent = persistent;
     res.imageDesc = desc;
 
-    Log::debug("RenderGraph", "Created {} image '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
+    Log::trace("RenderGraph", "Created {} image '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
     return res.handle;
 }
 
@@ -164,7 +164,7 @@ ResourceHandle RenderGraph::createBuffer(const eastl::string& name, const Buffer
     res.isPersistent = persistent;
     res.bufferDesc = desc;
 
-    Log::debug("RenderGraph", "Created {} buffer '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
+    Log::trace("RenderGraph", "Created {} buffer '{}' (handle={})", persistent ? "persistent" : "transient", name.c_str(), res.handle.id);
     return res.handle;
 }
 
@@ -174,13 +174,13 @@ void RenderGraph::build() {
         return;
     }
 
-    Log::info("RenderGraph", "Building dependency graph with {} passes", passes.size());
+    Log::trace("RenderGraph", "Building dependency graph with {} passes", passes.size());
 
     buildDependencyGraph();
     pruneUnreachable();
 
     built = true;
-    Log::info("RenderGraph", "Dependency graph built, {} passes reachable", compiledPasses.size());
+    Log::trace("RenderGraph", "Dependency graph built, {} passes reachable", compiledPasses.size());
 }
 
 void RenderGraph::buildDependencyGraph() {
@@ -214,7 +214,7 @@ void RenderGraph::pruneUnreachable() {
             compiledPasses.push_back(pass.get());
         } else {
             const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
-            Log::debug("RenderGraph", "Pruned unreachable pass '{}'", passName);
+            Log::trace("RenderGraph", "Pruned unreachable pass '{}'", passName);
         }
     }
 
@@ -229,14 +229,13 @@ void RenderGraph::compile() {
         return;
     }
 
-    Log::info("RenderGraph", "Compiling render graph");
+    Log::trace("RenderGraph", "Compiling render graph");
 
     preBarriers.resize(compiledPasses.size());
     postBarriers.resize(compiledPasses.size());
 
     computeLifetimes();
-    allocatePhysicalResources();
-    buildRenderingInfos();  // Build vk::RenderingAttachmentInfo after resources allocated
+    // Physical resource allocation moved to execute() for per-frame recycling
     generateBarriers();
 
     uint32_t totalBarriers = 0;
@@ -244,7 +243,7 @@ void RenderGraph::compile() {
     for (const auto& barriers : postBarriers) totalBarriers += barriers.size();
 
     compiled = true;
-    Log::info("RenderGraph", "Compiled: {} passes, {} resources, {} barriers",
+    Log::trace("RenderGraph", "Compiled: {} passes, {} resources, {} barriers",
               compiledPasses.size(), resources.size(), totalBarriers);
 }
 
@@ -267,13 +266,13 @@ void RenderGraph::computeLifetimes() {
 
     for (const auto& [name, res] : resources) {
         if (!res.isExternal && !res.isPersistent) {
-            Log::debug("RenderGraph", "Resource '{}': lifetime [{}, {}]",
+            Log::trace("RenderGraph", "Resource '{}': lifetime [{}, {}]",
                       name.c_str(), res.firstUse, res.lastUse);
         }
     }
 }
 
-void RenderGraph::allocatePhysicalResources() {
+void RenderGraph::allocatePhysicalResources(uint32_t frameIndex) {
     if (!transientPool) {
         Log::error("RenderGraph", "TransientPool not initialized");
         return;
@@ -290,14 +289,14 @@ void RenderGraph::allocatePhysicalResources() {
         }
 
         if (res.type == ResourceType::Image) {
-            auto transientImg = transientPool->createImage(res.imageDesc, res.firstUse, res.lastUse);
+            auto transientImg = transientPool->createImage(res.imageDesc, res.firstUse, res.lastUse, frameIndex);
             res.physicalHandle = reinterpret_cast<void*>(static_cast<VkImage>(transientImg.image));
             res.transientView = transientImg.view;  // Save ImageView for buildRenderingInfos
-            Log::debug("RenderGraph", "Allocated transient image '{}' with view", name.c_str());
+            Log::trace("RenderGraph", "Allocated transient image '{}' with view for frame {}", name.c_str(), frameIndex);
         } else if (res.type == ResourceType::Buffer) {
-            auto transientBuf = transientPool->createBuffer(res.bufferDesc, res.firstUse, res.lastUse);
+            auto transientBuf = transientPool->createBuffer(res.bufferDesc, res.firstUse, res.lastUse, frameIndex);
             res.physicalHandle = reinterpret_cast<void*>(static_cast<VkBuffer>(transientBuf.buffer));
-            Log::debug("RenderGraph", "Allocated transient buffer '{}'", name.c_str());
+            Log::trace("RenderGraph", "Allocated transient buffer '{}' for frame {}", name.c_str(), frameIndex);
         }
     }
 }
@@ -333,10 +332,12 @@ void RenderGraph::generateBarriers() {
                     imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     imgBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
+                    // Image handle will be filled in insertBarriers() when resources are allocated
+                    // For external resources, set now; for transient, set later
                     if (res.isExternal && res.imageResource) {
                         imgBarrier.image = res.imageResource->image;
                     } else {
-                        imgBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(res.physicalHandle));
+                        imgBarrier.image = VK_NULL_HANDLE;  // Will be filled in execute()
                     }
 
                     // Determine aspect mask based on format, not usage
@@ -372,10 +373,12 @@ void RenderGraph::generateBarriers() {
                     bufBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     bufBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
+                    // Buffer handle will be filled in insertBarriers() when resources are allocated
+                    // For external resources, set now; for transient, set later
                     if (res.isExternal && res.bufferResource) {
                         bufBarrier.buffer = res.bufferResource->buffer;
                     } else {
-                        bufBarrier.buffer = static_cast<vk::Buffer>(reinterpret_cast<VkBuffer>(res.physicalHandle));
+                        bufBarrier.buffer = VK_NULL_HANDLE;  // Will be filled in execute()
                     }
                     bufBarrier.offset = 0;
                     bufBarrier.size = res.bufferDesc.size;
@@ -395,6 +398,16 @@ void RenderGraph::execute(vk::CommandBuffer cmd, uint32_t frameIndex) {
         Log::error("RenderGraph", "Graph must be compiled before execution");
         return;
     }
+
+    // Recycle transient resources from previous frame with same index
+    // Safe: App waits on fence before calling, ensuring GPU finished with old resources
+    if (transientPool) {
+        transientPool->beginFrame(frameIndex);
+    }
+
+    // Allocate physical resources for this frame
+    allocatePhysicalResources(frameIndex);
+    buildRenderingInfos();  // Build attachment infos after resources allocated
 
     for (const auto& passNode : compiledPasses) {
         if (!passNode->pass) continue;
@@ -459,8 +472,16 @@ void RenderGraph::insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex) {
     const auto& barriers = preBarriers[passIndex];
     if (barriers.empty()) return;
 
-    for (const auto& barrier : barriers) {
+    for (auto barrier : barriers) {  // Copy barrier to modify it
         if (barrier.isImage) {
+            // Fill in VkImage handle for transient resources (allocated in execute())
+            if (barrier.imageBarrier.image == VK_NULL_HANDLE) {
+                auto it = resources.find(barrier.resourceName);
+                if (it != resources.end() && it->second.physicalHandle) {
+                    barrier.imageBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(it->second.physicalHandle));
+                }
+            }
+
             cmd.pipelineBarrier(
                 barrier.srcStage, barrier.dstStage,
                 {},
@@ -469,6 +490,14 @@ void RenderGraph::insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex) {
                 barrier.imageBarrier
             );
         } else {
+            // Fill in VkBuffer handle for transient resources
+            if (barrier.bufferBarrier.buffer == VK_NULL_HANDLE) {
+                auto it = resources.find(barrier.resourceName);
+                if (it != resources.end() && it->second.physicalHandle) {
+                    barrier.bufferBarrier.buffer = static_cast<vk::Buffer>(reinterpret_cast<VkBuffer>(it->second.physicalHandle));
+                }
+            }
+
             cmd.pipelineBarrier(
                 barrier.srcStage, barrier.dstStage,
                 {},
@@ -486,8 +515,16 @@ void RenderGraph::insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex) 
     const auto& barriers = postBarriers[passIndex];
     if (barriers.empty()) return;
 
-    for (const auto& barrier : barriers) {
+    for (auto barrier : barriers) {  // Copy barrier to modify it
         if (barrier.isImage) {
+            // Fill in VkImage handle for transient resources (allocated in execute())
+            if (barrier.imageBarrier.image == VK_NULL_HANDLE) {
+                auto it = resources.find(barrier.resourceName);
+                if (it != resources.end() && it->second.physicalHandle) {
+                    barrier.imageBarrier.image = static_cast<vk::Image>(reinterpret_cast<VkImage>(it->second.physicalHandle));
+                }
+            }
+
             cmd.pipelineBarrier(
                 barrier.srcStage, barrier.dstStage,
                 {},
@@ -496,6 +533,14 @@ void RenderGraph::insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex) 
                 barrier.imageBarrier
             );
         } else {
+            // Fill in VkBuffer handle for transient resources
+            if (barrier.bufferBarrier.buffer == VK_NULL_HANDLE) {
+                auto it = resources.find(barrier.resourceName);
+                if (it != resources.end() && it->second.physicalHandle) {
+                    barrier.bufferBarrier.buffer = static_cast<vk::Buffer>(reinterpret_cast<VkBuffer>(it->second.physicalHandle));
+                }
+            }
+
             cmd.pipelineBarrier(
                 barrier.srcStage, barrier.dstStage,
                 {},
@@ -663,7 +708,7 @@ void RenderGraph::buildRenderingInfos() {
         }
 
         const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
-        Log::debug("RenderGraph", "Pass '{}': {} color attachments, {} depth, render area [{}, {}]",
+        Log::trace("RenderGraph", "Pass '{}': {} color attachments, {} depth, render area [{}, {}]",
                   passName, pass->colorAttachmentInfos.size(),
                   pass->hasDepth ? "has" : "no", pass->renderArea.width, pass->renderArea.height);
     }

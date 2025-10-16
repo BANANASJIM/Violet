@@ -74,10 +74,10 @@ void App::initVulkan() {
         forwardRenderer->setSwapchain(&swapchain);
     }
 
-    // TODO: ImGui backend needs update for dynamic rendering
-    // if (forwardRenderer) {
-    //     imguiBackend.init(&context, window.getHandle(), swapchainFormat, MAX_FRAMES_IN_FLIGHT);
-    // }
+    // Initialize ImGui backend with dynamic rendering
+    vk::Format swapchainFormat = swapchain.getImageFormat();
+    imguiBackend.init(&context, window.getHandle(), swapchainFormat, MAX_FRAMES_IN_FLIGHT);
+
     createCommandBuffers();
     createSyncObjects();
 }
@@ -158,6 +158,14 @@ void App::drawFrame() {
         return;
     }
 
+    // Start ImGui frame
+    imguiBackend.newFrame();
+
+    // Let UI layer render its UI
+    if (uiLayer) {
+        uiLayer->onImGuiRender();
+    }
+
     // Record command buffer
     commandBuffers[currentFrame].reset();
     vk::CommandBufferBeginInfo beginInfo{};
@@ -212,10 +220,70 @@ void App::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, uint32_t frame
         forwardRenderer->endFrame();
     }
 
-    // TODO: Debug and UI rendering needs update for dynamic rendering
-    // if (debugRenderer) {
-    //     debugRenderer->renderDebugAndUI(cmd, extent, frameIndex);
-    // }
+    // UI rendering (after scene, before present)
+    // Transition swapchain to ColorAttachmentOptimal for UI rendering
+    vk::ImageMemoryBarrier uiBarrier{};
+    uiBarrier.srcAccessMask = vk::AccessFlagBits::eNone;
+    uiBarrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    uiBarrier.oldLayout = vk::ImageLayout::ePresentSrcKHR;
+    uiBarrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    uiBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    uiBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    uiBarrier.image = swapchain.getImage(imageIndex);
+    uiBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    uiBarrier.subresourceRange.levelCount = 1;
+    uiBarrier.subresourceRange.layerCount = 1;
+
+    cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        {},
+        {},
+        {},
+        uiBarrier
+    );
+
+    // Begin dynamic rendering for UI
+    vk::RenderingAttachmentInfo colorAttachment{};
+    colorAttachment.imageView = swapchain.getImageView(imageIndex);
+    colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    colorAttachment.loadOp = vk::AttachmentLoadOp::eLoad;  // Load existing content
+    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+
+    vk::RenderingInfo renderingInfo{};
+    renderingInfo.renderArea = vk::Rect2D{{0, 0}, extent};
+    renderingInfo.layerCount = 1;
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachments = &colorAttachment;
+
+    cmd.beginRendering(renderingInfo);
+
+    // Render ImGui
+    imguiBackend.render(cmd);
+
+    cmd.endRendering();
+
+    // Transition swapchain back to PresentSrcKHR
+    vk::ImageMemoryBarrier presentBarrier{};
+    presentBarrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    presentBarrier.dstAccessMask = vk::AccessFlagBits::eNone;
+    presentBarrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    presentBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+    presentBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    presentBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    presentBarrier.image = swapchain.getImage(imageIndex);
+    presentBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    presentBarrier.subresourceRange.levelCount = 1;
+    presentBarrier.subresourceRange.layerCount = 1;
+
+    cmd.pipelineBarrier(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eBottomOfPipe,
+        {},
+        {},
+        {},
+        presentBarrier
+    );
 }
 
 bool App::acquireNextImage(uint32_t& imageIndex) {

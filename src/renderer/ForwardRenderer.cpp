@@ -86,6 +86,10 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
 
     tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
 
+    // Initialize debug renderer
+    debugRenderer.init(context, &globalUniforms, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
+    debugRenderer.setEnabled(true);  // Enable debug renderer by default
+
     // Initialize bindless through DescriptorManager
     descMgr.initBindless(1024);
 
@@ -260,8 +264,6 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     // 8. Build & Compile
     renderGraph->build();
     renderGraph->compile();
-
-    violet::Log::debug("Renderer", "RenderGraph rebuilt for frame {}", imageIndex);
 }
 
 void ForwardRenderer::collectRenderables(entt::registry& world) {

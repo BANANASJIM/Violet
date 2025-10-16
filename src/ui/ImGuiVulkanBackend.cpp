@@ -18,7 +18,7 @@ ImGuiVulkanBackend::~ImGuiVulkanBackend() {
     cleanup();
 }
 
-void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::RenderPass renderPass, uint32_t imageCount) {
+void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Format swapchainFormat, uint32_t imageCount) {
     context = ctx;
 
     // Setup Dear ImGui context
@@ -65,7 +65,8 @@ void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Render
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForVulkan(window, true);
-    
+
+    // Initialize for dynamic rendering (no RenderPass needed)
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.Instance = context->getInstance();
     init_info.PhysicalDevice = context->getPhysicalDevice();
@@ -74,20 +75,24 @@ void ImGuiVulkanBackend::init(VulkanContext* ctx, GLFWwindow* window, vk::Render
     init_info.Queue = context->getGraphicsQueue();
     init_info.PipelineCache = VK_NULL_HANDLE;
     init_info.DescriptorPool = descriptorPool;
-    init_info.RenderPass = renderPass;
-    init_info.Subpass = 0;
     init_info.MinImageCount = 2;
     init_info.ImageCount = imageCount;
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.Allocator = nullptr;
     init_info.CheckVkResultFn = nullptr;
 
+    // Dynamic rendering setup (ImGui 1.89+)
+    init_info.UseDynamicRendering = true;
+    init_info.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    init_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    init_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = reinterpret_cast<const VkFormat*>(&swapchainFormat);
+
     ImGui_ImplVulkan_Init(&init_info);
 
     uploadFonts();
-    
+
     initialized = true;
-    violet::Log::info("UI", "ImGui Vulkan backend initialized");
+    violet::Log::info("UI", "ImGui Vulkan backend initialized with dynamic rendering");
 }
 
 void ImGuiVulkanBackend::cleanup() {
@@ -135,6 +140,19 @@ void ImGuiVulkanBackend::uploadFonts() {
     ResourceFactory::executeSingleTimeCommands(context, [](vk::CommandBuffer cmd) {
         ImGui_ImplVulkan_CreateFontsTexture();
     });
+}
+
+void ImGuiVulkanBackend::newFrame() {
+    if (!initialized) return;
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
+void ImGuiVulkanBackend::render(vk::CommandBuffer cmd) {
+    if (!initialized) return;
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
 }
 
 }

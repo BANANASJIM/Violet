@@ -177,7 +177,7 @@ private:
     void buildDependencyGraph();
     void pruneUnreachable();
     void computeLifetimes();
-    void allocatePhysicalResources();
+    void allocatePhysicalResources(uint32_t frameIndex);
     void buildRenderingInfos();  // Build vk::RenderingInfo for each pass
     void generateBarriers();
     void insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex);

@@ -29,10 +29,53 @@ void TransientPool::cleanup() {
     context = nullptr;
 }
 
-VmaAllocation TransientPool::findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse) {
-    // 查找可复用的 allocation（生命周期不重叠）
+void TransientPool::beginFrame(uint32_t frameIndex) {
+    // Destroy ONLY Image/Buffer handles belonging to this frameIndex
+    // Other frames may still be in flight on GPU
+    auto imgIt = images.begin();
+    while (imgIt != images.end()) {
+        if (imgIt->frameIndex == frameIndex) {
+            if (imgIt->view) {
+                context->getDevice().destroyImageView(imgIt->view);
+            }
+            if (imgIt->image) {
+                vkDestroyImage(context->getDevice(), imgIt->image, nullptr);
+            }
+            imgIt = images.erase(imgIt);
+        } else {
+            ++imgIt;
+        }
+    }
+
+    auto bufIt = buffers.begin();
+    while (bufIt != buffers.end()) {
+        if (bufIt->frameIndex == frameIndex) {
+            if (bufIt->buffer) {
+                vkDestroyBuffer(context->getDevice(), bufIt->buffer, nullptr);
+            }
+            bufIt = buffers.erase(bufIt);
+        } else {
+            ++bufIt;
+        }
+    }
+
+    // Reset allocations belonging to this frameIndex for recycling
+    // Allocations are NOT freed, only marked as available for reuse
     for (auto& block : allocationPool) {
-        if (!block.inUse && block.lastUse < firstUse && block.size >= size) {
+        if (block.frameIndex == frameIndex) {
+            block.inUse = false;
+            block.lastUse = 0;
+        }
+    }
+}
+
+VmaAllocation TransientPool::findOrCreateAllocation(vk::DeviceSize size, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex) {
+    // Only reuse allocations from the same frameIndex to avoid cross-frame conflicts
+    // beginFrame() has already reset inUse for this frameIndex, so we don't need to check lastUse < firstUse
+    for (auto& block : allocationPool) {
+        if (!block.inUse &&
+            block.frameIndex == frameIndex &&
+            block.size >= size) {
             block.inUse = true;
             block.firstUse = firstUse;
             block.lastUse = lastUse;
@@ -40,12 +83,11 @@ VmaAllocation TransientPool::findOrCreateAllocation(vk::DeviceSize size, uint32_
         }
     }
 
-    // 如果没有找到可复用的，返回nullptr，让调用者创建新的
-    // 新的allocation会在createImage/createBuffer中通过vmaCreateImage/vmaCreateBuffer创建
+    // Not found: caller will create new allocation and add to pool
     return VK_NULL_HANDLE;
 }
 
-TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstUse, uint32_t lastUse) {
+TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex) {
     vk::ImageCreateInfo imageInfo;
     imageInfo.imageType = vk::ImageType::e2D;
     imageInfo.format = desc.format;
@@ -71,34 +113,23 @@ TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstU
     vkGetImageMemoryRequirements(context->getDevice(), dummyImage, &memReqs);
     vkDestroyImage(context->getDevice(), dummyImage, nullptr);
 
-    // Try to find a reusable allocation
-    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse);
+    // Use conservative alignment for aliasing
+    memReqs.alignment = std::max(memReqs.alignment, static_cast<VkDeviceSize>(256));
 
-    VkImage vkImage;
-    if (allocation) {
-        // Reuse existing allocation with aliasing
-        result = vmaCreateAliasingImage(allocator, allocation,
-            reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &vkImage);
+    // Try to find a reusable allocation (only from same frameIndex)
+    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse, frameIndex);
 
-        if (result != VK_SUCCESS) {
-            Log::error("TransientPool", "Failed to create aliasing image");
-            return {};
-        }
-    } else {
-        // Create new image with new allocation
+    // If no existing allocation found, create a new one using vmaAllocateMemory
+    // Following VMA official aliasing example: use preferredFlags, not usage
+    if (!allocation) {
         VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-        result = vmaCreateImage(allocator,
-            reinterpret_cast<const VkImageCreateInfo*>(&imageInfo),
-            &allocInfo,
-            &vkImage,
-            &allocation,
-            nullptr);
+        // Allocate memory directly (not tied to any specific image)
+        result = vmaAllocateMemory(allocator, &memReqs, &allocInfo, &allocation, nullptr);
 
         if (result != VK_SUCCESS) {
-            Log::error("TransientPool", "Failed to create image with allocation");
+            Log::error("TransientPool", "Failed to allocate memory for image");
             return {};
         }
 
@@ -108,8 +139,19 @@ TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstU
         block.size = memReqs.size;
         block.firstUse = firstUse;
         block.lastUse = lastUse;
+        block.frameIndex = frameIndex;  // Tag with frame index
         block.inUse = true;
         allocationPool.push_back(block);
+    }
+
+    // Now create aliasing image (works for both new and reused allocations)
+    VkImage vkImage;
+    result = vmaCreateAliasingImage(allocator, allocation,
+        reinterpret_cast<const VkImageCreateInfo*>(&imageInfo), &vkImage);
+
+    if (result != VK_SUCCESS) {
+        Log::error("TransientPool", "Failed to create aliasing image");
+        return {};
     }
 
     // Determine aspect mask based on format (depth vs color)
@@ -135,12 +177,13 @@ TransientImage TransientPool::createImage(const ImageDesc& desc, uint32_t firstU
     transientImg.image = vkImage;
     transientImg.view = view;
     transientImg.allocation = allocation;
+    transientImg.frameIndex = frameIndex;  // Tag with frame index
 
     images.push_back(transientImg);
     return transientImg;
 }
 
-TransientBuffer TransientPool::createBuffer(const BufferDesc& desc, uint32_t firstUse, uint32_t lastUse) {
+TransientBuffer TransientPool::createBuffer(const BufferDesc& desc, uint32_t firstUse, uint32_t lastUse, uint32_t frameIndex) {
     vk::BufferCreateInfo bufferInfo;
     bufferInfo.size = desc.size;
     bufferInfo.usage = desc.usage;
@@ -159,34 +202,23 @@ TransientBuffer TransientPool::createBuffer(const BufferDesc& desc, uint32_t fir
     vkGetBufferMemoryRequirements(context->getDevice(), dummyBuffer, &memReqs);
     vkDestroyBuffer(context->getDevice(), dummyBuffer, nullptr);
 
-    // Try to find a reusable allocation
-    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse);
+    // Use conservative alignment for aliasing
+    memReqs.alignment = std::max(memReqs.alignment, static_cast<VkDeviceSize>(256));
 
-    VkBuffer vkBuffer;
-    if (allocation) {
-        // Reuse existing allocation with aliasing
-        result = vmaCreateAliasingBuffer(allocator, allocation,
-            reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &vkBuffer);
+    // Try to find a reusable allocation (only from same frameIndex)
+    VmaAllocation allocation = findOrCreateAllocation(memReqs.size, firstUse, lastUse, frameIndex);
 
-        if (result != VK_SUCCESS) {
-            Log::error("TransientPool", "Failed to create aliasing buffer");
-            return {};
-        }
-    } else {
-        // Create new buffer with new allocation
+    // If no existing allocation found, create a new one using vmaAllocateMemory
+    // Following VMA official aliasing example: use preferredFlags, not usage
+    if (!allocation) {
         VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-        result = vmaCreateBuffer(allocator,
-            reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo),
-            &allocInfo,
-            &vkBuffer,
-            &allocation,
-            nullptr);
+        // Allocate memory directly (not tied to any specific buffer)
+        result = vmaAllocateMemory(allocator, &memReqs, &allocInfo, &allocation, nullptr);
 
         if (result != VK_SUCCESS) {
-            Log::error("TransientPool", "Failed to create buffer with allocation");
+            Log::error("TransientPool", "Failed to allocate memory for buffer");
             return {};
         }
 
@@ -196,13 +228,25 @@ TransientBuffer TransientPool::createBuffer(const BufferDesc& desc, uint32_t fir
         block.size = memReqs.size;
         block.firstUse = firstUse;
         block.lastUse = lastUse;
+        block.frameIndex = frameIndex;  // Tag with frame index
         block.inUse = true;
         allocationPool.push_back(block);
+    }
+
+    // Now create aliasing buffer (works for both new and reused allocations)
+    VkBuffer vkBuffer;
+    result = vmaCreateAliasingBuffer(allocator, allocation,
+        reinterpret_cast<const VkBufferCreateInfo*>(&bufferInfo), &vkBuffer);
+
+    if (result != VK_SUCCESS) {
+        Log::error("TransientPool", "Failed to create aliasing buffer");
+        return {};
     }
 
     TransientBuffer transientBuf;
     transientBuf.buffer = vkBuffer;
     transientBuf.allocation = allocation;
+    transientBuf.frameIndex = frameIndex;  // Tag with frame index
 
     buffers.push_back(transientBuf);
     return transientBuf;
