@@ -210,6 +210,7 @@ void VulkanContext::createLogicalDevice() {
     // Vulkan 1.3 core features
     vk::PhysicalDeviceVulkan13Features features13;
     features13.dynamicRendering = VK_TRUE;
+    features13.synchronization2 = VK_TRUE;
 
     // Dynamic rendering local read extension feature
     vk::PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR localReadFeatures;

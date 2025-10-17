@@ -9,9 +9,9 @@
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out vec4 outColor;
 
-// set 1: PostProcess material set
-layout(set = 1, binding = 0) uniform sampler2D colorTexture;
-layout(set = 1, binding = 1) uniform sampler2D depthTexture;
+// Set 0: PostProcess descriptor set
+layout(set = 0, binding = 0) uniform sampler2D colorTexture;
+layout(set = 0, binding = 1) uniform sampler2D depthTexture;
 
 // Push constants for tone mapping parameters
 layout(push_constant) uniform PostProcessParams {

@@ -82,7 +82,16 @@ void AutoExposure::cleanup() {
 void AutoExposure::addToRenderGraph() {
     if (!params.enabled || !renderGraph) return;
 
-    renderGraph->importBuffer(getActiveBufferName(), getActiveReadbackBuffer());
+    // Import readback buffer with GPU→CPU synchronization
+    // GPU writes in compute shader, CPU reads after frame completion
+    renderGraph->importBuffer(
+        getActiveBufferName(),
+        getActiveReadbackBuffer(),
+        vk::PipelineStageFlagBits2::eComputeShader,  // initialStage: GPU writes
+        vk::PipelineStageFlagBits2::eHost,           // finalStage: CPU reads
+        vk::AccessFlagBits2::eShaderWrite,           // initialAccess: compute shader output
+        vk::AccessFlagBits2::eHostRead               // finalAccess: CPU readback
+    );
     renderGraph->addComputePass("AutoExposure", [this](RenderGraph::PassBuilder& b, ComputePass& p) {
         b.read(hdrImageName, ResourceUsage::ShaderRead);
         b.write(getActiveBufferName(), ResourceUsage::ShaderWrite);

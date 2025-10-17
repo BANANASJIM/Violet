@@ -49,7 +49,7 @@ void Tonemap::addToRenderGraph() {
     renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
         b.read(hdrImageName, ResourceUsage::ShaderRead);
         b.read("depth", ResourceUsage::ShaderRead);  // Read depth from Main pass
-        b.write(swapchainImageName, ResourceUsage::Present);  // Present to swapchain (auto post-barrier to PresentSrcKHR)
+        b.write(swapchainImageName, ResourceUsage::Present);  // Present to swapchain
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executePass(cmd, frame); });
     });
 }

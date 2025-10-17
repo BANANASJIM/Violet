@@ -79,6 +79,8 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
 
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
+    // TEMPORARY: Disable auto-exposure for testing Main + Tonemap only
+    autoExposure.getParams().enabled = false;
 
     matMgr->createPostProcessMaterial();
     matMgr->createPBRBindlessMaterial();
@@ -88,7 +90,7 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
 
     // Initialize debug renderer
     debugRenderer.init(context, &globalUniforms, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
-    debugRenderer.setEnabled(true);  // Enable debug renderer by default
+    debugRenderer.setEnabled(false);  // Disable debug renderer for testing
 
     // Initialize bindless through DescriptorManager
     descMgr.initBindless(1024);
@@ -165,22 +167,28 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
         return;
     }
 
-    // Clear previous graph
+    // Clear graph every frame (reset all resource state to Undefined)
     renderGraph->clear();
 
-    // 1. Import Swapchain image (External resource)
-    // Create temporary wrapper for swapchain color image
-    ImageResource swapchainWrapper;
-    swapchainWrapper.image = swapchain->getImage(imageIndex);
-    swapchainWrapper.view = swapchain->getImageView(imageIndex);
-    swapchainWrapper.format = swapchain->getImageFormat();
-    swapchainWrapper.width = currentExtent.width;
-    swapchainWrapper.height = currentExtent.height;
-    // Note: Other ImageResource fields (allocation, debugName) not needed for external resources
+    // Get swapchain image for this frame
+    const ImageResource* swapchainImageRes = swapchain->getImageResource(imageIndex);
+    if (!swapchainImageRes) {
+        violet::Log::error("Renderer", "Failed to get swapchain ImageResource for index {}", imageIndex);
+        return;
+    }
 
-    renderGraph->importImage("swapchain", &swapchainWrapper);
+    // Import swapchain image (every frame - different physical image due to triple buffering)
+    // Swapchain images are pre-transitioned to PresentSrcKHR at creation (see Swapchain::transitionSwapchainImagesToPresent)
+    // and must end at PresentSrcKHR (for vkQueuePresentKHR)
+    renderGraph->importImage("swapchain", swapchainImageRes,
+        vk::ImageLayout::ePresentSrcKHR,                         // initialLayout: pre-initialized at swapchain creation
+        vk::ImageLayout::ePresentSrcKHR,                         // finalLayout: REQUIRED for vkQueuePresentKHR
+        vk::PipelineStageFlagBits2::eNone,       // initialStage: ImGui renders at ColorAttachmentOutput
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,       // finalStage: FINAL TRANSITION targets ImGui stage
+        {},                                                       // initialAccess: None (from vkAcquireNextImageKHR)
+        {});                                                      // finalAccess: None (ImGui barrier handles dstAccess)
 
-    // 2. Create Transient resources
+    // Create transient HDR render target
     ImageDesc hdrDesc{
         .format = vk::Format::eR16G16B16A16Sfloat,
         .extent = {currentExtent.width, currentExtent.height, 1},
@@ -201,32 +209,22 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     };
     renderGraph->createImage("depth", depthDesc, false);
 
-    // 3. Add auto-exposure pass (if enabled)
+    // Add auto-exposure pass (if enabled)
     autoExposure.addToRenderGraph();
 
-    // 4. Add Main Pass (Scene rendering)
+    // Main Pass: Skybox + Scene rendering to HDR target
     renderGraph->addPass("Main", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
         b.write("hdr", ResourceUsage::ColorAttachment);
         b.write("depth", ResourceUsage::DepthAttachment);
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
-            renderScene(cmd, frame, *currentWorld);
-        });
-    });
-
-    // 5. Add Skybox Pass (if environment map enabled) - handled by ForwardRenderer to properly bind descriptor sets
-    if (environmentMap.isEnabled()) {
-        auto* skyboxMaterial = getMaterialManager()->getMaterialByName("Skybox");
-        if (skyboxMaterial && skyboxMaterial->getPipeline()) {
-            renderGraph->addPass("Skybox", [this, skyboxMaterial](RenderGraph::PassBuilder& b, RenderPass& p) {
-                b.read("depth", ResourceUsage::DepthAttachment);
-                b.write("hdr", ResourceUsage::ColorAttachment);
-
-                b.execute([this, skyboxMaterial](vk::CommandBuffer cmd, uint32_t frame) {
+            // Render skybox first as background (before scene geometry)
+            if (environmentMap.isEnabled()) {
+                auto* skyboxMaterial = getMaterialManager()->getMaterialByName("Skybox");
+                if (skyboxMaterial && skyboxMaterial->getPipeline()) {
                     // Bind Skybox pipeline
                     skyboxMaterial->getPipeline()->bind(cmd);
 
                     // Rebind descriptor sets with Skybox's pipeline layout (different from PBR due to no push constants)
-                    // This is required by Vulkan spec: pipeline layouts with different push constant ranges are incompatible
                     auto& descMgr = resourceManager->getDescriptorManager();
                     vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frame);
                     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
@@ -244,24 +242,18 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
 
                     // Draw fullscreen triangle (no vertex buffer needed)
                     cmd.draw(3, 1, 0, 0);
-                });
-            });
-        }
-    }
+                }
+            }
 
-    // 6. Add Tonemap Pass (Post-processing: HDR -> Swapchain)
-    tonemap.addToRenderGraph();
-
-    // 7. Add Present Pass (Transition swapchain to PRESENT_SRC_KHR layout)
-    // Note: We declare write even though we don't actually write, so RenderGraph sets up renderArea
-    renderGraph->addPass("Present", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
-        b.write("swapchain", ResourceUsage::Present);
-        b.execute([](vk::CommandBuffer cmd, uint32_t frame) {
-            // Empty pass - only for layout transition to PRESENT_SRC_KHR
+            // Render scene geometry after skybox
+            renderScene(cmd, frame, *currentWorld);
         });
     });
 
-    // 8. Build & Compile
+    // Tonemap Pass: HDR → swapchain with tone mapping
+    tonemap.addToRenderGraph();
+
+    // 7. Build & Compile
     renderGraph->build();
     renderGraph->compile();
 }

@@ -261,3 +261,27 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/compile_commands.json
     ${CMAKE_SOURCE_DIR}/compile_commands.json
 )
+
+# ============================================
+# RenderGraph DAG Test (CPU-only, no Vulkan)
+# ============================================
+add_executable(RenderGraphTest
+    tests/render_graph_dag_test.cpp
+    tests/TestRenderGraph.cpp
+)
+
+target_compile_features(RenderGraphTest PRIVATE cxx_std_20)
+
+target_include_directories(RenderGraphTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+target_link_libraries(RenderGraphTest PRIVATE
+    EASTL
+    fmt::fmt
+)
+
+# Link C++ standard library on Linux when using Clang
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_link_libraries(RenderGraphTest PRIVATE stdc++)
+endif()

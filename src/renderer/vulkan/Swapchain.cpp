@@ -40,6 +40,7 @@ void Swapchain::recreate() {
 void Swapchain::createResources() {
     create();
     createImageViews();
+    transitionSwapchainImagesToPresent();
     createDepthResources();
 }
 
@@ -120,7 +121,7 @@ void Swapchain::createImageViews() {
         res.format = imageFormat;
         res.width = extent.width;
         res.height = extent.height;
-        res.layout = vk::ImageLayout::ePresentSrcKHR;  // Swapchain images default to PresentSrcKHR per Vulkan spec
+        res.layout = vk::ImageLayout::ePresentSrcKHR;  // Will be initialized by transitionSwapchainImagesToPresent()
         imageResources.push_back(res);
     }
 }
@@ -237,6 +238,64 @@ void Swapchain::createDepthResources() {
     );
 
     depthImageView = vk::raii::ImageView(context->getDeviceRAII(), viewInfo);
+}
+
+void Swapchain::transitionSwapchainImagesToPresent() {
+    // Create one-time command buffer for layout transitions
+    vk::CommandBufferAllocateInfo allocInfo;
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandPool = context->getCommandPool();
+    allocInfo.commandBufferCount = 1;
+
+    auto commandBuffers = context->getDevice().allocateCommandBuffers(allocInfo);
+    vk::CommandBuffer cmd = commandBuffers[0];
+
+    vk::CommandBufferBeginInfo beginInfo;
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    cmd.begin(beginInfo);
+
+    // Transition all swapchain images from Undefined to PresentSrcKHR
+    eastl::vector<vk::ImageMemoryBarrier2> barriers;
+    barriers.reserve(images.size());
+
+    for (size_t i = 0; i < images.size(); ++i) {
+        vk::ImageMemoryBarrier2 barrier;
+        barrier.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+        barrier.dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe;
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = {};
+        barrier.oldLayout = vk::ImageLayout::eUndefined;
+        barrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = images[i];
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        barriers.push_back(barrier);
+    }
+
+    vk::DependencyInfo dependencyInfo;
+    dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+    dependencyInfo.pImageMemoryBarriers = barriers.data();
+
+    cmd.pipelineBarrier2(dependencyInfo);
+    cmd.end();
+
+    // Submit and wait
+    vk::SubmitInfo submitInfo;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    auto result = context->getGraphicsQueue().submit(1, &submitInfo, {});
+    context->getGraphicsQueue().waitIdle();
+
+    context->getDevice().freeCommandBuffers(context->getCommandPool(), 1, &cmd);
+
+    violet::Log::info("Swapchain", "Transitioned {} swapchain images to PresentSrcKHR layout", images.size());
 }
 
 const ImageResource* Swapchain::getImageResource(size_t index) const {

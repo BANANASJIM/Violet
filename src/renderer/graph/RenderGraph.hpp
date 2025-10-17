@@ -50,8 +50,8 @@ struct BufferDesc {
 
 struct ResourceState {
     vk::ImageLayout layout = vk::ImageLayout::eUndefined;
-    vk::PipelineStageFlags stage = vk::PipelineStageFlagBits::eTopOfPipe;
-    vk::AccessFlags access = {};
+    vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eTopOfPipe;
+    vk::AccessFlags2 access = {};
 };
 
 struct LogicalResource {
@@ -67,6 +67,16 @@ struct LogicalResource {
 
     uint32_t firstUse = UINT32_MAX;
     uint32_t lastUse = 0;
+
+    // External resource constraints (initial/final layout, stage, and access)
+    struct ExternalConstraints {
+        vk::ImageLayout initialLayout = vk::ImageLayout::eUndefined;
+        vk::ImageLayout finalLayout = vk::ImageLayout::eUndefined;
+        vk::PipelineStageFlags2 initialStage = vk::PipelineStageFlagBits2::eTopOfPipe;
+        vk::PipelineStageFlags2 finalStage = vk::PipelineStageFlagBits2::eBottomOfPipe;
+        vk::AccessFlags2 initialAccess = {};  // Access mask from external user before RenderGraph
+        vk::AccessFlags2 finalAccess = {};    // Access mask for external user after RenderGraph
+    } externalConstraints;
 
     ResourceState state;
 
@@ -96,6 +106,9 @@ struct PassNode {
     bool reachable = false;
     uint32_t passIndex = 0;
 
+    // Dependency graph (for topological sorting)
+    eastl::vector<uint32_t> dependencies;  // Indices of passes this depends on
+
     // Compiled rendering state (built during compile phase)
     eastl::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
     vk::RenderingAttachmentInfo depthAttachmentInfo;
@@ -117,8 +130,24 @@ public:
     void cleanup();
 
     // Import external resources
-    ResourceHandle importImage(const eastl::string& name, const ImageResource* imageRes);
-    ResourceHandle importBuffer(const eastl::string& name, const BufferResource* bufferRes);
+    ResourceHandle importImage(
+        const eastl::string& name,
+        const ImageResource* imageRes,
+        vk::ImageLayout initialLayout = vk::ImageLayout::eUndefined,
+        vk::ImageLayout finalLayout = vk::ImageLayout::eUndefined,
+        vk::PipelineStageFlags2 initialStage = vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlags2 finalStage = vk::PipelineStageFlagBits2::eBottomOfPipe,
+        vk::AccessFlags2 initialAccess = {},
+        vk::AccessFlags2 finalAccess = {}
+    );
+    ResourceHandle importBuffer(
+        const eastl::string& name,
+        const BufferResource* bufferRes,
+        vk::PipelineStageFlags2 initialStage = vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlags2 finalStage = vk::PipelineStageFlagBits2::eBottomOfPipe,
+        vk::AccessFlags2 initialAccess = {},
+        vk::AccessFlags2 finalAccess = {}
+    );
 
     // Create internal resources
     ResourceHandle createImage(const eastl::string& name, const ImageDesc& desc, bool persistent);
@@ -160,10 +189,8 @@ private:
 
     struct Barrier {
         eastl::string resourceName;
-        vk::ImageMemoryBarrier imageBarrier;
-        vk::BufferMemoryBarrier bufferBarrier;
-        vk::PipelineStageFlags srcStage;
-        vk::PipelineStageFlags dstStage;
+        vk::ImageMemoryBarrier2 imageBarrier;
+        vk::BufferMemoryBarrier2 bufferBarrier;
         bool isImage;
     };
     //invalidate
@@ -174,18 +201,44 @@ private:
     bool built = false;
     bool compiled = false;
 
+    // Resource usage tracking for forward-looking barrier generation
+    struct ResourceUsageInfo {
+        uint32_t passIndex;
+        ResourceUsage usage;
+        bool isWrite;
+        vk::PipelineStageFlags2 stage;
+        vk::AccessFlags2 access;
+        vk::ImageLayout layout;
+    };
+    eastl::hash_map<eastl::string, eastl::vector<ResourceUsageInfo>> resourceUsageTable;
+
     void buildDependencyGraph();
     void pruneUnreachable();
     void computeLifetimes();
+    void topologicalSortWithOptimization();  // Optimize pass execution order
     void allocatePhysicalResources(uint32_t frameIndex);
     void buildRenderingInfos();  // Build vk::RenderingInfo for each pass
     void generateBarriers();
     void insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
     void insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
 
+    // Resource usage table helpers
+    void buildResourceUsageTable();
+    const ResourceUsageInfo* findNextUser(const eastl::string& resourceName, uint32_t currentPassIndex) const;
+
+    // Optimization heuristics
+    PassNode* selectOptimalPass(
+        const eastl::vector<PassNode*>& readyQueue,
+        PassNode* lastExecuted,
+        const eastl::hash_map<eastl::string, uint32_t>& externalFirstUse,
+        const eastl::hash_map<eastl::string, uint32_t>& externalLastUse
+    );
+    int countSharedResources(PassNode* a, PassNode* b);
+    int calculateLayoutTransitions(PassNode* next, PassNode* prev);
+
     vk::ImageLayout getLayoutForUsage(ResourceUsage usage) const;
-    vk::PipelineStageFlags getStageForUsage(ResourceUsage usage) const;
-    vk::AccessFlags getAccessForUsage(ResourceUsage usage) const;
+    vk::PipelineStageFlags2 getStageForUsage(ResourceUsage usage) const;
+    vk::AccessFlags2 getAccessForUsage(ResourceUsage usage) const;
 
     ResourceHandle getOrCreateResource(const eastl::string& name);
 };

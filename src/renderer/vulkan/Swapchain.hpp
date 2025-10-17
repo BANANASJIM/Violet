@@ -41,7 +41,8 @@ private:
     void createResources();
     void create();
     void createImageViews();
-    
+    void transitionSwapchainImagesToPresent();
+
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const eastl::vector<vk::SurfaceFormatKHR>& availableFormats);
     vk::PresentModeKHR chooseSwapPresentMode(const eastl::vector<vk::PresentModeKHR>& availablePresentModes);
     vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities);
