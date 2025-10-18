@@ -139,13 +139,13 @@ private:
 
     // Simple method resources
     eastl::unique_ptr<ComputePipeline> luminancePipeline;
-    vk::DescriptorSet luminanceDescriptorSet = VK_NULL_HANDLE;
+    eastl::vector<vk::DescriptorSet> luminanceDescriptorSets;  // One per frame in flight
     BufferResource luminanceBuffer;
     LuminanceData* mappedLuminanceData = nullptr;
 
     // Histogram method resources
     eastl::unique_ptr<ComputePipeline> histogramPipeline;
-    vk::DescriptorSet histogramDescriptorSet = VK_NULL_HANDLE;
+    eastl::vector<vk::DescriptorSet> histogramDescriptorSets;  // One per frame in flight
     BufferResource histogramBuffer;
     HistogramData* mappedHistogramData = nullptr;
 

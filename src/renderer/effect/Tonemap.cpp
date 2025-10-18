@@ -25,14 +25,13 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
     }
 
     // Allocate descriptor sets for HDR color and depth textures (one per frame in flight)
-    constexpr uint32_t framesInFlight = 3;
-    auto sets = descriptorManager->allocateSets("PostProcess", framesInFlight);
-    descriptorSets.resize(framesInFlight);
-    for (uint32_t i = 0; i < framesInFlight; ++i) {
+    auto sets = descriptorManager->allocateSets("PostProcess", MAX_FRAMES_IN_FLIGHT);
+    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         descriptorSets[i] = sets[i];
     }
 
-    violet::Log::info("Tonemap", "Initialized with {} -> {} ({} frames)", hdrName.c_str(), swapchainName.c_str(), framesInFlight);
+    violet::Log::info("Tonemap", "Initialized with {} -> {} ({} frames)", hdrName.c_str(), swapchainName.c_str(), MAX_FRAMES_IN_FLIGHT);
 }
 
 void Tonemap::cleanup() {

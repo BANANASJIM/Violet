@@ -27,10 +27,16 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedLuminanceData = static_cast<LuminanceData*>(luminanceBuffer.mappedData);
     *mappedLuminanceData = {};
 
-    luminanceDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
-    descriptorManager->updateSet(luminanceDescriptorSet, {
-        ResourceBindingDesc::storageBuffer(1, luminanceBuffer.buffer, 0, sizeof(LuminanceData))
-    });
+    // Allocate descriptor sets for all frames in flight
+    auto luminanceSets = descriptorManager->allocateSets("LuminanceCompute", MAX_FRAMES_IN_FLIGHT);
+    luminanceDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        luminanceDescriptorSets[i] = luminanceSets[i];
+        // Update storage buffer binding (same buffer for all frames)
+        descriptorManager->updateSet(luminanceDescriptorSets[i], {
+            ResourceBindingDesc::storageBuffer(1, luminanceBuffer.buffer, 0, sizeof(LuminanceData))
+        });
+    }
 
     luminancePipeline = eastl::make_unique<ComputePipeline>();
     ComputePipelineConfig config{};
@@ -48,10 +54,16 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedHistogramData->minLogLuminance = params.minLogLuminance;
     mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
 
-    histogramDescriptorSet = descriptorManager->allocateSet("LuminanceCompute", 0);
-    descriptorManager->updateSet(histogramDescriptorSet, {
-        ResourceBindingDesc::storageBuffer(1, histogramBuffer.buffer, 0, sizeof(HistogramData))
-    });
+    // Allocate descriptor sets for all frames in flight
+    auto histogramSets = descriptorManager->allocateSets("LuminanceCompute", MAX_FRAMES_IN_FLIGHT);
+    histogramDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        histogramDescriptorSets[i] = histogramSets[i];
+        // Update storage buffer binding (same buffer for all frames)
+        descriptorManager->updateSet(histogramDescriptorSets[i], {
+            ResourceBindingDesc::storageBuffer(1, histogramBuffer.buffer, 0, sizeof(HistogramData))
+        });
+    }
 
     histogramPipeline = eastl::make_unique<ComputePipeline>();
     config = {};
@@ -101,8 +113,15 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     vk::ImageView hdrView = hdrRes->isExternal ? hdrRes->imageResource->view : hdrRes->transientView;
     if (!hdrView) return;
 
-    // Update descriptor set (always update since RenderGraph rebuilds each frame)
-    vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ? luminanceDescriptorSet : histogramDescriptorSet;
+    if (frameIndex >= luminanceDescriptorSets.size() || frameIndex >= histogramDescriptorSets.size()) {
+        violet::Log::error("AutoExposure", "Invalid frame index: {}", frameIndex);
+        return;
+    }
+
+    // Update descriptor set for current frame (always update since RenderGraph rebuilds each frame)
+    vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ?
+        luminanceDescriptorSets[frameIndex] : histogramDescriptorSets[frameIndex];
+
     descriptorManager->updateSet(descSet, {
         ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge))
     });
@@ -110,7 +129,7 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     if (params.method == AutoExposureMethod::Simple) {
         cmd.fillBuffer(luminanceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipelineLayout(), 0, 1, &luminanceDescriptorSet, 0, nullptr);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipelineLayout(), 0, 1, &descSet, 0, nullptr);
         cmd.dispatch(1, 1, 1);
     } else {
         cmd.fillBuffer(histogramBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
@@ -120,7 +139,7 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         };
 
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipelineLayout(), 0, 1, &histogramDescriptorSet, 0, nullptr);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipelineLayout(), 0, 1, &descSet, 0, nullptr);
         cmd.pushConstants(histogramPipeline->getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pushConstants), &pushConstants);
         cmd.dispatch((sceneExtent.width + 15) / 16, (sceneExtent.height + 15) / 16, 1);
     }

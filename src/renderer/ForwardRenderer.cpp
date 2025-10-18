@@ -255,6 +255,11 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
         b.read("hdr", ResourceUsage::ShaderRead);
         b.read("depth", ResourceUsage::ShaderRead);
+        // Declare dependency on AutoExposure buffer to prevent pass culling
+        // (even though we read EV100 via CPU, we need GPU dependency for RenderGraph)
+        if (autoExposure.isEnabled()) {
+            b.read(autoExposure.getBufferName(), ResourceUsage::ShaderRead);
+        }
         b.write("swapchain", ResourceUsage::Present);
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
             tonemap.executePass(cmd, frame);

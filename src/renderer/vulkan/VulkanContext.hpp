@@ -12,6 +12,9 @@
 
 namespace violet {
 
+// Global rendering constants
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;  // Triple buffering
+
 struct QueueFamilyIndices {
     eastl::optional<uint32_t> graphicsFamily;
     eastl::optional<uint32_t> presentFamily;
