@@ -206,10 +206,11 @@ Material* MaterialManager::createPostProcessMaterial() {
     // Configure pipeline for post-processing
     PipelineConfig config;
     config.useVertexInput = false;  // Full-screen triangle
+    config.cullMode = vk::CullModeFlagBits::eNone;  // Disable culling for fullscreen quad
     config.enableDepthTest = false;  // Don't test against depth
-    config.enableDepthWrite = true;   // Write depth from shader (gl_FragDepth)
+    config.enableDepthWrite = false;  // Tonemap pass has no depth attachment
     config.colorFormats = formats.colorFormats;
-    config.depthFormat = formats.depthFormat;  // Match depth format for writing
+    config.depthFormat = vk::Format::eUndefined;  // No depth attachment
     config.stencilFormat = formats.stencilFormat;
 
     // Push constants for tonemap parameters (ev100, gamma, tonemapMode, padding = 16 bytes)
