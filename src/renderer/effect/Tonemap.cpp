@@ -43,17 +43,6 @@ void Tonemap::cleanup() {
     context = nullptr;
 }
 
-void Tonemap::addToRenderGraph() {
-    if (!renderGraph) return;
-
-    renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
-        b.read(hdrImageName, ResourceUsage::ShaderRead);
-        b.read("depth", ResourceUsage::ShaderRead);  // Read depth from Main pass
-        b.write(swapchainImageName, ResourceUsage::Present);  // Present to swapchain
-        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executePass(cmd, frame); });
-    });
-}
-
 void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     if (!postProcessMaterial || !postProcessMaterial->getPipeline()) {
         violet::Log::error("Tonemap", "PostProcess material or pipeline not available");
@@ -96,6 +85,29 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge)),
         ResourceBindingDesc::sampledImage(1, depthView, descriptorManager->getSampler(SamplerType::ClampToEdge))
     });
+
+    // Get swapchain resource to determine viewport/scissor dimensions
+    const LogicalResource* swapchainRes = renderGraph->getResource(swapchainImageName);
+    if (!swapchainRes || !swapchainRes->imageResource) {
+        violet::Log::error("Tonemap", "Swapchain resource not found");
+        return;
+    }
+
+    // Set viewport (dynamic state)
+    vk::Viewport viewport;
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapchainRes->imageResource->width);
+    viewport.height = static_cast<float>(swapchainRes->imageResource->height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    cmd.setViewport(0, 1, &viewport);
+
+    // Set scissor (dynamic state)
+    vk::Rect2D scissor;
+    scissor.offset = vk::Offset2D{0, 0};
+    scissor.extent = vk::Extent2D{swapchainRes->imageResource->width, swapchainRes->imageResource->height};
+    cmd.setScissor(0, 1, &scissor);
 
     // Bind pipeline
     postProcessMaterial->getPipeline()->bind(cmd);

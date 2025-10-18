@@ -79,12 +79,12 @@ void AutoExposure::cleanup() {
     context = nullptr;
 }
 
-void AutoExposure::addToRenderGraph() {
-    if (!params.enabled || !renderGraph) return;
+void AutoExposure::importBufferToRenderGraph(RenderGraph* graph) {
+    if (!params.enabled || !graph) return;
 
     // Import readback buffer with GPU→CPU synchronization
     // GPU writes in compute shader, CPU reads after frame completion
-    renderGraph->importBuffer(
+    graph->importBuffer(
         getActiveBufferName(),
         getActiveReadbackBuffer(),
         vk::PipelineStageFlagBits2::eComputeShader,  // initialStage: GPU writes
@@ -92,14 +92,9 @@ void AutoExposure::addToRenderGraph() {
         vk::AccessFlagBits2::eShaderWrite,           // initialAccess: compute shader output
         vk::AccessFlagBits2::eHostRead               // finalAccess: CPU readback
     );
-    renderGraph->addComputePass("AutoExposure", [this](RenderGraph::PassBuilder& b, ComputePass& p) {
-        b.read(hdrImageName, ResourceUsage::ShaderRead);
-        b.write(getActiveBufferName(), ResourceUsage::ShaderWrite);
-        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) { executeComputePass(cmd, frame); });
-    });
 }
 
-void AutoExposure::executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
+void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     const LogicalResource* hdrRes = renderGraph->getResource(hdrImageName);
     if (!hdrRes) return;
 

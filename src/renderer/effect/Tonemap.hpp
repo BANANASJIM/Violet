@@ -26,7 +26,7 @@ enum class TonemapMode : uint32_t {
 struct TonemapParams {
     float ev100 = 9.0f;           // Exposure Value at ISO 100 (sunny day default)
     float gamma = 2.2f;           // Gamma correction (default 2.2 for sRGB)
-    TonemapMode mode = TonemapMode::ACESFitted;  // Tonemap operator mode
+    TonemapMode mode = TonemapMode::ACESNarkowicz;  // Tonemap operator mode
 
     // EV100 limits for clamping
     float minEV100 = -2.0f;       // Night scene
@@ -44,8 +44,8 @@ public:
               const eastl::string& hdrImageName, const eastl::string& swapchainImageName);
     void cleanup();
 
-    // RenderGraph integration
-    void addToRenderGraph();
+    // RenderGraph integration - execution only (pass declaration in ForwardRenderer)
+    void executePass(vk::CommandBuffer cmd, uint32_t frameIndex);
 
     // Parameter access
     TonemapParams& getParams() { return params; }
@@ -59,8 +59,6 @@ public:
     TonemapMode getMode() const { return params.mode; }
 
 private:
-    void executePass(vk::CommandBuffer cmd, uint32_t frameIndex);
-
     VulkanContext* context = nullptr;
     MaterialManager* materialManager = nullptr;
     DescriptorManager* descriptorManager = nullptr;

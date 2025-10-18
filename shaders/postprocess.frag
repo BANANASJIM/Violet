@@ -154,5 +154,5 @@ void main() {
     color = pow(color, vec3(1.0 / params.gamma));
 
     outColor = vec4(color, 1.0);
-    gl_FragDepth = depth;
+    // gl_FragDepth = depth;  // REMOVED: Tonemap pass has no depth attachment
 }

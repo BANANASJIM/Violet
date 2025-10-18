@@ -3,14 +3,11 @@
 #include <glm/glm.hpp>
 
 #include <EASTL/unique_ptr.h>
-#include <chrono>
-
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/ResourceManager.hpp"
 
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
-#include "core/Exception.hpp"
 #include "core/Timer.hpp"
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
@@ -21,7 +18,6 @@
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/UniformBuffer.hpp"
-#include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/Swapchain.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 
@@ -79,8 +75,6 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
 
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
-    // TEMPORARY: Disable auto-exposure for testing Main + Tonemap only
-    autoExposure.getParams().enabled = false;
 
     matMgr->createPostProcessMaterial();
     matMgr->createPBRBindlessMaterial();
@@ -209,10 +203,6 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     };
     renderGraph->createImage("depth", depthDesc, false);
 
-    // Add auto-exposure pass (if enabled)
-    autoExposure.addToRenderGraph();
-
-    // Main Pass: Skybox + Scene rendering to HDR target
     renderGraph->addPass("Main", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
         b.write("hdr", ResourceUsage::ColorAttachment);
         b.write("depth", ResourceUsage::DepthAttachment);
@@ -250,10 +240,27 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
         });
     });
 
-    // Tonemap Pass: HDR → swapchain with tone mapping
-    tonemap.addToRenderGraph();
+    if (autoExposure.isEnabled()) {
+        autoExposure.importBufferToRenderGraph(renderGraph.get());
 
-    // 7. Build & Compile
+        renderGraph->addComputePass("AutoExposure", [this](RenderGraph::PassBuilder& b, ComputePass& p) {
+            b.read("hdr", ResourceUsage::ShaderRead);
+            b.write(autoExposure.getBufferName(), ResourceUsage::ShaderWrite);
+            b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+                autoExposure.executePass(cmd, frame);
+            });
+        });
+    }
+
+    renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+        b.read("hdr", ResourceUsage::ShaderRead);
+        b.read("depth", ResourceUsage::ShaderRead);
+        b.write("swapchain", ResourceUsage::Present);
+        b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+            tonemap.executePass(cmd, frame);
+        });
+    });
+
     renderGraph->build();
     renderGraph->compile();
 }

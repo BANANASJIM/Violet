@@ -21,7 +21,7 @@ enum class AutoExposureMethod {
 
 // Auto-exposure parameters
 struct AutoExposureParams {
-    bool enabled = false;              // Enable/disable auto-exposure
+    bool enabled = true;               // Enable/disable auto-exposure
     AutoExposureMethod method = AutoExposureMethod::Histogram; // Method to use
     float adaptationSpeed = 2.0f;      // Speed of adaptation (higher = faster)
     float minEV100 = 1.0f;             // Minimum EV100 (prevent too dark)
@@ -70,7 +70,8 @@ public:
 
     void cleanup();
 
-    void addToRenderGraph();
+    void importBufferToRenderGraph(RenderGraph* graph);
+    void executePass(vk::CommandBuffer cmd, uint32_t frameIndex);
 
     void updateExposure();
 
@@ -79,6 +80,9 @@ public:
     float getTargetEV100() const { return targetEV100; }
     AutoExposureParams& getParams() { return params; }
     const AutoExposureParams& getParams() const { return params; }
+
+    eastl::string getBufferName() const { return getActiveBufferName(); }
+    bool isEnabled() const { return params.enabled; }
 
     /**
      * @brief Set manual EV100 (when auto-exposure disabled)
@@ -102,8 +106,6 @@ public:
     void resize(vk::Extent2D newExtent);
 
 private:
-    void executeComputePass(vk::CommandBuffer cmd, uint32_t frameIndex);
-
     /**
      * @brief Convert average luminance to EV100
      * Formula from Frostbite: EV100 = log2(avgLuminance * S / K)
