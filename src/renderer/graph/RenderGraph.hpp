@@ -96,7 +96,7 @@ struct PassNode {
     eastl::unique_ptr<Pass> pass;  // Pass object (created during build())
 
     struct ResourceAccess {
-        eastl::string resourceName;  // Reference to LogicalResource
+        eastl::string resourceName;
         ResourceUsage usage;
         bool isWrite;
     };
@@ -107,7 +107,7 @@ struct PassNode {
     uint32_t passIndex = 0;
 
     // Dependency graph (for topological sorting)
-    eastl::vector<uint32_t> dependencies;  // Indices of passes this depends on
+    eastl::vector<uint32_t> dependencies;
 
     // Compiled rendering state (built during compile phase)
     eastl::vector<vk::RenderingAttachmentInfo> colorAttachmentInfos;
@@ -162,10 +162,9 @@ public:
         PassBuilder& execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback);
 
     private:
-        PassNode& node;  // Reference to PassNode being configured
+        PassNode& node;
     };
 
-    // Callback-style API (option 2)
     void addPass(const eastl::string& name, eastl::function<void(PassBuilder&, RenderPass&)> setupCallback);
     void addComputePass(const eastl::string& name, eastl::function<void(PassBuilder&, ComputePass&)> setupCallback);
 
@@ -222,7 +221,6 @@ private:
     void insertPreBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
     void insertPostBarriers(vk::CommandBuffer cmd, uint32_t passIndex);
 
-    // Resource usage table helpers
     void buildResourceUsageTable();
     const ResourceUsageInfo* findNextUser(const eastl::string& resourceName, uint32_t currentPassIndex) const;
 

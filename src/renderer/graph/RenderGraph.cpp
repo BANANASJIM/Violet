@@ -32,7 +32,6 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(const eastl::string& r
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback) {
-    // Set callback on the Pass object
     if (auto* renderPass = dynamic_cast<RenderPass*>(node.pass.get())) {
         renderPass->setExecuteCallback(callback);
     } else if (auto* computePass = dynamic_cast<ComputePass*>(node.pass.get())) {
@@ -42,21 +41,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::execute(eastl::function<void
 }
 
 void RenderGraph::addPass(const eastl::string& name, eastl::function<void(PassBuilder&, RenderPass&)> setupCallback) {
-    // Create RenderPass object
     auto renderPass = eastl::make_unique<RenderPass>();
     renderPass->init(context, name);
 
-    // Create PassNode and store Pass
     auto node = eastl::make_unique<PassNode>();
     node->pass = eastl::move(renderPass);
 
-    // Create PassBuilder for configuration
-    PassBuilder builder(*node);
+PassBuilder builder(*node);
 
-    // Call user setup callback
     setupCallback(builder, *static_cast<RenderPass*>(node->pass.get()));
 
-    // Store PassNode
     passes.push_back(eastl::move(node));
 
     Log::trace("RenderGraph", "Added graphics pass '{}'", name.c_str());
@@ -231,14 +225,13 @@ void RenderGraph::build() {
 }
 
 void RenderGraph::buildDependencyGraph() {
-    // Step 0: Initialize pass indices and reset state
     for (uint32_t i = 0; i < passes.size(); ++i) {
         passes[i]->passIndex = i;
         passes[i]->reachable = false;
         passes[i]->dependencies.clear();
     }
 
-    // Step 1: Build resource writer map (resource name → index of pass that writes it)
+    //Build resource writer map (resource name → index of pass that writes it)
     eastl::hash_map<eastl::string, uint32_t> resourceWriters;
 
     for (const auto& pass : passes) {
@@ -251,7 +244,7 @@ void RenderGraph::buildDependencyGraph() {
         }
     }
 
-    // Step 2: Find Present passes (graph endpoints)
+    // Find Present passes (graph endpoints)
     // Present usage marks passes that write to external resources for presentation
     eastl::vector<uint32_t> presentPasses;
 
@@ -272,7 +265,7 @@ void RenderGraph::buildDependencyGraph() {
         return;
     }
 
-    // Step 3: Backward BFS traversal from Present passes
+    // Backward BFS traversal from Present passes
     eastl::queue<uint32_t> queue;
 
     // Enqueue all Present passes
