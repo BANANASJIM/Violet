@@ -20,6 +20,9 @@
 #include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/Swapchain.hpp"
 #include "renderer/graph/RenderGraph.hpp"
+#include "renderer/LightingSystem.hpp"
+#include "renderer/ShadowSystem.hpp"
+#include "renderer/ShadowPass.hpp"
 
 namespace violet {
 
@@ -92,6 +95,16 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize material data SSBO for bindless architecture
     descMgr.initMaterialDataBuffer(1024);
 
+    // Initialize lighting and shadow systems
+    lightingSystem = new LightingSystem();
+    lightingSystem->init(context, &descMgr, maxFramesInFlight);
+
+    shadowSystem = new ShadowSystem();
+    shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
+
+    shadowPass = eastl::make_unique<ShadowPass>();
+    shadowPass->init(context, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
+
 }
 
 void ForwardRenderer::cleanup() {
@@ -105,6 +118,20 @@ void ForwardRenderer::cleanup() {
 
     // Step 2: Cleanup high-level rendering components
     // These may still reference materials/textures, so clean them before destroying resources
+    shadowPass.reset();
+
+    if (shadowSystem) {
+        shadowSystem->cleanup();
+        delete shadowSystem;
+        shadowSystem = nullptr;
+    }
+
+    if (lightingSystem) {
+        lightingSystem->cleanup();
+        delete lightingSystem;
+        lightingSystem = nullptr;
+    }
+
     environmentMap.cleanup();
     tonemap.cleanup();
     debugRenderer.cleanup();
@@ -133,6 +160,18 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
 
     updateGlobalUniforms(world, frameIndex);
     collectRenderables(world);
+
+    // Update lighting and shadow systems
+    if (lightingSystem && shadowSystem) {
+        Camera* activeCamera = globalUniforms.findActiveCamera(world);
+        if (activeCamera) {
+            lightingSystem->update(world, activeCamera->getFrustum(), frameIndex);
+            shadowSystem->update(world, *lightingSystem, activeCamera, frameIndex);
+
+            lightingSystem->uploadToGPU(frameIndex);
+            shadowSystem->uploadToGPU(frameIndex);
+        }
+    }
 }
 
 void ForwardRenderer::renderFrame(vk::CommandBuffer cmd, uint32_t imageIndex, vk::Extent2D extent, uint32_t frameIndex) {
@@ -183,13 +222,16 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
         {});                                                      // finalAccess: None (ImGui barrier handles dstAccess)
 
     // Create transient HDR render target
+    vk::ClearColorValue hdrClearColor;
+    hdrClearColor.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+
     ImageDesc hdrDesc{
         .format = vk::Format::eR16G16B16A16Sfloat,
         .extent = {currentExtent.width, currentExtent.height, 1},
         .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
         .mipLevels = 1,
         .arrayLayers = 1,
-        .clearValue = vk::ClearColorValue{std::array{0.0f, 0.0f, 0.0f, 1.0f}}
+        .clearValue = hdrClearColor
     };
     renderGraph->createImage("hdr", hdrDesc, false);
 
@@ -203,9 +245,67 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     };
     renderGraph->createImage("depth", depthDesc, false);
 
+    // Import shadow atlas from ShadowSystem as external resource
+    if (shadowSystem) {
+        const ImageResource* atlasRes = shadowSystem->getAtlasImage();
+        if (atlasRes && atlasRes->image) {
+            renderGraph->importImage("shadowAtlas", atlasRes,
+                vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+                vk::PipelineStageFlagBits2::eNone,
+                vk::PipelineStageFlagBits2::eFragmentShader,
+                {},
+                vk::AccessFlagBits2::eShaderSampledRead);
+        }
+    }
+
+    // Shadow pass - render shadow maps to atlas before main pass
+    if (shadowSystem && shadowSystem->getShadowCount() > 0) {
+        renderGraph->addPass("Shadow", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+            vk::ClearValue clearValue;
+            clearValue.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+
+            b.write("shadowAtlas", ResourceUsage::DepthAttachment, AttachmentOptions{
+                .loadOp = vk::AttachmentLoadOp::eClear,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .clearValue = clearValue,
+                .hasValue = true
+            });
+
+            b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
+                if (shadowPass) {
+                    shadowPass->executePass(cmd, frame, renderables);
+                }
+            });
+        });
+    }
+
     renderGraph->addPass("Main", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
-        b.write("hdr", ResourceUsage::ColorAttachment);
-        b.write("depth", ResourceUsage::DepthAttachment);
+        // HDR color attachment
+        vk::ClearValue hdrClear;
+        hdrClear.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+        b.write("hdr", ResourceUsage::ColorAttachment, AttachmentOptions{
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = hdrClear,
+            .hasValue = true
+        });
+
+        // Depth attachment
+        vk::ClearValue depthClear;
+        depthClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        b.write("depth", ResourceUsage::DepthAttachment, AttachmentOptions{
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = depthClear,
+            .hasValue = true
+        });
+
+        // Read shadow atlas if shadows are enabled
+        if (shadowSystem && shadowSystem->getShadowCount() > 0) {
+            b.read("shadowAtlas", ResourceUsage::ShaderRead);
+        }
+
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
             // Render skybox first as background (before scene geometry)
             if (environmentMap.isEnabled()) {
@@ -253,6 +353,7 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
     }
 
     renderGraph->addPass("Tonemap", [this](RenderGraph::PassBuilder& b, RenderPass& p) {
+        // Read inputs
         b.read("hdr", ResourceUsage::ShaderRead);
         b.read("depth", ResourceUsage::ShaderRead);
         // Declare dependency on AutoExposure buffer to prevent pass culling
@@ -260,7 +361,11 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
         if (autoExposure.isEnabled()) {
             b.read(autoExposure.getBufferName(), ResourceUsage::ShaderRead);
         }
+
+        // Swapchain as color attachment for presentation
+        // Use write() with Present usage instead of writeColorAttachment to avoid duplicate accesses
         b.write("swapchain", ResourceUsage::Present);
+
         b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
             tonemap.executePass(cmd, frame);
         });
@@ -463,18 +568,20 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     // Bind pipeline once for all objects
     pbrBindlessMaterial->getPipeline()->bind(commandBuffer);
 
-    // Bind all descriptor sets once (set 0: Global, set 1: Bindless Textures, set 2: Material Data SSBO)
+    // Bind all descriptor sets once (set 0-4: Global, Bindless, MaterialData, Lighting, Shadow)
     auto& descMgr = resourceManager->getDescriptorManager();
     vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
     vk::DescriptorSet materialDataSet = descMgr.getMaterialDataSet();
+    vk::DescriptorSet lightingSet = lightingSystem ? lightingSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};
+    vk::DescriptorSet shadowSet = shadowSystem ? shadowSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};
 
-    eastl::array<vk::DescriptorSet, 3> descriptorSets = {globalSet, bindlessSet, materialDataSet};
+    eastl::array<vk::DescriptorSet, 5> descriptorSets = {globalSet, bindlessSet, materialDataSet, lightingSet, shadowSet};
     commandBuffer.bindDescriptorSets(
         vk::PipelineBindPoint::eGraphics,
         pbrBindlessMaterial->getPipelineLayout(),
         0,  // First set = 0
-        3,  // Bind 3 sets
+        5,  // Bind 5 sets
         descriptorSets.data(),
         0,
         nullptr
@@ -655,59 +762,14 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
     cachedUBO.proj      = activeCamera->getProjectionMatrix();
     cachedUBO.cameraPos = activeCamera->getPosition();
 
-    // Collect lights from the scene
-    cachedUBO.numLights = 0;
-
-    // Process lights with frustum culling for point lights
-    const Frustum& frustum = activeCamera->getFrustum();
-
-    auto lightView = world.view<LightComponent, TransformComponent>();
-    for (auto entity : lightView) {
-        if (cachedUBO.numLights >= MAX_LIGHTS) {
-            break;  // Maximum lights reached
-        }
-
-        const auto& light = lightView.get<LightComponent>(entity);
-        const auto& transform = lightView.get<TransformComponent>(entity);
-
-        if (!light.enabled) {
-            continue;
-        }
-
-        // For point lights, check if within frustum
-        if (light.type == LightType::Point) {
-            AABB lightBounds = light.getBoundingSphere(transform.world.position);
-            if (!frustum.testAABB(lightBounds)) {
-                continue;  // Skip lights outside frustum
-            }
-        }
-
-        uint32_t lightIndex = cachedUBO.numLights;
-
-        // Set light position/direction based on type
-        if (light.type == LightType::Directional) {
-            // Store direction (not position) for directional lights
-            cachedUBO.lightPositions[lightIndex] = glm::vec4(light.direction, 0.0f);  // w=0 for directional
-        } else {
-            // Store position for point lights
-            cachedUBO.lightPositions[lightIndex] = glm::vec4(transform.world.position, 1.0f);  // w=1 for point
-        }
-
-        // Store color with intensity (physical units: lux for directional, lumens for point) and radius
-        glm::vec3 finalColor = light.color * light.intensity;
-        cachedUBO.lightColors[lightIndex] = glm::vec4(finalColor, light.radius);
-
-        cachedUBO.numLights++;
-    }
-
-    // Set ambient light (can be made configurable later)
-    cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);  // Subtle blue-ish ambient
+    cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);
 
     // Set skybox parameters (will be configurable via UI)
     cachedUBO.skyboxExposure = skyboxExposure;
     cachedUBO.skyboxRotation = skyboxRotation;
     cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
     cachedUBO.iblIntensity = iblIntensity;
+    cachedUBO.shadowsEnabled = 1; // TODO: Make configurable via UI
 
     // Update IBL bindless indices
     cachedUBO.environmentMapIndex = iblEnvironmentMapIndex;
@@ -877,6 +939,24 @@ void ForwardRenderer::registerDescriptorLayouts() {
         .bindings = {
             {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute},
             {.binding = 1, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eCompute}
+        },
+        .frequency = UpdateFrequency::PerFrame
+    });
+
+    // Lighting system - LightData SSBO (set 3)
+    descMgr.registerLayout({
+        .name = "Lighting",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
+        },
+        .frequency = UpdateFrequency::PerFrame
+    });
+
+    // Shadow system - ShadowData SSBO (set 4)
+    descMgr.registerLayout({
+        .name = "Shadow",
+        .bindings = {
+            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
         },
         .frequency = UpdateFrequency::PerFrame
     });

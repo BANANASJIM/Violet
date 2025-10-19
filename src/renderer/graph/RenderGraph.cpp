@@ -22,11 +22,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::read(const eastl::string& re
     return *this;
 }
 
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(const eastl::string& resourceName, ResourceUsage usage) {
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::write(
+    const eastl::string& resourceName,
+    ResourceUsage usage,
+    const AttachmentOptions& options
+) {
     PassNode::ResourceAccess access;
     access.resourceName = resourceName;
     access.usage = usage;
     access.isWrite = true;
+    access.options = options;
     node.accesses.push_back(access);
     return *this;
 }
@@ -984,16 +989,36 @@ ResourceHandle RenderGraph::getOrCreateResource(const eastl::string& name) {
 }
 
 void RenderGraph::buildRenderingInfos() {
-    // Build vk::RenderingAttachmentInfo for each pass based on resource accesses
+    // Build vk::RenderingAttachmentInfo for each pass based on resource accesses with attachment options
     for (auto& pass : compiledPasses) {
         pass->colorAttachmentInfos.clear();
         pass->hasDepth = false;
         pass->hasStencil = false;
         pass->renderArea = vk::Extent2D{0, 0};
 
+        // Process all resource accesses
+        const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
+
         for (const auto& access : pass->accesses) {
+            // Only process write accesses that are attachments or present
+            if (!access.isWrite) {
+                continue;
+            }
+            if (access.usage != ResourceUsage::ColorAttachment &&
+                access.usage != ResourceUsage::DepthAttachment &&
+                access.usage != ResourceUsage::Present) {
+                continue;
+            }
+
             auto it = resources.find(access.resourceName);
-            if (it == resources.end() || it->second.type != ResourceType::Image) {
+            if (it == resources.end()) {
+                Log::warn("RenderGraph", "Pass '{}': resource '{}' not found in resources map!",
+                         passName, access.resourceName.c_str());
+                continue;
+            }
+            if (it->second.type != ResourceType::Image) {
+                Log::warn("RenderGraph", "Pass '{}': resource '{}' is not an Image (type={})",
+                         passName, access.resourceName.c_str(), static_cast<int>(it->second.type));
                 continue;
             }
 
@@ -1006,13 +1031,12 @@ void RenderGraph::buildRenderingInfos() {
             } else if (res.transientView) {
                 imageView = res.transientView;
             } else {
-                const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
                 Log::warn("RenderGraph", "Pass '{}': resource '{}' has no valid ImageView",
                          passName, access.resourceName.c_str());
                 continue;
             }
 
-            // Update render area based on resource extent
+            // Update render area based on attachment extent
             if (res.imageDesc.extent.width > pass->renderArea.width) {
                 pass->renderArea.width = res.imageDesc.extent.width;
             }
@@ -1020,40 +1044,51 @@ void RenderGraph::buildRenderingInfos() {
                 pass->renderArea.height = res.imageDesc.extent.height;
             }
 
-            // Build attachment info based on usage
-            if ((access.usage == ResourceUsage::ColorAttachment || access.usage == ResourceUsage::Present) && access.isWrite) {
+            // Determine load/store/clear operations
+            vk::AttachmentLoadOp loadOp;
+            vk::AttachmentStoreOp storeOp;
+            vk::ClearValue clearValue;
+
+            if (access.options.hasValue) {
+                // Use explicitly provided options
+                loadOp = access.options.loadOp;
+                storeOp = access.options.storeOp;
+                clearValue = access.options.clearValue;
+            } else {
+                // Use default values based on usage
+                if (access.usage == ResourceUsage::Present) {
+                    loadOp = vk::AttachmentLoadOp::eDontCare;  // Don't care about previous content for swapchain
+                    storeOp = vk::AttachmentStoreOp::eStore;   // Must store for presentation
+                    clearValue.color.setFloat32({0.0f, 0.0f, 0.0f, 1.0f});
+                } else {
+                    loadOp = vk::AttachmentLoadOp::eClear;
+                    storeOp = vk::AttachmentStoreOp::eStore;
+                    clearValue = res.imageDesc.clearValue;
+                }
+            }
+
+            // Build attachment info based on usage type
+            if (access.usage == ResourceUsage::ColorAttachment || access.usage == ResourceUsage::Present) {
                 vk::RenderingAttachmentInfo attachmentInfo;
                 attachmentInfo.imageView = imageView;
-                // Use ColorAttachmentOptimal even for Present usage during rendering
-                // POST-BARRIER will handle transition to PresentSrcKHR after rendering
                 attachmentInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-                attachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;  // TODO: Allow configuration
-                attachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
-                attachmentInfo.clearValue = res.imageDesc.clearValue;
+                attachmentInfo.loadOp = loadOp;
+                attachmentInfo.storeOp = storeOp;
+                attachmentInfo.clearValue = clearValue;
 
                 pass->colorAttachmentInfos.push_back(attachmentInfo);
 
             } else if (access.usage == ResourceUsage::DepthAttachment) {
-                // Add depth attachment for both read and write
                 pass->depthAttachmentInfo.imageView = imageView;
-                pass->depthAttachmentInfo.imageLayout = getLayoutForUsage(access.usage);
-
-                if (access.isWrite) {
-                    // Write access: clear and store
-                    pass->depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-                    pass->depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
-                    pass->depthAttachmentInfo.clearValue = res.imageDesc.clearValue;
-                } else {
-                    // Read-only access: load existing content, don't store
-                    pass->depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eLoad;
-                    pass->depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eDontCare;
-                }
+                pass->depthAttachmentInfo.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+                pass->depthAttachmentInfo.loadOp = loadOp;
+                pass->depthAttachmentInfo.storeOp = storeOp;
+                pass->depthAttachmentInfo.clearValue = clearValue;
 
                 pass->hasDepth = true;
             }
         }
 
-        const char* passName = pass->pass ? pass->pass->getName().c_str() : "unknown";
         Log::trace("RenderGraph", "Pass '{}': {} color attachments, {} depth, render area [{}, {}]",
                   passName, pass->colorAttachmentInfos.size(),
                   pass->hasDepth ? "has" : "no", pass->renderArea.width, pass->renderArea.height);

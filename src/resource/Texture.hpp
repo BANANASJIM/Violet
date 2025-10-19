@@ -63,11 +63,15 @@ public:
     // 2D texture support
     void createEmpty2D(VulkanContext* context, uint32_t width, uint32_t height, vk::Format format, vk::ImageUsageFlags usage);
 
+    // Depth texture support (for shadow maps, etc.)
+    void createDepthTexture(VulkanContext* context, uint32_t width, uint32_t height, vk::ImageUsageFlags usage);
+
     void cleanup() override;
 
     [[nodiscard]] vk::Image getImage() const { return imageResource.image; }
     [[nodiscard]] vk::ImageView getImageView() const { return *imageView; }
     [[nodiscard]] vk::Sampler getSampler() const { return sampler; }
+    [[nodiscard]] const ImageResource* getImageResource() const { return &imageResource; }
     [[nodiscard]] bool isCubemap() const { return isCubemapTexture; }
     [[nodiscard]] bool isHDR() const { return format == vk::Format::eR16G16B16A16Sfloat || format == vk::Format::eR32G32B32A32Sfloat; }
     [[nodiscard]] vk::Format getFormat() const { return format; }

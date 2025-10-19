@@ -178,6 +178,14 @@ struct LightComponent {
 
     bool enabled = true;
 
+    // Shadow parameters
+    bool castsShadows = true;                    // Whether this light casts shadows
+    uint32_t shadowResolution = 2048;            // Shadow map resolution (2048 for directional, 512 for point lights)
+    float shadowBias = 0.0005f;                  // Depth bias to prevent shadow acne
+    float shadowNormalBias = 0.001f;             // Normal-based bias
+    float shadowNearPlane = 0.1f;                // Near plane for shadow projection
+    float shadowFarPlane = 100.0f;               // Far plane for shadow projection (point/spot)
+
     // Get bounding sphere for point light culling (world space)
     AABB getBoundingSphere(const glm::vec3& worldPosition) const {
         if (type == LightType::Point) {

@@ -9,24 +9,20 @@
 //            http://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf
 // ========================================
 
-// Set 0: Global UBO (camera + lights)
+// Set 0: Global UBO (camera + IBL)
 layout(set = 0, binding = 0) uniform GlobalUBO {
 mat4 view;
 mat4 proj;
 vec3 cameraPos;
 float padding0;
 
-// Light data (physical units: lux for directional, lumens for point)
-vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
-vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
-int numLights;
 vec3 ambientLight;
-
-// Skybox data
 float skyboxExposure;
+
 float skyboxRotation;
 int skyboxEnabled;
 float iblIntensity;
+int shadowsEnabled;
 
 // IBL bindless texture indices
 uint environmentMapIndex;
@@ -62,6 +58,35 @@ uint padding[3];  // Align to 16 bytes
 layout(set = 2, binding = 0) readonly buffer MaterialDataBuffer {
 MaterialData data[];
 } materials;
+
+// Set 3: Lighting SSBO
+struct LightData {
+vec4 positionAndType;  // xyz=position/direction, w=type (0=dir, 1=point)
+vec4 colorAndRadius;   // xyz=color*intensity (lux/lumens), w=radius
+int shadowIndex;       // Index into ShadowData (-1 if no shadow)
+uint padding[3];
+};
+
+layout(set = 3, binding = 0) readonly buffer LightDataBuffer {
+uint count;
+uint padding[3];
+LightData data[];
+} lights;
+
+// Set 4: Shadow SSBO
+struct ShadowData {
+mat4 lightSpaceMatrix;
+mat4 cubeFaceMatrices[6];
+vec4 atlasRect;        // x, y, width, height (normalized 0-1)
+vec4 shadowParams;     // x=bias, y=normalBias, z=pcfRadius, w=unused
+uint lightType;        // 0=directional, 1=point
+uint atlasIndex;       // Bindless shadow atlas texture index
+uint padding[2];
+};
+
+layout(set = 4, binding = 0) readonly buffer ShadowDataBuffer {
+ShadowData data[];
+} shadows;
 
 // Push constants
 layout(push_constant) uniform PushConstants {
@@ -154,6 +179,60 @@ return vec3(
 }
 
 // ========================================
+// Shadow Functions
+// ========================================
+
+float calculateShadow(int shadowIndex, vec3 fragPos, vec3 normal, vec3 lightDir) {
+    // Check if shadows are globally enabled
+    if (global.shadowsEnabled == 0 || shadowIndex < 0) {
+        return 1.0;
+    }
+
+    ShadowData shadow = shadows.data[shadowIndex];
+
+    // Transform fragment position to light space
+    vec4 lightSpacePos = shadow.lightSpaceMatrix * vec4(fragPos, 1.0);
+
+    // Perform perspective divide
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Transform to [0,1] range for texture sampling
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+    // Check if fragment is outside light frustum
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z < 0.0 || projCoords.z > 1.0) {
+        return 1.0;
+    }
+
+    // Apply shadow bias to prevent shadow acne
+    float bias = max(shadow.shadowParams.y * (1.0 - dot(normal, lightDir)), shadow.shadowParams.x);
+    float currentDepth = projCoords.z - bias;
+
+    // Map to atlas coordinates
+    vec2 atlasUV = shadow.atlasRect.xy + projCoords.xy * shadow.atlasRect.zw;
+
+    // PCF (Percentage Closer Filtering) for soft shadows
+    float shadowValue = 0.0;
+    vec2 texelSize = 1.0 / vec2(4096.0); // Atlas size
+    int pcfSamples = 2; // 5x5 kernel
+
+    for(int x = -pcfSamples; x <= pcfSamples; ++x) {
+        for(int y = -pcfSamples; y <= pcfSamples; ++y) {
+            vec2 offset = vec2(x, y) * texelSize;
+            float pcfDepth = texture(textures[nonuniformEXT(shadow.atlasIndex)], atlasUV + offset).r;
+            shadowValue += currentDepth > pcfDepth ? 0.0 : 1.0;
+        }
+    }
+
+    int totalSamples = (pcfSamples * 2 + 1) * (pcfSamples * 2 + 1);
+    shadowValue /= float(totalSamples);
+
+    return shadowValue;
+}
+
+// ========================================
 // Main Fragment Shader
 // ========================================
 
@@ -203,66 +282,54 @@ F0 = mix(F0, albedo, metallic);
 // Reflectance equation - accumulate lighting from all lights
 vec3 Lo = vec3(0.0);
 
-// Process each light
-for (int i = 0; i < global.numLights; i++) {
+for (uint i = 0; i < lights.count; i++) {
+    LightData light = lights.data[i];
+
     vec3 L;
     vec3 radiance;
 
-    float lightType = global.lightPositions[i].w;
-    vec3 lightColorIntensity = global.lightColors[i].xyz;  // color * physical intensity
+    float lightType = light.positionAndType.w;
+    vec3 lightColorIntensity = light.colorAndRadius.xyz;
 
     if (lightType < 0.5) {
         // Directional light (type == 0)
-        // lightColorIntensity = color * illuminance (lux)
-        L = -normalize(global.lightPositions[i].xyz);
+        L = -normalize(light.positionAndType.xyz);
         radiance = lightColorIntensity;
     } else {
         // Point light (type == 1)
-        // Physical point light attenuation: Φ / (4π * r²)
-        // where Φ is luminous power in lumens
-        vec3 lightPos = global.lightPositions[i].xyz;
+        vec3 lightPos = light.positionAndType.xyz;
         L = normalize(lightPos - fragPos);
         float distance = length(lightPos - fragPos);
 
-        // Check if within light radius (for early culling)
-        float radius = global.lightColors[i].w;
+        float radius = light.colorAndRadius.w;
         if (distance > radius) {
             continue;
         }
 
-        // Inverse square law: illuminance = luminousPower / (4π * distance²)
-        // lightColorIntensity = color * luminousPower (lumens)
         float illuminance = 1.0 / (4.0 * PI * distance * distance);
-
-        // Windowing function for smooth falloff at radius boundary (UE4/Frostbite method)
-        // Avoids hard cutoff and maintains energy conservation
         float distanceRatio = distance / radius;
         float windowTerm = pow(clamp(1.0 - pow(distanceRatio, 4.0), 0.0, 1.0), 2.0);
 
         radiance = lightColorIntensity * illuminance * windowTerm;
     }
 
-    // Cook-Torrance BRDF:
-    // f(l,v) = kD·(c/π) + kS·(D·F·G)/(4(n·l)(n·v))
-    // where kD = (1-F)(1-metallic), kS = F
     vec3 H = normalize(V + L);
     float dotNH = max(dot(N, H), 0.0);
     float dotNV = max(dot(N, V), 0.0);
     float dotNL = max(dot(N, L), 0.0);
 
     if (dotNL > 0.0) {
-        // D = Normal distribution (microfacet distribution)
         float D = D_GGX(dotNH, roughness);
-        // G = Geometric shadowing (microfacet shadowing)
         float G = G_SchlicksmithGGX(dotNL, dotNV, roughness);
-        // F = Fresnel (reflectance at angle)
         vec3 F = F_Schlick(max(dot(H, V), 0.0), F0);
 
         vec3 kS = F;
         vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
         vec3 specular = D * F * G / (4.0 * dotNL * dotNV + 0.001);
 
-        Lo += (kD * albedo / PI + specular) * radiance * dotNL;
+        float shadow = calculateShadow(light.shadowIndex, fragPos, N, L);
+
+        Lo += (kD * albedo / PI + specular) * radiance * dotNL * shadow;
     }
 }
 

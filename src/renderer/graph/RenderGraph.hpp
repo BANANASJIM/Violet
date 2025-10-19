@@ -34,6 +34,14 @@ enum class ResourceUsage {
     Present
 };
 
+// Optional configuration for attachment usage
+struct AttachmentOptions {
+    vk::AttachmentLoadOp loadOp = vk::AttachmentLoadOp::eClear;
+    vk::AttachmentStoreOp storeOp = vk::AttachmentStoreOp::eStore;
+    vk::ClearValue clearValue = {};
+    bool hasValue = false;  // Indicates if options were explicitly provided
+};
+
 struct ImageDesc {
     vk::Format format = vk::Format::eUndefined;
     vk::Extent3D extent = {0, 0, 1};
@@ -99,6 +107,7 @@ struct PassNode {
         eastl::string resourceName;
         ResourceUsage usage;
         bool isWrite;
+        AttachmentOptions options;  // Optional attachment configuration
     };
 
     eastl::vector<ResourceAccess> accesses;
@@ -158,7 +167,8 @@ public:
         PassBuilder(PassNode& node);
 
         PassBuilder& read(const eastl::string& resourceName, ResourceUsage usage = ResourceUsage::ShaderRead);
-        PassBuilder& write(const eastl::string& resourceName, ResourceUsage usage = ResourceUsage::ColorAttachment);
+        PassBuilder& write(const eastl::string& resourceName, ResourceUsage usage, const AttachmentOptions& options = {});
+
         PassBuilder& execute(eastl::function<void(vk::CommandBuffer, uint32_t)> callback);
 
     private:

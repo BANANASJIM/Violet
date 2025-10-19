@@ -151,6 +151,35 @@ void SceneDebugLayer::onImGuiRender() {
         }
     }
 
+    // Shadow Controls
+    if (renderer && ImGui::CollapsingHeader("Shadow Mapping")) {
+        ImGui::Checkbox("Enable Shadows", &shadowsEnabled);
+
+        ImGui::Separator();
+        ImGui::Text("Shadow Atlas: 4096x4096");
+        ImGui::Text("Bindless Index: 512");
+
+        // Count shadow-casting lights
+        uint32_t shadowLightCount = 0;
+        auto lightView = world->view<LightComponent>();
+        for (auto entity : lightView) {
+            const auto& light = lightView.get<LightComponent>(entity);
+            if (light.enabled && light.castsShadows) {
+                shadowLightCount++;
+            }
+        }
+
+        ImGui::Text("Shadow Casting Lights: %u", shadowLightCount);
+
+        if (ImGui::TreeNode("Shadow Settings")) {
+            ImGui::Text("Per-Light Shadow Configuration:");
+            ImGui::Text("• Resolution: Set in LightComponent");
+            ImGui::Text("• Bias: Adjustable per light");
+            ImGui::Text("• PCF Filtering: 5x5 kernel");
+            ImGui::TreePop();
+        }
+    }
+
     if (ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen)) {
         renderSceneHierarchy();
     }

@@ -26,12 +26,11 @@ void GraphicsPipeline::init(VulkanContext* ctx, Material* mat,
 }
 
 bool GraphicsPipeline::rebuild() {
-    // Validate shader references
+    // Validate shader references - vertex shader required, fragment optional
     auto vert = vertShader.lock();
-    auto frag = fragShader.lock();
 
-    if (!vert || !frag) {
-        Log::error("Pipeline", "Rebuild failed: Shader references are invalid");
+    if (!vert) {
+        Log::error("Pipeline", "Rebuild failed: Missing vertex shader");
         return false;
     }
 
@@ -54,14 +53,14 @@ void GraphicsPipeline::buildPipeline() {
     auto vert = vertShader.lock();
     auto frag = fragShader.lock();
 
-    if (!vert || !frag) {
-        Log::error("Pipeline", "buildPipeline failed: Invalid shader references");
+    // Vertex shader is required, fragment shader is optional (for depth-only passes)
+    if (!vert) {
+        Log::error("Pipeline", "buildPipeline failed: Missing vertex shader");
         return;
     }
 
     // Create shader modules from SPIRV
     vertShaderModule = createShaderModuleFromSPIRV(vert->getSPIRV());
-    fragShaderModule = createShaderModuleFromSPIRV(frag->getSPIRV());
 
     // Shader stage info
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
@@ -69,12 +68,20 @@ void GraphicsPipeline::buildPipeline() {
     vertShaderStageInfo.module = *vertShaderModule;
     vertShaderStageInfo.pName = vert->getEntryPoint().c_str();
 
-    vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
-    fragShaderStageInfo.stage = Shader::stageToVkFlag(frag->getStage());
-    fragShaderStageInfo.module = *fragShaderModule;
-    fragShaderStageInfo.pName = frag->getEntryPoint().c_str();
+    eastl::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+    shaderStages.push_back(vertShaderStageInfo);
 
-    vk::PipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
+    // Fragment shader is optional (for depth-only rendering)
+    if (frag) {
+        fragShaderModule = createShaderModuleFromSPIRV(frag->getSPIRV());
+
+        vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
+        fragShaderStageInfo.stage = Shader::stageToVkFlag(frag->getStage());
+        fragShaderStageInfo.module = *fragShaderModule;
+        fragShaderStageInfo.pName = frag->getEntryPoint().c_str();
+
+        shaderStages.push_back(fragShaderStageInfo);
+    }
 
     // Rest of pipeline creation (vertex input, assembly, viewport, etc.)
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
@@ -113,24 +120,33 @@ void GraphicsPipeline::buildPipeline() {
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
 
+    // Color blend state - only needed if we have color attachments
     vk::PipelineColorBlendAttachmentState colorBlendAttachment;
-    colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    colorBlendAttachment.blendEnable = config.enableBlending;
-    if (config.enableBlending) {
-        colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-        colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-        colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
-        colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-        colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
-        colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
-    }
-
     vk::PipelineColorBlendStateCreateInfo colorBlending;
-    colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.logicOp = vk::LogicOp::eCopy;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+
+    if (!config.colorFormats.empty()) {
+        colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+        colorBlendAttachment.blendEnable = config.enableBlending;
+        if (config.enableBlending) {
+            colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+            colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+            colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+            colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+            colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
+            colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+        }
+
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.logicOp = vk::LogicOp::eCopy;
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+    } else {
+        // Depth-only pass - no color attachments
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.attachmentCount = 0;
+        colorBlending.pAttachments = nullptr;
+    }
 
     eastl::vector<vk::DynamicState> dynamicStates = {
         vk::DynamicState::eViewport,
@@ -181,8 +197,8 @@ void GraphicsPipeline::buildPipeline() {
     // Graphics pipeline with dynamic rendering
     vk::GraphicsPipelineCreateInfo pipelineInfo;
     pipelineInfo.pNext = &renderingInfo;  // Chain dynamic rendering info
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
     pipelineInfo.pVertexInputState = &vertexInputInfo;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
     pipelineInfo.pViewportState = &viewportState;

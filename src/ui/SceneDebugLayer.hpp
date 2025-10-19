@@ -65,6 +65,9 @@ private:
     // Ray debugging members
     bool showRay = false;
 
+    // Shadow control
+    bool shadowsEnabled = true;
+
     // Fixed ray storage for persistent visualization
     struct StoredRay {
         glm::vec3 origin;

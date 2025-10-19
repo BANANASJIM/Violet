@@ -23,6 +23,7 @@
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/effect/AutoExposure.hpp"
 #include "renderer/effect/Tonemap.hpp"
+#include "renderer/ShadowPass.hpp"
 #include "renderer/graph/RenderPass.hpp"
 #include "acceleration/BVH.hpp"
 #include "renderer/graph/RenderGraph.hpp"
@@ -70,27 +71,20 @@ private:
     uint32_t iblPrefilteredMapIndex = 0;
     uint32_t iblBRDFLUTIndex = 0;
 
-    static constexpr uint32_t MAX_LIGHTS = 8;
     struct GlobalUBO {
         alignas(16) glm::mat4 view;
         alignas(16) glm::mat4 proj;
         alignas(16) glm::vec3 cameraPos;
         alignas(4) float padding0;
 
-        // Light data (support up to MAX_LIGHTS lights)
-        // Physical units: DirectionalLight uses lux, PointLight uses lumens
-        alignas(16) glm::vec4 lightPositions[MAX_LIGHTS];  // xyz=position/direction, w=type (0=dir, 1=point)
-        alignas(16) glm::vec4 lightColors[MAX_LIGHTS];     // xyz=color*intensity (physical units), w=radius
-        alignas(4) int numLights;
-        alignas(16) glm::vec3 ambientLight;  // Ambient light color
-
-        // Skybox data
+        alignas(16) glm::vec3 ambientLight;
         alignas(4) float skyboxExposure;
+
         alignas(4) float skyboxRotation;
         alignas(4) int skyboxEnabled;
         alignas(4) float iblIntensity;
+        alignas(4) int shadowsEnabled;
 
-        // IBL bindless texture indices
         alignas(4) uint32_t environmentMapIndex;
         alignas(4) uint32_t irradianceMapIndex;
         alignas(4) uint32_t prefilteredMapIndex;
@@ -204,6 +198,10 @@ private:
     EnvironmentMap environmentMap;
     AutoExposure autoExposure;
     Tonemap tonemap;
+
+    class LightingSystem* lightingSystem = nullptr;
+    class ShadowSystem* shadowSystem = nullptr;
+    eastl::unique_ptr<class ShadowPass> shadowPass;
 
     // Render graph for automatic resource and barrier management
     eastl::unique_ptr<RenderGraph> renderGraph;

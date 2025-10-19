@@ -175,10 +175,12 @@ Material* MaterialManager::createPBRBindlessMaterial() {
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
     // Bindless rendering requires descriptor sets in a specific order:
-    // Set 0: Global (camera, lighting)
+    // Set 0: Global (camera, IBL)
     // Set 1: Bindless texture array
     // Set 2: Material data SSBO
-    desc.descriptorSetLayouts = {"Global", "Bindless", "MaterialData"};
+    // Set 3: Lighting data SSBO
+    // Set 4: Shadow data SSBO
+    desc.descriptorSetLayouts = {"Global", "Bindless", "MaterialData", "Lighting", "Shadow"};
 
     Material* material = createMaterial(desc);
     if (!material) {

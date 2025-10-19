@@ -67,6 +67,8 @@ void ResourceManager::loadAllShaders() {
         {"postprocess_vert", "shaders/postprocess.vert", Stage::Vertex},
         {"postprocess_frag", "shaders/postprocess.frag", Stage::Fragment},
 
+        {"shadow_vert", "shaders/shadow.vert", Stage::Vertex},
+
         // Compute shaders
         {"equirect_to_cubemap", "shaders/equirect_to_cubemap.comp", Stage::Compute},
         {"irradiance_convolution", "shaders/irradiance_convolution.comp", Stage::Compute},

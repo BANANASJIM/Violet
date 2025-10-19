@@ -394,6 +394,48 @@ void Texture::createEmpty2D(VulkanContext* ctx, uint32_t width, uint32_t height,
     violet::Log::info("Renderer", "Empty 2D texture created: {}x{}", width, height);
 }
 
+void Texture::createDepthTexture(VulkanContext* ctx, uint32_t width, uint32_t height, vk::ImageUsageFlags usage) {
+    context = ctx;
+    format = vk::Format::eD32Sfloat;
+    isCubemapTexture = false;
+    mipLevels = 1;
+
+    // Create depth image
+    ImageInfo imageInfo;
+    imageInfo.width = width;
+    imageInfo.height = height;
+    imageInfo.format = format;
+    imageInfo.usage = usage;
+    imageInfo.mipLevels = 1;
+    imageInfo.debugName = "Depth Texture";
+
+    imageResource = ResourceFactory::createImage(context, imageInfo);
+
+    // Set format on imageResource for RenderGraph
+    imageResource.format = format;
+    allocation = imageResource.allocation;
+
+    // Create depth aspect image view
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.image = imageResource.image;
+    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    imageView = vk::raii::ImageView(ctx->getDeviceRAII(), viewInfo);
+
+    // Set imageResource.view so RenderGraph can access it
+    imageResource.view = *imageView;
+
+    // Sampler will be set externally via setSampler()
+
+    violet::Log::info("Renderer", "Depth texture created: {}x{}", width, height);
+}
+
 void Texture::loadHDR(VulkanContext* ctx, const eastl::string& hdrPath) {
     context = ctx;
 
