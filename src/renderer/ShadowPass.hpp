@@ -4,6 +4,7 @@
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
 #include <EASTL/unique_ptr.h>
+#include <entt/entt.hpp>
 
 namespace violet {
 
@@ -12,7 +13,6 @@ class RenderGraph;
 class ShadowSystem;
 class LightingSystem;
 class ShaderLibrary;
-class Renderable;
 class GraphicsPipeline;
 
 class ShadowPass {
@@ -22,8 +22,7 @@ public:
               RenderGraph* renderGraph, const eastl::string& atlasImageName);
     void cleanup();
 
-    void executePass(vk::CommandBuffer cmd, uint32_t frameIndex,
-                     const eastl::vector<Renderable>& renderables);
+    void executePass(vk::CommandBuffer cmd, uint32_t frameIndex, entt::registry& world);
 
 private:
     VulkanContext* context = nullptr;

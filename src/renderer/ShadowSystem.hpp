@@ -6,7 +6,9 @@
 #include <EASTL/unique_ptr.h>
 #include <entt/entt.hpp>
 #include "resource/gpu/ResourceFactory.hpp"
-#include "resource/TextureManager.hpp"  
+#include "resource/TextureManager.hpp"
+#include "math/AABB.hpp"
+#include "renderer/Renderable.hpp"
 
 namespace violet {
 
@@ -19,13 +21,21 @@ class TextureManager;
 
 // GPU shadow data (must match shader)
 struct ShadowData {
-    alignas(16) glm::mat4 lightSpaceMatrix;       // For directional/spot
-    alignas(16) glm::mat4 cubeFaceMatrices[6];    // For point (6 faces)
-    alignas(16) glm::vec4 atlasRect;              // x, y, width, height (normalized 0-1)
-    alignas(16) glm::vec4 shadowParams;           // x=bias, y=normalBias, z=pcfRadius, w=unused
-    alignas(4) uint32_t lightType;                // 0=directional, 1=point
-    alignas(4) uint32_t atlasIndex;               // Bindless shadow atlas texture index
-    alignas(4) uint32_t padding[2];
+    // Cascaded Shadow Maps data (for directional lights)
+    alignas(16) glm::mat4 cascadeViewProjMatrices[4];  // Light space matrices for each cascade
+    alignas(16) glm::vec4 cascadeSplitDepths;          // View space split depths (x,y,z,w for cascades 0-3)
+    alignas(16) glm::vec4 atlasRects[4];               // Atlas rects for each cascade (x,y,width,height normalized)
+
+    // Common shadow parameters
+    alignas(16) glm::vec4 shadowParams;                // x=bias, y=normalBias, z=blendRange, w=unused
+    alignas(4) uint32_t lightType;                     // 0=directional, 1=point
+    alignas(4) uint32_t cascadeCount;                  // Number of active cascades (1-4)
+    alignas(4) uint32_t atlasIndex;                    // Bindless shadow atlas texture index
+    alignas(4) uint32_t padding0;
+
+    // Point light cubemap data (for point lights only)
+    alignas(16) glm::mat4 cubeFaceMatrices[6];         // 6 cube face view-proj matrices
+    alignas(4) uint32_t padding1[2];
 };
 
 struct ShadowAtlasAllocation {
@@ -46,15 +56,19 @@ public:
     void init(VulkanContext* context, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t maxFramesInFlight);
     void cleanup();
 
-    void update(entt::registry& world, LightingSystem& lightingSystem, class Camera* camera, uint32_t frameIndex);
+    void update(entt::registry& world, LightingSystem& lightingSystem, class Camera* camera, uint32_t frameIndex, const AABB& sceneBounds = AABB());
     void uploadToGPU(uint32_t frameIndex);
 
     vk::DescriptorSet getDescriptorSet(uint32_t frameIndex) const;
     uint32_t getShadowCount() const { return static_cast<uint32_t>(cpuShadowData.size()); }
     uint32_t getAtlasIndex() const { return atlasBindlessIndex; }
+    uint32_t getAtlasSize() const { return atlasSize; }
 
     const eastl::vector<ShadowData>& getShadowData() const { return cpuShadowData; }
     const ImageResource* getAtlasImage() const;  // Get from TextureManager
+
+    // Get shadow renderables (culled for shadow frustum, not camera frustum)
+    const eastl::vector<Renderable>& getShadowRenderables() const { return shadowRenderables; }
 
     // Atlas management
     ShadowAtlasAllocation allocateSpace(uint32_t resolution, uint32_t lightIndex);
@@ -75,10 +89,13 @@ private:
     eastl::vector<class BufferResource> shadowBuffers;
     eastl::unique_ptr<DescriptorSet> descriptorSet;
 
+    // Shadow renderables (all objects that can cast shadows)
+    eastl::vector<Renderable> shadowRenderables;
+
     // Shadow atlas - managed by TextureManager
     struct TextureHandle atlasTextureHandle;
     uint32_t atlasBindlessIndex = 0;
-    uint32_t atlasSize = 4096;
+    uint32_t atlasSize = 8192;  // Increased from 4096 for larger shadow coverage
     eastl::vector<ShadowAtlasAllocation> allocations;
 
     uint32_t bufferCapacity = 0;

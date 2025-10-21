@@ -30,11 +30,12 @@ public:
         leafIndices.clear();
 
         if (bounds.empty()) {
+            sceneBounds = AABB();  // Reset to empty
             return;
         }
 
         // Calculate scene bounding box
-        AABB sceneBounds;
+        sceneBounds = AABB();
         for (const auto& bound : bounds) {
             sceneBounds.expand(bound);
         }
@@ -60,6 +61,9 @@ public:
         // Build BVH using Linear BVH algorithm
         buildLinearBVH(mortonPrims);
     }
+
+    // Get scene bounding box (computed during build)
+    const AABB& getSceneBounds() const { return sceneBounds; }
 
     template<typename IntersectionTest, typename LeafHandler>
     void traverse(IntersectionTest&& intersectionTest, LeafHandler&& leafHandler) const {
@@ -109,6 +113,7 @@ public:
 private:
     eastl::vector<BVHNode> nodes;
     eastl::vector<uint32_t> leafIndices;
+    AABB sceneBounds;  // Overall scene bounding box
 
     // Morton code utility functions
     inline uint32_t expandBits(uint32_t v) const {

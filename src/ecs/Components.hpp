@@ -184,7 +184,11 @@ struct LightComponent {
     float shadowBias = 0.0005f;                  // Depth bias to prevent shadow acne
     float shadowNormalBias = 0.001f;             // Normal-based bias
     float shadowNearPlane = 0.1f;                // Near plane for shadow projection
-    float shadowFarPlane = 100.0f;               // Far plane for shadow projection (point/spot)
+    float shadowFarPlane = 1000.0f;               // Far plane for shadow projection (larger range for CSM)
+
+    // Cascaded Shadow Maps (CSM) parameters - for directional lights only
+    uint32_t cascadeCount = 4;                   // Number of cascades (1-4, only for directional lights)
+    float cascadeSplitLambda = 0.75f;            // Practical split scheme lambda (0.0=uniform, 1.0=logarithmic, 0.5-0.9=recommended)
 
     // Get bounding sphere for point light culling (world space)
     AABB getBoundingSphere(const glm::vec3& worldPosition) const {

@@ -1294,6 +1294,83 @@ void SceneDebugLayer::renderLightProperties(entt::entity entity, LightComponent*
     ImGui::Separator();
     ImGui::Checkbox("Enabled", &light->enabled);
 
+    // Shadow Mapping Controls
+    ImGui::Separator();
+    if (ImGui::CollapsingHeader("Shadow Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Cast Shadows", &light->castsShadows);
+
+        if (light->castsShadows) {
+            ImGui::Indent();
+
+            // Shadow resolution
+            int resolution = static_cast<int>(light->shadowResolution);
+            if (ImGui::SliderInt("Resolution", &resolution, 256, 4096, "%d")) {
+                light->shadowResolution = static_cast<uint32_t>(resolution);
+            }
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                "Higher resolution = better quality but slower");
+
+            // Shadow bias parameters
+            ImGui::SliderFloat("Shadow Bias", &light->shadowBias, 0.0f, 0.01f, "%.5f");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Depth bias to prevent shadow acne");
+            }
+
+            ImGui::SliderFloat("Normal Bias", &light->shadowNormalBias, 0.0f, 0.01f, "%.5f");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Normal-based bias for smoother shadows");
+            }
+
+            // Far plane control
+            ImGui::DragFloat("Far Plane", &light->shadowFarPlane, 10.0f, 1.0f, 10000.0f, "%.1f");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Shadow rendering distance (larger = more area covered)");
+            }
+
+            // CSM controls (directional lights only)
+            if (light->type == LightType::Directional) {
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Cascaded Shadow Maps (CSM):");
+
+                int cascadeCount = static_cast<int>(light->cascadeCount);
+                if (ImGui::SliderInt("Cascade Count", &cascadeCount, 1, 4)) {
+                    light->cascadeCount = static_cast<uint32_t>(cascadeCount);
+                }
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                    "More cascades = better quality at distance");
+
+                ImGui::SliderFloat("Split Lambda", &light->cascadeSplitLambda, 0.0f, 1.0f, "%.2f");
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Cascade distribution:\n"
+                        "0.0 = Uniform (even spacing)\n"
+                        "1.0 = Logarithmic (more detail near camera)\n"
+                        "0.75 = Recommended (Practical Split)");
+                }
+
+                // Quick presets
+                ImGui::Text("Presets:");
+                if (ImGui::SmallButton("Uniform")) light->cascadeSplitLambda = 0.0f;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Balanced")) light->cascadeSplitLambda = 0.75f;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Logarithmic")) light->cascadeSplitLambda = 1.0f;
+            }
+
+            ImGui::Unindent();
+        }
+    }
+
+    ImGui::Separator();
+
     // Delete button
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
     if (ImGui::Button("Delete Light")) {

@@ -19,6 +19,12 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     int skyboxEnabled;
     float iblIntensity;
 
+    // Shadow data
+    int shadowsEnabled;
+    int cascadeDebugMode;  // 0=off, 1=visualize cascades with colors
+    uint padding1_0;
+    uint padding1_1;  // Align to 16 bytes
+
     // IBL bindless texture indices
     uint environmentMapIndex;
     uint irradianceMapIndex;
@@ -36,9 +42,10 @@ void main() {
     // Sample from the environment cubemap using bindless index
     vec3 direction = normalize(fragTexCoord);
 
-    // Check if environment map is available
+    // Debug: visualize direction if no environment map
     if (global.environmentMapIndex == 0) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);  // Black if no environment map
+        // Show direction as color for debugging
+        outColor = vec4(abs(direction), 1.0);
         return;
     }
 

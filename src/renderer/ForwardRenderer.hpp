@@ -58,6 +58,7 @@ public:
     Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
     void setSkyboxTexture(Texture* texture);
     void setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_t prefiltered, uint32_t brdfLUT);
+    void setCascadeDebugMode(bool enabled) { cachedUBO.cascadeDebugMode = enabled ? 1 : 0; }
 
 private:
 
@@ -77,14 +78,25 @@ private:
         alignas(16) glm::vec3 cameraPos;
         alignas(4) float padding0;
 
+        // Light data (physical units: lux for directional, lumens for point)
+        alignas(16) glm::vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
+        alignas(16) glm::vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
+        alignas(4) int numLights;
         alignas(16) glm::vec3 ambientLight;
-        alignas(4) float skyboxExposure;
 
+        // Skybox data
+        alignas(4) float skyboxExposure;
         alignas(4) float skyboxRotation;
         alignas(4) int skyboxEnabled;
         alignas(4) float iblIntensity;
-        alignas(4) int shadowsEnabled;
 
+        // Shadow data
+        alignas(4) int shadowsEnabled;
+        alignas(4) int cascadeDebugMode;  // 0=off, 1=visualize cascades with colors
+        alignas(4) uint32_t padding1_0;  // Padding (not array to avoid std140 alignment issues)
+        alignas(4) uint32_t padding1_1;
+
+        // IBL bindless texture indices
         alignas(4) uint32_t environmentMapIndex;
         alignas(4) uint32_t irradianceMapIndex;
         alignas(4) uint32_t prefilteredMapIndex;
@@ -133,6 +145,7 @@ public:
 
     // BVH management
     void buildSceneBVH(entt::registry& world);
+    const AABB& getSceneBounds() const { return sceneBVH.getSceneBounds(); }
 
     // Debug rendering
     DebugRenderer& getDebugRenderer() { return debugRenderer; }

@@ -9,26 +9,36 @@
 //            http://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf
 // ========================================
 
-// Set 0: Global UBO (camera + IBL)
+// Set 0: Global UBO (camera + lights + IBL)
 layout(set = 0, binding = 0) uniform GlobalUBO {
-mat4 view;
-mat4 proj;
-vec3 cameraPos;
-float padding0;
+    mat4 view;
+    mat4 proj;
+    vec3 cameraPos;
+    float padding0;
 
-vec3 ambientLight;
-float skyboxExposure;
+    // Light data (physical units: lux for directional, lumens for point)
+    vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
+    vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
+    int numLights;
+    vec3 ambientLight;
 
-float skyboxRotation;
-int skyboxEnabled;
-float iblIntensity;
-int shadowsEnabled;
+    // Skybox data
+    float skyboxExposure;
+    float skyboxRotation;
+    int skyboxEnabled;
+    float iblIntensity;
 
-// IBL bindless texture indices
-uint environmentMapIndex;
-uint irradianceMapIndex;
-uint prefilteredMapIndex;
-uint brdfLUTIndex;
+    // Shadow data
+    int shadowsEnabled;
+    int cascadeDebugMode;  // 0=off, 1=visualize cascades with colors
+    uint padding1_0;
+    uint padding1_1;  // Align to 16 bytes
+
+    // IBL bindless texture indices
+    uint environmentMapIndex;
+    uint irradianceMapIndex;
+    uint prefilteredMapIndex;
+    uint brdfLUTIndex;
 } global;
 
 // Set 1: Bindless texture array
@@ -73,19 +83,28 @@ uint padding[3];
 LightData data[];
 } lights;
 
-// Set 4: Shadow SSBO
+// Set 4: Shadow SSBO (must match C++ ShadowData exactly)
 struct ShadowData {
-mat4 lightSpaceMatrix;
-mat4 cubeFaceMatrices[6];
-vec4 atlasRect;        // x, y, width, height (normalized 0-1)
-vec4 shadowParams;     // x=bias, y=normalBias, z=pcfRadius, w=unused
-uint lightType;        // 0=directional, 1=point
-uint atlasIndex;       // Bindless shadow atlas texture index
-uint padding[2];
+    // Cascaded Shadow Maps data (for directional lights)
+    mat4 cascadeViewProjMatrices[4];       // Light space matrices for each cascade
+    vec4 cascadeSplitDepths;               // View space split depths (x,y,z,w for cascades 0-3)
+    vec4 atlasRects[4];                    // Atlas rects for each cascade
+
+    // Common shadow parameters
+    vec4 shadowParams;                     // x=bias, y=normalBias, z=blendRange, w=unused
+    uint lightType;                        // 0=directional, 1=point
+    uint cascadeCount;                     // Number of active cascades (1-4)
+    uint atlasIndex;                       // Bindless shadow atlas texture index
+    uint padding0;
+
+    // Point light cubemap data (for point lights only)
+    mat4 cubeFaceMatrices[6];              // 6 cube face view-proj matrices
+    uint padding1_0;
+    uint padding1_1;
 };
 
 layout(set = 4, binding = 0) readonly buffer ShadowDataBuffer {
-ShadowData data[];
+    ShadowData data[];
 } shadows;
 
 // Push constants
@@ -179,19 +198,24 @@ return vec3(
 }
 
 // ========================================
-// Shadow Functions
+// Shadow Functions - Cascaded Shadow Maps
 // ========================================
 
-float calculateShadow(int shadowIndex, vec3 fragPos, vec3 normal, vec3 lightDir) {
-    // Check if shadows are globally enabled
-    if (global.shadowsEnabled == 0 || shadowIndex < 0) {
-        return 1.0;
+// Select cascade based on view space depth
+int selectCascade(float viewDepth, vec4 cascadeSplits, uint cascadeCount) {
+    for (int i = 0; i < int(cascadeCount) - 1; i++) {
+        if (viewDepth < cascadeSplits[i]) {
+            return i;
+        }
     }
+    return int(cascadeCount) - 1;
+}
 
-    ShadowData shadow = shadows.data[shadowIndex];
-
-    // Transform fragment position to light space
-    vec4 lightSpacePos = shadow.lightSpaceMatrix * vec4(fragPos, 1.0);
+// Sample shadow map for a specific cascade
+float sampleShadowCascade(ShadowData shadow, int cascadeIndex, vec3 fragPos, vec3 normal, vec3 lightDir) {
+    // Transform fragment position to light space using cascade's matrix
+    mat4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    vec4 lightSpacePos = lightSpaceMatrix * vec4(fragPos, 1.0);
 
     // Perform perspective divide
     vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
@@ -210,8 +234,9 @@ float calculateShadow(int shadowIndex, vec3 fragPos, vec3 normal, vec3 lightDir)
     float bias = max(shadow.shadowParams.y * (1.0 - dot(normal, lightDir)), shadow.shadowParams.x);
     float currentDepth = projCoords.z - bias;
 
-    // Map to atlas coordinates
-    vec2 atlasUV = shadow.atlasRect.xy + projCoords.xy * shadow.atlasRect.zw;
+    // Map to atlas coordinates using cascade's atlas rect
+    vec4 atlasRect = shadow.atlasRects[cascadeIndex];
+    vec2 atlasUV = atlasRect.xy + projCoords.xy * atlasRect.zw;
 
     // PCF (Percentage Closer Filtering) for soft shadows
     float shadowValue = 0.0;
@@ -230,6 +255,52 @@ float calculateShadow(int shadowIndex, vec3 fragPos, vec3 normal, vec3 lightDir)
     shadowValue /= float(totalSamples);
 
     return shadowValue;
+}
+
+float calculateShadow(int shadowIndex, vec3 fragPos, vec3 fragViewPos, vec3 normal, vec3 lightDir) {
+    // Check if shadows are globally enabled
+    if (global.shadowsEnabled == 0 || shadowIndex < 0) {
+        return 1.0;
+    }
+
+    ShadowData shadow = shadows.data[shadowIndex];
+
+    // For directional lights with cascades
+    if (shadow.lightType == 0 && shadow.cascadeCount > 1) {
+        // Calculate view space depth (positive in Vulkan right-handed view space)
+        float viewDepth = abs(fragViewPos.z);
+
+        // Select cascade based on view depth
+        int cascadeIndex = selectCascade(viewDepth, shadow.cascadeSplitDepths, shadow.cascadeCount);
+
+        // Sample primary cascade
+        float shadowValue = sampleShadowCascade(shadow, cascadeIndex, fragPos, normal, lightDir);
+
+        // Cascade blending at boundaries
+        float blendRange = shadow.shadowParams.z; // e.g., 0.05 = 5% blend zone
+        if (blendRange > 0.0 && cascadeIndex < int(shadow.cascadeCount) - 1) {
+            float nextSplit = shadow.cascadeSplitDepths[cascadeIndex];
+            float prevSplit = (cascadeIndex > 0) ? shadow.cascadeSplitDepths[cascadeIndex - 1] : 0.0;
+            float splitRange = nextSplit - prevSplit;
+
+            // Calculate distance from next split boundary
+            float blendDist = viewDepth - (nextSplit - splitRange * blendRange);
+
+            if (blendDist > 0.0) {
+                // Sample next cascade
+                float nextShadow = sampleShadowCascade(shadow, cascadeIndex + 1, fragPos, normal, lightDir);
+
+                // Blend factor (0 = current cascade, 1 = next cascade)
+                float blendFactor = clamp(blendDist / (splitRange * blendRange), 0.0, 1.0);
+                shadowValue = mix(shadowValue, nextShadow, blendFactor);
+            }
+        }
+
+        return shadowValue;
+    } else {
+        // Single cascade (directional light with cascadeCount=1 or point light)
+        return sampleShadowCascade(shadow, 0, fragPos, normal, lightDir);
+    }
 }
 
 // ========================================
@@ -327,7 +398,7 @@ for (uint i = 0; i < lights.count; i++) {
         vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
         vec3 specular = D * F * G / (4.0 * dotNL * dotNV + 0.001);
 
-        float shadow = calculateShadow(light.shadowIndex, fragPos, N, L);
+        float shadow = calculateShadow(light.shadowIndex, fragPos, fragViewPos, N, L);
 
         Lo += (kD * albedo / PI + specular) * radiance * dotNL * shadow;
     }

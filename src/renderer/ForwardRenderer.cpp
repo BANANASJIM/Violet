@@ -166,7 +166,7 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
         Camera* activeCamera = globalUniforms.findActiveCamera(world);
         if (activeCamera) {
             lightingSystem->update(world, activeCamera->getFrustum(), frameIndex);
-            shadowSystem->update(world, *lightingSystem, activeCamera, frameIndex);
+            shadowSystem->update(world, *lightingSystem, activeCamera, frameIndex, getSceneBounds());
 
             lightingSystem->uploadToGPU(frameIndex);
             shadowSystem->uploadToGPU(frameIndex);
@@ -273,8 +273,8 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
             });
 
             b.execute([this](vk::CommandBuffer cmd, uint32_t frame) {
-                if (shadowPass) {
-                    shadowPass->executePass(cmd, frame, renderables);
+                if (shadowPass && currentWorld) {
+                    shadowPass->executePass(cmd, frame, *currentWorld);
                 }
             });
         });
@@ -387,16 +387,16 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 }
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
-    // Update global uniforms with environment map parameters
-    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled(), environmentMap.getIntensity());
-
-    // Update IBL bindless indices in global uniforms
+    // CRITICAL: Update IBL indices BEFORE calling update() so they're available when assembling the UBO
     globalUniforms.setIBLIndices(
         environmentMap.getEnvironmentMapIndex(),
         environmentMap.getIrradianceMapIndex(),
         environmentMap.getPrefilteredMapIndex(),
         environmentMap.getBRDFLUTIndex()
     );
+
+    // Update global uniforms with environment map parameters
+    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled(), environmentMap.getIntensity());
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {
@@ -762,6 +762,12 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
     cachedUBO.proj      = activeCamera->getProjectionMatrix();
     cachedUBO.cameraPos = activeCamera->getPosition();
 
+    // Initialize light data (will be populated by LightingSystem)
+    cachedUBO.numLights = 0;
+    for (int i = 0; i < 8; i++) {
+        cachedUBO.lightPositions[i] = glm::vec4(0.0f);
+        cachedUBO.lightColors[i] = glm::vec4(0.0f);
+    }
     cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);
 
     // Set skybox parameters (will be configurable via UI)
@@ -769,7 +775,12 @@ void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float sk
     cachedUBO.skyboxRotation = skyboxRotation;
     cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
     cachedUBO.iblIntensity = iblIntensity;
-    cachedUBO.shadowsEnabled = 1; // TODO: Make configurable via UI
+
+    // Shadow parameters (will be set by ShadowSystem)
+    cachedUBO.shadowsEnabled = 1;  // Enable shadows by default
+    cachedUBO.cascadeDebugMode = 0;  // Off by default
+    cachedUBO.padding1_0 = 0;
+    cachedUBO.padding1_1 = 0;
 
     // Update IBL bindless indices
     cachedUBO.environmentMapIndex = iblEnvironmentMapIndex;
@@ -823,6 +834,8 @@ void GlobalUniforms::setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_
     if (changed) {
         violet::Log::info("Renderer", "IBL indices set - Env: {}, Irradiance: {}, Prefiltered: {}, BRDF: {}",
                          envMap, irradiance, prefiltered, brdfLUT);
+        // Note: Don't upload UBO here. update() will use these member variables in the next frame.
+        // Uploading cachedUBO here would overwrite other fields (view, proj, etc.) with stale values.
     }
 }
 
@@ -830,11 +843,11 @@ void ForwardRenderer::registerDescriptorLayouts() {
     auto& descMgr = resourceManager->getDescriptorManager();
 
     // Global uniforms layout - per-frame updates
+    // Only binding 0 (GlobalUBO) - skybox now uses bindless cubemaps
     descMgr.registerLayout({
         .name = "Global",
         .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
-            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}
+            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment}
         },
         .frequency = UpdateFrequency::PerFrame
     });

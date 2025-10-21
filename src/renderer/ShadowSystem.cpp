@@ -5,6 +5,7 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/camera/Camera.hpp"
+#include "renderer/camera/PerspectiveCamera.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/Texture.hpp"
@@ -35,6 +36,30 @@ namespace {
         }
 
         return frustumCorners;
+    }
+
+    // Calculate cascade split depths using Practical Split Scheme
+    // Combines logarithmic and uniform splits based on lambda parameter
+    eastl::vector<float> calculateCascadeSplits(float nearPlane, float farPlane,
+                                                 uint32_t cascadeCount, float lambda) {
+        eastl::vector<float> splits(cascadeCount + 1);
+        splits[0] = nearPlane;
+        splits[cascadeCount] = farPlane;
+
+        for (uint32_t i = 1; i < cascadeCount; i++) {
+            float p = static_cast<float>(i) / static_cast<float>(cascadeCount);
+
+            // Logarithmic split (denser near camera)
+            float logSplit = nearPlane * std::pow(farPlane / nearPlane, p);
+
+            // Uniform split
+            float uniformSplit = nearPlane + (farPlane - nearPlane) * p;
+
+            // Practical split: lerp between logarithmic and uniform
+            splits[i] = lambda * logSplit + (1.0f - lambda) * uniformSplit;
+        }
+
+        return splits;
     }
 }
 
@@ -96,13 +121,55 @@ void ShadowSystem::cleanup() {
     textureManager = nullptr;
 }
 
-void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem, Camera* camera, uint32_t frameIndex) {
+void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem, Camera* camera, uint32_t frameIndex, const AABB& sceneBounds) {
     cpuShadowData.clear();
     clearAllAllocations();
+    shadowRenderables.clear();
 
     if (!camera) {
         violet::Log::warn("ShadowSystem", "No active camera, skipping shadow update");
         return;
+    }
+
+    // Collect ALL potentially shadow-casting objects from the world
+    // (Not camera-frustum culled - we need objects outside camera view that can still cast shadows into it)
+    auto entityView = world.view<TransformComponent, MeshComponent>();
+    for (auto entity : entityView) {
+        auto& transform = entityView.get<TransformComponent>(entity);
+        auto& meshComp = entityView.get<MeshComponent>(entity);
+
+        if (!meshComp.mesh) continue;
+
+        Mesh* mesh = meshComp.mesh.get();
+        glm::mat4 worldTransform = transform.world.getMatrix();
+
+        // Update world bounds if needed
+        if (meshComp.dirty || transform.dirty) {
+            meshComp.updateWorldBounds(worldTransform);
+        }
+
+        const auto& subMeshes = mesh->getSubMeshes();
+        for (size_t i = 0; i < subMeshes.size(); ++i) {
+            const SubMesh& subMesh = subMeshes[i];
+            if (!subMesh.isValid()) continue;
+
+            // Get material for this submesh
+            Material* material = nullptr;
+            if (auto* matComp = world.try_get<MaterialComponent>(entity)) {
+                // TODO: Get actual material from MaterialComponent
+                // For now, we'll add all objects as potential shadow casters
+            }
+
+            Renderable renderable(
+                entity,
+                mesh,
+                material,
+                worldTransform,
+                static_cast<uint32_t>(i)
+            );
+            renderable.visible = true;
+            shadowRenderables.push_back(renderable);
+        }
     }
 
     auto& lightData = lightingSystem.getLightData();
@@ -126,19 +193,9 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
 
         if (lightIndex >= lightData.size()) break;
 
-        // Allocate atlas space
-        uint32_t resolution = light.shadowResolution;
-        auto alloc = allocateSpace(resolution, lightIndex);
-
-        if (!alloc.inUse) {
-            lightIndex++;
-            continue; // Atlas full
-        }
-
         // Build shadow data
         ShadowData shadowData{};
-        shadowData.atlasRect = alloc.rect;
-        shadowData.shadowParams = glm::vec4(light.shadowBias, light.shadowNormalBias, 0.0f, 0.0f);
+        shadowData.shadowParams = glm::vec4(light.shadowBias, light.shadowNormalBias, 0.05f, 0.0f); // z=blendRange
         shadowData.lightType = (light.type == LightType::Directional) ? 0 : 1;
         shadowData.atlasIndex = atlasBindlessIndex;
 
@@ -147,53 +204,245 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
             glm::vec3 lightDir = glm::normalize(light.direction);
             glm::vec3 up = (std::abs(lightDir.y) < 0.999f) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
 
-            // Calculate frustum corners in world space
-            auto frustumCorners = getFrustumCornersWorldSpace(proj, view);
+            // Try to use CSM if camera is PerspectiveCamera
+            PerspectiveCamera* perspCam = dynamic_cast<PerspectiveCamera*>(camera);
+            uint32_t cascadeCount = (perspCam && light.cascadeCount > 1) ? light.cascadeCount : 1;
+            cascadeCount = eastl::min(cascadeCount, 4u);  // Max 4 cascades
+            shadowData.cascadeCount = cascadeCount;
 
-            // Compute frustum center
-            glm::vec3 center = glm::vec3(0.0f);
-            for (const auto& corner : frustumCorners) {
-                center += corner;
+            // Calculate cascade split depths
+            float nearPlane = perspCam ? perspCam->getNearPlane() : 0.1f;
+            float farPlane = perspCam ? perspCam->getFarPlane() : 100.0f;
+            auto splits = calculateCascadeSplits(nearPlane, farPlane, cascadeCount, light.cascadeSplitLambda);
+
+            // For each cascade, compute light space matrix and allocate atlas space
+            for (uint32_t c = 0; c < cascadeCount; c++) {
+                // Create projection matrix for this cascade's frustum slice
+                float cascadeNear = splits[c];
+                float cascadeFar = splits[c + 1];
+
+                // Build projection matrix for cascade sub-frustum
+                glm::mat4 cascadeProj = proj;  // Start with camera's projection
+                if (perspCam) {
+                    // Override near/far planes for this cascade
+                    cascadeProj = glm::perspective(
+                        glm::radians(perspCam->getFOV()),
+                        perspCam->getAspectRatio(),
+                        cascadeNear,
+                        cascadeFar
+                    );
+                }
+
+                // Get frustum corners for this cascade
+                auto frustumCorners = getFrustumCornersWorldSpace(cascadeProj, view);
+
+                // Compute frustum center
+                glm::vec3 center = glm::vec3(0.0f);
+                for (const auto& corner : frustumCorners) {
+                    center += corner;
+                }
+                center /= frustumCorners.size();
+
+                // Build light view matrix looking at cascade frustum center
+                glm::mat4 lightViewMatrix = glm::lookAt(
+                    center - lightDir * light.shadowFarPlane,  // Position light behind frustum
+                    center,                                     // Look at frustum center
+                    up
+                );
+
+                // Transform frustum corners to light space and find bounds
+                float minX = std::numeric_limits<float>::max();
+                float maxX = std::numeric_limits<float>::lowest();
+                float minY = std::numeric_limits<float>::max();
+                float maxY = std::numeric_limits<float>::lowest();
+                float minZ = std::numeric_limits<float>::max();
+                float maxZ = std::numeric_limits<float>::lowest();
+
+                for (const auto& corner : frustumCorners) {
+                    const glm::vec4 trf = lightViewMatrix * glm::vec4(corner, 1.0f);
+                    minX = std::min(minX, trf.x);
+                    maxX = std::max(maxX, trf.x);
+                    minY = std::min(minY, trf.y);
+                    maxY = std::max(maxY, trf.y);
+                    minZ = std::min(minZ, trf.z);
+                    maxZ = std::max(maxZ, trf.z);
+                }
+
+                // ============= Optimization 1: Extend bounds using Scene AABB =============
+                // Use scene bounds to extend XY coverage and Z range
+                if (sceneBounds.isValid()) {
+                    // Transform scene AABB corners to light space
+                    glm::vec3 sceneMin = sceneBounds.min;
+                    glm::vec3 sceneMax = sceneBounds.max;
+
+                    for (int x = 0; x <= 1; x++) {
+                        for (int y = 0; y <= 1; y++) {
+                            for (int z = 0; z <= 1; z++) {
+                                glm::vec3 corner(
+                                    x ? sceneMax.x : sceneMin.x,
+                                    y ? sceneMax.y : sceneMin.y,
+                                    z ? sceneMax.z : sceneMin.z
+                                );
+                                glm::vec4 lightSpaceCorner = lightViewMatrix * glm::vec4(corner, 1.0f);
+
+                                // Expand XY bounds to include scene objects
+                                minX = std::min(minX, lightSpaceCorner.x);
+                                maxX = std::max(maxX, lightSpaceCorner.x);
+                                minY = std::min(minY, lightSpaceCorner.y);
+                                maxY = std::max(maxY, lightSpaceCorner.y);
+
+                                // Expand Z range to include scene objects
+                                minZ = std::min(minZ, lightSpaceCorner.z);
+                                maxZ = std::max(maxZ, lightSpaceCorner.z);
+                            }
+                        }
+                    }
+
+                    // Add extra padding to Z range to ensure all shadow casters are included
+                    // Shadow casters outside the frustum can still cast shadows into it
+                    float zRange = maxZ - minZ;
+                    float zPadding = zRange * 1.0f;  // 100% padding on both sides
+                    minZ = minZ - zPadding;  // Extend backwards (away from light)
+                    maxZ = maxZ + zPadding;  // Extend forwards (towards light)
+                } else {
+                    // Fallback: extend bounds to cover area beyond frustum
+                    float shadowExtent = 3.0f;  // 3x coverage (increased from 2.0x)
+                    float centerX = (minX + maxX) * 0.5f;
+                    float centerY = (minY + maxY) * 0.5f;
+                    float extentX = (maxX - minX) * shadowExtent * 0.5f;
+                    float extentY = (maxY - minY) * shadowExtent * 0.5f;
+
+                    minX = centerX - extentX;
+                    maxX = centerX + extentX;
+                    minY = centerY - extentY;
+                    maxY = centerY + extentY;
+
+                    // Extend Z range in both directions to avoid clipping shadow casters
+                    float zRange = maxZ - minZ;
+                    minZ = minZ - zRange * 5.0f;  // Extend backwards
+                    maxZ = maxZ + zRange * 2.0f;  // Extend forwards
+                }
+
+                // ============= Optimization 2: Projection Quantization for Stability =============
+                // Quantize projection bounds to fixed increments to reduce jitter
+                float quantize = 64.0f;  // World-space quantization step (adjustable)
+
+                minX = std::floor(minX / quantize) * quantize;
+                maxX = std::ceil(maxX / quantize) * quantize;
+                minY = std::floor(minY / quantize) * quantize;
+                maxY = std::ceil(maxY / quantize) * quantize;
+
+                // Calculate projection dimensions
+                float projWidth = maxX - minX;
+                float projHeight = maxY - minY;
+
+                // ============= Optimization 3: Texel Snapping to Prevent Shimmer =============
+                // Get cascade resolution for texel size calculation
+                uint32_t cascadeResolution = light.shadowResolution >> c;
+                cascadeResolution = eastl::max(cascadeResolution, 256u);
+
+                // Calculate texel size in light space
+                float texelSizeX = projWidth / cascadeResolution;
+                float texelSizeY = projHeight / cascadeResolution;
+
+                // Snap min bounds to texel grid
+                minX = std::floor(minX / texelSizeX) * texelSizeX;
+                minY = std::floor(minY / texelSizeY) * texelSizeY;
+
+                // Recalculate max bounds to maintain consistent size
+                maxX = minX + projWidth;
+                maxY = minY + projHeight;
+
+                // Build stabilized orthographic projection
+                glm::mat4 lightProjMatrix = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+                shadowData.cascadeViewProjMatrices[c] = lightProjMatrix * lightViewMatrix;
+
+                // Allocate atlas space for this cascade
+                auto cascadeAlloc = allocateSpace(cascadeResolution, lightIndex * 10 + c);
+
+                if (!cascadeAlloc.inUse) {
+                    // Atlas full, skip remaining cascades
+                    shadowData.cascadeCount = c;
+                    break;
+                }
+
+                shadowData.atlasRects[c] = cascadeAlloc.rect;
+
+                // Store cascade split depth (view space Z, which is negative in right-handed view space)
+                // We store the far plane of each cascade
+                if (c < 3) {  // Only store first 3 splits (4th is implicit as camera far plane)
+                    shadowData.cascadeSplitDepths[c] = cascadeFar;
+                }
             }
-            center /= frustumCorners.size();
 
-            // Build light view matrix looking at frustum center
-            glm::mat4 lightViewMatrix = glm::lookAt(
-                center - lightDir * light.shadowFarPlane,  // Position light behind frustum
-                center,                                     // Look at frustum center
-                up
-            );
+            // ============= Static Fallback Cascade (Entire Scene AABB) =============
+            // Add a fallback cascade covering the entire scene as insurance
+            if (sceneBounds.isValid() && cascadeCount < 4) {
+                uint32_t fallbackIdx = cascadeCount;
 
-            // Transform frustum corners to light space
-            float minX = std::numeric_limits<float>::max();
-            float maxX = std::numeric_limits<float>::lowest();
-            float minY = std::numeric_limits<float>::max();
-            float maxY = std::numeric_limits<float>::lowest();
-            float minZ = std::numeric_limits<float>::max();
-            float maxZ = std::numeric_limits<float>::lowest();
+                // Center of scene AABB
+                glm::vec3 sceneCenter = (sceneBounds.min + sceneBounds.max) * 0.5f;
 
-            for (const auto& corner : frustumCorners) {
-                const glm::vec4 trf = lightViewMatrix * glm::vec4(corner, 1.0f);
-                minX = std::min(minX, trf.x);
-                maxX = std::max(maxX, trf.x);
-                minY = std::min(minY, trf.y);
-                maxY = std::max(maxY, trf.y);
-                minZ = std::min(minZ, trf.z);
-                maxZ = std::max(maxZ, trf.z);
+                // Light view matrix pointing at scene center
+                glm::mat4 lightView = glm::lookAt(
+                    sceneCenter - lightDir * 500.0f,  // Far enough back
+                    sceneCenter,
+                    up
+                );
+
+                // Project scene AABB corners to light space
+                float minX = FLT_MAX, maxX = -FLT_MAX;
+                float minY = FLT_MAX, maxY = -FLT_MAX;
+                float minZ = FLT_MAX, maxZ = -FLT_MAX;
+
+                for (int x = 0; x <= 1; x++) {
+                    for (int y = 0; y <= 1; y++) {
+                        for (int z = 0; z <= 1; z++) {
+                            glm::vec3 corner(
+                                x ? sceneBounds.max.x : sceneBounds.min.x,
+                                y ? sceneBounds.max.y : sceneBounds.min.y,
+                                z ? sceneBounds.max.z : sceneBounds.min.z
+                            );
+                            glm::vec4 lsCorner = lightView * glm::vec4(corner, 1.0f);
+                            minX = std::min(minX, lsCorner.x);
+                            maxX = std::max(maxX, lsCorner.x);
+                            minY = std::min(minY, lsCorner.y);
+                            maxY = std::max(maxY, lsCorner.y);
+                            minZ = std::min(minZ, lsCorner.z);
+                            maxZ = std::max(maxZ, lsCorner.z);
+                        }
+                    }
+                }
+
+                // Orthographic projection covering entire scene
+                glm::mat4 lightProj = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+                shadowData.cascadeViewProjMatrices[fallbackIdx] = lightProj * lightView;
+
+                // Allocate atlas space
+                auto fallbackAlloc = allocateSpace(1024, lightIndex * 10 + fallbackIdx);
+                if (fallbackAlloc.inUse) {
+                    shadowData.atlasRects[fallbackIdx] = fallbackAlloc.rect;
+                    shadowData.cascadeSplitDepths[fallbackIdx] = FLT_MAX;  // Always use as last resort
+                    shadowData.cascadeCount++;
+                }
             }
 
-            // Use exact frustum bounds without extension
-            // Build tight orthographic projection matching frustum exactly
-            glm::mat4 lightProjMatrix = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
-            shadowData.lightSpaceMatrix = lightProjMatrix * lightViewMatrix;
-
-            // Debug logging (disabled for performance)
-            // violet::Log::info("ShadowSystem", "Light {}: dir=({:.2f},{:.2f},{:.2f}), center=({:.2f},{:.2f},{:.2f}), ortho=[{:.2f},{:.2f}]x[{:.2f},{:.2f}]x[{:.2f},{:.2f}]",
-            //                  lightIndex, lightDir.x, lightDir.y, lightDir.z,
-            //                  center.x, center.y, center.z,
-            //                  minX, maxX, minY, maxY, minZ, maxZ);
+            // If we only got 1 cascade or CSM failed, fallback completed above
         } else if (light.type == LightType::Point) {
-            // Point light: 6 cube face matrices
+            // Point light: allocate single cubemap space in atlas
+            shadowData.cascadeCount = 1;
+
+            uint32_t resolution = light.shadowResolution;
+            auto alloc = allocateSpace(resolution, lightIndex);
+
+            if (!alloc.inUse) {
+                lightIndex++;
+                continue; // Atlas full, skip this point light
+            }
+
+            shadowData.atlasRects[0] = alloc.rect;
+
+            // Generate 6 cube face matrices
             glm::vec3 lightPos = transform.world.position;
             float nearPlane = light.shadowNearPlane;
             float farPlane = light.shadowFarPlane;

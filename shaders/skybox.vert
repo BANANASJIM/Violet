@@ -18,6 +18,12 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     int skyboxEnabled;
     float iblIntensity;
 
+    // Shadow data
+    int shadowsEnabled;
+    int cascadeDebugMode;  // 0=off, 1=visualize cascades with colors
+    uint padding1_0;
+    uint padding1_1;  // Align to 16 bytes
+
     // IBL bindless texture indices
     uint environmentMapIndex;
     uint irradianceMapIndex;
