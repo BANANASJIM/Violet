@@ -285,3 +285,42 @@ target_link_libraries(RenderGraphTest PRIVATE
 if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_link_libraries(RenderGraphTest PRIVATE stdc++)
 endif()
+
+# ============================================
+# Slang Reflection Test
+# ============================================
+add_executable(SlangReflectionTest
+    tests/test_slang_reflection.cpp
+    src/resource/shader/SlangCompiler.cpp
+    src/resource/shader/ReflectionHelper.cpp
+    src/resource/shader/Shader.cpp
+    src/core/Log.cpp
+    src/core/FileSystem.cpp
+)
+
+target_compile_features(SlangReflectionTest PRIVATE cxx_std_20)
+
+target_include_directories(SlangReflectionTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+
+target_link_libraries(SlangReflectionTest PRIVATE
+    EASTL
+    fmt::fmt
+    spdlog::spdlog
+)
+
+# Link Slang
+if(UNIX AND NOT APPLE)
+    target_link_options(SlangReflectionTest PRIVATE "${SLANG_LIBRARY_FULL_PATH}")
+    set_target_properties(SlangReflectionTest PROPERTIES
+        BUILD_RPATH "${VCPKG_LIB_DIR}"
+    )
+elseif(APPLE OR WIN32)
+    target_link_libraries(SlangReflectionTest PRIVATE ShaderSlang)
+endif()
+
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_link_libraries(SlangReflectionTest PRIVATE stdc++)
+endif()

@@ -116,11 +116,15 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     result.spirv.resize(spirvSize);
     memcpy(result.spirv.data(), spirvData, spirvCode->getBufferSize());
 
+    // Cache reflection data
+    lastLinkedProgram = linkedProgram;
+    lastReflection = linkedProgram->getLayout();
+
     result.success = true;
     result.sourceHash = computeSourceHash(info.filePath);
 
-    Log::debug("SlangCompiler", "Compiled {} bytes of SPIRV from {}",
-               result.spirv.size() * 4, info.filePath.c_str());
+    Log::debug("SlangCompiler", "Compiled {} bytes of SPIRV from {}, reflection available: {}",
+               result.spirv.size() * 4, info.filePath.c_str(), lastReflection != nullptr);
 
     return result;
 }
