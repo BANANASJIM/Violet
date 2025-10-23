@@ -293,7 +293,7 @@ add_executable(SlangReflectionTest
     tests/test_slang_reflection.cpp
     src/resource/shader/SlangCompiler.cpp
     src/resource/shader/ReflectionHelper.cpp
-    src/resource/shader/Shader.cpp
+    src/resource/shader/ShaderReflection.cpp
     src/core/Log.cpp
     src/core/FileSystem.cpp
 )
@@ -303,9 +303,11 @@ target_compile_features(SlangReflectionTest PRIVATE cxx_std_20)
 target_include_directories(SlangReflectionTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    ${Vulkan_INCLUDE_DIRS}
 )
 
 target_link_libraries(SlangReflectionTest PRIVATE
+    Vulkan::Vulkan
     EASTL
     fmt::fmt
     spdlog::spdlog

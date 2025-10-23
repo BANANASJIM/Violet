@@ -5,35 +5,30 @@
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
 
+// Forward declare DescriptorManager types to avoid circular dependency
+namespace violet {
+    enum class UpdateFrequency;
+    struct DescriptorLayoutDesc;
+    struct BindingDesc;
+}
+
 namespace violet {
 
 class ReflectionHelper {
 public:
-    struct BindingInfo {
-        uint32_t set = 0;
-        uint32_t binding = 0;
-        vk::DescriptorType type = vk::DescriptorType::eUniformBuffer;
-        uint32_t descriptorCount = 1;
-        vk::ShaderStageFlags stageFlags = {};
-        eastl::string name;
-        bool isBindless = false;
-    };
-
-    struct SetLayoutInfo {
-        uint32_t setIndex = 0;
-        eastl::vector<BindingInfo> bindings;
-        vk::DescriptorSetLayoutCreateFlags flags = {};
-    };
-
     struct PushConstantInfo {
         uint32_t offset = 0;
         uint32_t size = 0;
         vk::ShaderStageFlags stageFlags = {};
     };
 
-    explicit ReflectionHelper(slang::ProgramLayout* layout);
+    explicit ReflectionHelper(slang::ProgramLayout* layout, SlangSession* session = nullptr);
 
-    eastl::vector<SetLayoutInfo> extractDescriptorSetLayouts() const;
+    // NEW: Returns DescriptorManager-compatible layout descriptions
+    eastl::vector<DescriptorLayoutDesc> extractDescriptorLayouts(
+        const eastl::string& shaderName
+    ) const;
+
     eastl::vector<PushConstantInfo> extractPushConstants() const;
     vk::ShaderStageFlags getShaderStageFlags() const;
 
@@ -43,13 +38,11 @@ private:
     static vk::DescriptorType slangTypeToVulkan(slang::BindingType type);
     static vk::ShaderStageFlags slangStageToVulkan(SlangStage stage);
 
-    void processParameter(
-        slang::VariableLayoutReflection* param,
-        uint32_t setIndex,
-        eastl::vector<BindingInfo>& bindings
-    ) const;
+    // Infer update frequency from binding types
+    static UpdateFrequency inferUpdateFrequency(const eastl::vector<BindingDesc>& bindings);
 
     slang::ProgramLayout* layout;
+    SlangSession* session;  // For querying user attributes
 };
 
 } // namespace violet

@@ -3,8 +3,16 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
+#include <slang.h>  // For ProgramLayout
 
 namespace violet {
+
+// Forward declarations
+class DescriptorManager;
+struct DescriptorLayoutDesc;
+struct PushConstantInfo;
+using LayoutHandle = uint32_t;
+using PushConstantHandle = uint32_t;
 
 /**
  * @brief Shader resource encapsulating SPIRV bytecode and metadata
@@ -64,6 +72,15 @@ public:
      */
     static const char* stageToString(Stage stage);
 
+    // Reflection API (Slang only)
+    void setReflection(slang::ProgramLayout* layout);
+    bool hasReflection() const { return reflection != nullptr; }
+    slang::ProgramLayout* getReflection() const { return reflection; }
+
+    void registerDescriptorLayouts(DescriptorManager* manager);
+    const eastl::vector<LayoutHandle>& getDescriptorLayoutHandles() const { return descriptorLayoutHandles; }
+    PushConstantHandle getPushConstantHandle() const { return pushConstantHandle; }
+
 private:
     eastl::string name;
     eastl::string filePath;
@@ -76,6 +93,11 @@ private:
     // Compilation options (for recompilation)
     eastl::vector<eastl::string> includePaths;
     eastl::vector<eastl::string> defines;
+
+    // Reflection data (Slang only)
+    slang::ProgramLayout* reflection = nullptr;
+    eastl::vector<LayoutHandle> descriptorLayoutHandles;  // Ordered by set index
+    PushConstantHandle pushConstantHandle = 0;  // 0 = no push constants
 };
 
 } // namespace violet

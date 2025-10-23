@@ -33,6 +33,20 @@ public:
      */
     bool hasReflection() const { return lastReflection != nullptr; }
 
+    /**
+     * @brief Get all entry points from a Slang module
+     * @param filePath Path to .slang module file
+     * @param includePaths Search paths for imports
+     * @return Vector of entry point info (name + stage), empty if failed
+     */
+    struct EntryPointInfo {
+        eastl::string name;
+        Shader::Stage stage;
+    };
+    eastl::vector<EntryPointInfo> getModuleEntryPoints(
+        const eastl::string& filePath,
+        const eastl::vector<eastl::string>& includePaths = {});
+
 private:
     /**
      * @brief Convert Shader::Stage to Slang stage

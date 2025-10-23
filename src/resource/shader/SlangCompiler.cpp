@@ -158,6 +158,98 @@ SlangStage SlangCompiler::stageToSlangStage(Shader::Stage stage) {
     return SLANG_STAGE_NONE;
 }
 
+static Shader::Stage slangStageToShaderStage(SlangStage slangStage) {
+    switch (slangStage) {
+        case SLANG_STAGE_VERTEX:   return Shader::Stage::Vertex;
+        case SLANG_STAGE_FRAGMENT: return Shader::Stage::Fragment;
+        case SLANG_STAGE_COMPUTE:  return Shader::Stage::Compute;
+        case SLANG_STAGE_GEOMETRY: return Shader::Stage::Geometry;
+        case SLANG_STAGE_HULL:     return Shader::Stage::TessControl;
+        case SLANG_STAGE_DOMAIN:   return Shader::Stage::TessEvaluation;
+        default:                   return Shader::Stage::Vertex; // Fallback
+    }
+}
+
+eastl::vector<SlangCompiler::EntryPointInfo> SlangCompiler::getModuleEntryPoints(
+    const eastl::string& filePath,
+    const eastl::vector<eastl::string>& includePaths) {
+
+    eastl::vector<EntryPointInfo> entryPoints;
+
+    if (!globalSession) {
+        Log::error("SlangCompiler", "Slang global session not initialized");
+        return entryPoints;
+    }
+
+    // Create session description
+    slang::SessionDesc sessionDesc = {};
+    slang::TargetDesc targetDesc = {};
+    targetDesc.format = SLANG_SPIRV;
+    targetDesc.profile = globalSession->findProfile("spirv_1_5");
+    targetDesc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
+
+    sessionDesc.targets = &targetDesc;
+    sessionDesc.targetCount = 1;
+
+    // Add search paths
+    eastl::vector<const char*> searchPaths;
+    for (const auto& path : includePaths) {
+        searchPaths.push_back(path.c_str());
+    }
+    sessionDesc.searchPaths = searchPaths.data();
+    sessionDesc.searchPathCount = searchPaths.size();
+
+    // Create session
+    Slang::ComPtr<slang::ISession> session;
+    if (SLANG_FAILED(globalSession->createSession(sessionDesc, session.writeRef()))) {
+        Log::error("SlangCompiler", "Failed to create Slang session for reflection");
+        return entryPoints;
+    }
+
+    // Load module
+    Slang::ComPtr<slang::IBlob> diagnostics;
+    slang::IModule* module = session->loadModule(filePath.c_str(), diagnostics.writeRef());
+
+    if (!module) {
+        Log::error("SlangCompiler", "Failed to load module '{}' for entry point enumeration", filePath.c_str());
+        return entryPoints;
+    }
+
+    // Get entry point count
+    SlangInt32 entryPointCount = module->getDefinedEntryPointCount();
+    Log::info("SlangCompiler", "Module '{}' has {} entry points", filePath.c_str(), entryPointCount);
+
+    // Enumerate all entry points
+    for (SlangInt32 i = 0; i < entryPointCount; ++i) {
+        Slang::ComPtr<slang::IEntryPoint> entryPoint;
+        if (SLANG_FAILED(module->getDefinedEntryPoint(i, entryPoint.writeRef()))) {
+            continue;
+        }
+
+        // Get entry point reflection
+        slang::EntryPointReflection* entryPointRefl = entryPoint->getLayout()->getEntryPointByIndex(0);
+        if (!entryPointRefl) continue;
+
+        // Get entry point name
+        const char* entryPointName = entryPointRefl->getName();
+
+        // Get entry point stage
+        SlangStage slangStage = entryPointRefl->getStage();
+
+        EntryPointInfo info;
+        info.name = entryPointName;
+        info.stage = slangStageToShaderStage(slangStage);
+
+        entryPoints.push_back(info);
+
+        const char* stageNames[] = {"Vertex", "Fragment", "Compute", "Geometry", "TessControl", "TessEvaluation"};
+        Log::info("SlangCompiler", "  Entry point {}: '{}' ({})",
+                 i, entryPointName, stageNames[static_cast<int>(info.stage)]);
+    }
+
+    return entryPoints;
+}
+
 bool SlangCompiler::checkDiagnostics(slang::IBlob* diagnostics, CompileResult& result) {
     if (diagnostics && diagnostics->getBufferSize() > 0) {
         const char* diagText = reinterpret_cast<const char*>(diagnostics->getBufferPointer());

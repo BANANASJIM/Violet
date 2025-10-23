@@ -60,6 +60,33 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Declare all descriptor set layouts (declarative registration)
     registerDescriptorLayouts();
 
+    // ============================================================================
+    // TEMPORARY: Verify Slang shader auto-registration (TODO: Remove after testing)
+    // ============================================================================
+    violet::Log::info("Renderer", "=== TESTING: Verifying Slang auto-registered layouts ===");
+
+    // Check if Slang shaders auto-registered any layouts
+    // Expected pattern: "shader_name_setN" (e.g., "pbr_vert_set0")
+    const char* testLayouts[] = {
+        "pbr_vert_set0", "pbr_vert_set1", "pbr_vert_set2",
+        "pbr_vert_set3", "pbr_vert_set4", "pbr_vert_set5"
+    };
+
+    for (const char* layoutName : testLayouts) {
+        if (descMgr.hasLayout(layoutName)) {
+            violet::Log::info("Renderer", "  ✓ Slang auto-registered: '{}'", layoutName);
+
+            // Check if reflection data is stored
+            auto layout = descMgr.getLayout(layoutName);
+            // TODO: Add hasReflection() and getReflection() API to check field metadata
+        } else {
+            violet::Log::debug("Renderer", "  ✗ Layout '{}' not found (expected if using GLSL)", layoutName);
+        }
+    }
+
+    violet::Log::info("Renderer", "=== END TESTING ===");
+    // ============================================================================
+
     // Initialize subsystems
     globalUniforms.init(context, &descMgr, maxFramesInFlight);
 
@@ -95,15 +122,16 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize material data SSBO for bindless architecture
     descMgr.initMaterialDataBuffer(1024);
 
+    // TODO: Temporarily disabled shadow/lighting systems to test Slang pipeline creation
     // Initialize lighting and shadow systems
-    lightingSystem = new LightingSystem();
-    lightingSystem->init(context, &descMgr, maxFramesInFlight);
+    // lightingSystem = new LightingSystem();
+    // lightingSystem->init(context, &descMgr, maxFramesInFlight);
 
-    shadowSystem = new ShadowSystem();
-    shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
+    // shadowSystem = new ShadowSystem();
+    // shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
 
-    shadowPass = eastl::make_unique<ShadowPass>();
-    shadowPass->init(context, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
+    // shadowPass = eastl::make_unique<ShadowPass>();
+    // shadowPass->init(context, &descMgr, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
 
 }
 

@@ -12,10 +12,11 @@
 
 namespace violet {
 
-void ShadowPass::init(VulkanContext* ctx, ShaderLibrary* shaderLib,
+void ShadowPass::init(VulkanContext* ctx, DescriptorManager* descMgr, ShaderLibrary* shaderLib,
                       ShadowSystem* shadowSys, LightingSystem* lightingSys,
                       RenderGraph* graph, const eastl::string& atlasName) {
     context = ctx;
+    descriptorManager = descMgr;
     shaderLibrary = shaderLib;
     shadowSystem = shadowSys;
     lightingSystem = lightingSys;
@@ -39,14 +40,8 @@ void ShadowPass::init(VulkanContext* ctx, ShaderLibrary* shaderLib,
     config.depthFormat = vk::Format::eD32Sfloat;
     config.stencilFormat = vk::Format::eUndefined;
 
-    vk::PushConstantRange pushConstRange;
-    pushConstRange.stageFlags = vk::ShaderStageFlagBits::eVertex;
-    pushConstRange.offset = 0;
-    pushConstRange.size = sizeof(glm::mat4) * 2;
-    config.pushConstantRanges.push_back(pushConstRange);
-
     shadowPipeline = eastl::make_unique<GraphicsPipeline>();
-    shadowPipeline->init(context, nullptr, shadowVert, eastl::weak_ptr<Shader>(), config);
+    shadowPipeline->init(context, descriptorManager, nullptr, shadowVert, eastl::weak_ptr<Shader>(), config);
 
     violet::Log::info("ShadowPass", "Initialized shadow pass");
 }

@@ -14,10 +14,11 @@ class ShadowSystem;
 class LightingSystem;
 class ShaderLibrary;
 class GraphicsPipeline;
+class DescriptorManager;
 
 class ShadowPass {
 public:
-    void init(VulkanContext* context, ShaderLibrary* shaderLibrary,
+    void init(VulkanContext* context, DescriptorManager* descriptorManager, ShaderLibrary* shaderLibrary,
               ShadowSystem* shadowSystem, LightingSystem* lightingSystem,
               RenderGraph* renderGraph, const eastl::string& atlasImageName);
     void cleanup();
@@ -26,6 +27,7 @@ public:
 
 private:
     VulkanContext* context = nullptr;
+    DescriptorManager* descriptorManager = nullptr;
     ShaderLibrary* shaderLibrary = nullptr;
     ShadowSystem* shadowSystem = nullptr;
     LightingSystem* lightingSystem = nullptr;

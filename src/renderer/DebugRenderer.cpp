@@ -65,7 +65,7 @@ void DebugRenderer::init(VulkanContext* ctx, GlobalUniforms* globalUnif,
     }
 
     // Use new shader-based init API (dynamic rendering - no RenderPass needed)
-    debugPipeline->init(context, debugMaterial.get(), debugVert, debugFrag, config);
+    debugPipeline->init(context, descMgr, debugMaterial.get(), debugVert, debugFrag, config);
 
     // Create triangle pipeline for filled geometry (rays, mesh wireframes converted to lines)
     trianglePipeline = eastl::make_unique<GraphicsPipeline>();
@@ -74,7 +74,7 @@ void DebugRenderer::init(VulkanContext* ctx, GlobalUniforms* globalUnif,
     triangleConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
     triangleConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for debug geometry
 
-    trianglePipeline->init(context, debugMaterial.get(), debugVert, debugFrag, triangleConfig);
+    trianglePipeline->init(context, descMgr, debugMaterial.get(), debugVert, debugFrag, triangleConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);

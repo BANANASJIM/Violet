@@ -65,40 +65,22 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
     auto material = eastl::make_unique<Material>();
     material->create(context);
 
-    // Map descriptorSetLayouts array to PipelineConfig
-    PipelineConfig finalConfig = desc.pipelineConfig;
-
-    // Clear any existing descriptor set layouts and rebuild from descriptorSetLayouts array
-    // This ensures clean sequential order (Set 0, 1, 2, ...)
-    finalConfig.globalDescriptorSetLayout = nullptr;
-    finalConfig.materialDescriptorSetLayout = nullptr;
-    finalConfig.additionalDescriptorSets.clear();
-
-    // Convert descriptor set layout names to actual layouts
-    for (const auto& layoutName : desc.descriptorSetLayouts) {
-        if (!descriptorManager->hasLayout(layoutName)) {
-            violet::Log::error("MaterialManager", "Descriptor set layout '{}' not found in DescriptorManager", layoutName.c_str());
-            return nullptr;
-        }
-        auto layout = descriptorManager->getLayout(layoutName);
-        finalConfig.additionalDescriptorSets.push_back(layout);
-    }
-
-    // Validate format information is provided
-    if (finalConfig.colorFormats.empty()) {
-        violet::Log::error("MaterialManager", "Material '{}' has no color formats specified",
+    // Validate format information
+    if (desc.pipelineConfig.colorFormats.empty()) {
+        violet::Log::error("MaterialManager", "Material '{}' has no color formats",
                           desc.name.empty() ? "unnamed" : desc.name.c_str());
         return nullptr;
     }
 
-    // Create graphics pipeline with dynamic rendering
+    // Create pipeline - layouts and push constants auto-extracted from shader reflection
     auto pipeline = eastl::make_unique<GraphicsPipeline>();
     pipeline->init(
         context,
+        descriptorManager,
         material.get(),
         desc.vertexShader,
         desc.fragmentShader,
-        finalConfig
+        desc.pipelineConfig
     );
 
     material->pipeline = eastl::move(pipeline);
@@ -111,8 +93,8 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
         namedMaterials[desc.name] = materialPtr;
     }
 
-    violet::Log::debug("MaterialManager", "Created material '{}' (index {}) with {} descriptor sets",
-                      desc.name.empty() ? "unnamed" : desc.name.c_str(), materials.size() - 1, desc.descriptorSetLayouts.size());
+    violet::Log::debug("MaterialManager", "Created material '{}' (index {})",
+                      desc.name.empty() ? "unnamed" : desc.name.c_str(), materials.size() - 1);
 
     return materialPtr;
 }
@@ -156,15 +138,6 @@ Material* MaterialManager::createPBRBindlessMaterial() {
    config.depthFormat = formats.depthFormat;
    config.stencilFormat = formats.stencilFormat;
 
-    // Push constants for PBR: mat4 model (64 bytes) + uint materialID (4 bytes) = 68 bytes
-    // Round up to 16-byte alignment = 80 bytes
-    // IMPORTANT: Both vertex and fragment shaders access push constants (materialID is used in fragment shader)
-    vk::PushConstantRange pushConstantRange;
-    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = 80;  // 68 bytes rounded up to 16-byte alignment
-    config.pushConstantRanges.push_back(pushConstantRange);
-
     // Create material descriptor
     MaterialDesc desc;
     desc.vertexShader = vertShader;
@@ -173,14 +146,6 @@ Material* MaterialManager::createPBRBindlessMaterial() {
     desc.name = "PBRBindless";
     desc.type = MaterialType::PBR;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
-
-    // Bindless rendering requires descriptor sets in a specific order:
-    // Set 0: Global (camera, IBL)
-    // Set 1: Bindless texture array
-    // Set 2: Material data SSBO
-    // Set 3: Lighting data SSBO
-    // Set 4: Shadow data SSBO
-    desc.descriptorSetLayouts = {"Global", "Bindless", "MaterialData", "Lighting", "Shadow"};
 
     Material* material = createMaterial(desc);
     if (!material) {
@@ -215,15 +180,6 @@ Material* MaterialManager::createPostProcessMaterial() {
     config.depthFormat = vk::Format::eUndefined;  // No depth attachment
     config.stencilFormat = formats.stencilFormat;
 
-    // Push constants for tonemap parameters (ev100, gamma, tonemapMode, padding = 16 bytes)
-    // IMPORTANT: Even though only fragment shader uses push constants, we need to include
-    // both Vertex and Fragment stages due to Vulkan validation requirements
-    vk::PushConstantRange pushConstantRange;
-    pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = 16;  // float ev100, float gamma, uint tonemapMode, float padding
-    config.pushConstantRanges.push_back(pushConstantRange);
-
     // Create material descriptor
     MaterialDesc desc;
     desc.vertexShader = vertShader;
@@ -232,10 +188,6 @@ Material* MaterialManager::createPostProcessMaterial() {
     desc.name = "PostProcess";
     desc.type = MaterialType::PostProcess;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
-
-    // PostProcess only needs its own descriptor set (Set 0)
-    // No Global descriptor set required - shader doesn't use camera/lighting data
-    desc.descriptorSetLayouts = {"PostProcess"};
 
     return createMaterial(desc);
 }
@@ -272,11 +224,6 @@ Material* MaterialManager::createSkyboxMaterial() {
     desc.name = "Skybox";
     desc.type = MaterialType::Skybox;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
-
-    // Skybox needs descriptor sets for camera and cubemap access:
-    // Set 0: Global (camera, view/proj matrices)
-    // Set 1: Bindless (cubemap array)
-    desc.descriptorSetLayouts = {"Global", "Bindless"};
 
     return createMaterial(desc);
 }

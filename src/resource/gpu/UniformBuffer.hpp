@@ -39,6 +39,10 @@ public:
     void cleanup() override;
     void update(const void* data, size_t size);
 
+    // Reflection-based field update (requires ShaderReflection)
+    bool updateField(const eastl::string& fieldName, const void* data, size_t size,
+                     const class ShaderReflection* reflection, const eastl::string& bufferName);
+
     vk::Buffer getBuffer() const { return bufferResource.buffer; }
     vk::DescriptorBufferInfo getDescriptorInfo() const {
         return vk::DescriptorBufferInfo{bufferResource.buffer, 0, bufferResource.size};

@@ -34,12 +34,11 @@ enum class MaterialType {
 
 // Material creation descriptor
 struct MaterialDesc {
-    eastl::weak_ptr<Shader> vertexShader;    // Vertex shader from ShaderLibrary
-    eastl::weak_ptr<Shader> fragmentShader;  // Fragment shader from ShaderLibrary
-    eastl::vector<eastl::string> descriptorSetLayouts;  // Descriptor set layout names (Set 0, Set 1, Set 2, ...)
+    eastl::weak_ptr<Shader> vertexShader;
+    eastl::weak_ptr<Shader> fragmentShader;
     PipelineConfig pipelineConfig;
     RenderPass* renderPass = nullptr;
-    eastl::string name;                      // Optional material name for debugging
+    eastl::string name;
     MaterialType type = MaterialType::Custom;
 };
 

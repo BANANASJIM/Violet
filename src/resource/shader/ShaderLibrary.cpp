@@ -6,20 +6,93 @@
 
 namespace violet {
 
-ShaderLibrary::ShaderLibrary(VulkanContext* ctx)
+ShaderLibrary::ShaderLibrary(VulkanContext* ctx, DescriptorManager* descMgr)
     : context(ctx)
+    , descriptorManager(descMgr)
     , glslCompiler(eastl::make_unique<GLSLCompiler>())
     , slangCompiler(eastl::make_unique<SlangCompiler>()) {
 
-    // Set default include paths
-    defaultIncludePaths.push_back("shaders");
-    defaultIncludePaths.push_back("shaders/include");
+    // Set default include paths (use absolute paths for Slang module resolution)
+    defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders"));
+    defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/slang"));
+    defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/include"));
 
-    Log::info("ShaderLibrary", "Initialized with GLSL and Slang compilers");
+    Log::info("ShaderLibrary", "Initialized with GLSL and Slang compilers (DescriptorManager: {})",
+             descriptorManager ? "yes" : "no");
 }
 
 ShaderLibrary::~ShaderLibrary() {
     clear();
+}
+
+eastl::vector<eastl::weak_ptr<Shader>> ShaderLibrary::loadSlangShader(const eastl::string& filePath) {
+    eastl::vector<eastl::weak_ptr<Shader>> loadedShaders;
+
+    if (!slangCompiler) {
+        Log::error("ShaderLibrary", "Slang compiler not initialized");
+        return loadedShaders;
+    }
+
+    // Get all entry points from the module via reflection
+    auto* slang = static_cast<SlangCompiler*>(slangCompiler.get());
+    auto entryPoints = slang->getModuleEntryPoints(filePath, defaultIncludePaths);
+
+    if (entryPoints.empty()) {
+        Log::warn("ShaderLibrary", "No entry points found in module '{}'", filePath.c_str());
+        return loadedShaders;
+    }
+
+    // Extract base name from file path (e.g., "shaders/pbr_bindless.slang" -> "pbr_bindless")
+    eastl::string baseName = filePath;
+    size_t lastSlash = baseName.find_last_of("/\\");
+    if (lastSlash != eastl::string::npos) {
+        baseName = baseName.substr(lastSlash + 1);
+    }
+    size_t lastDot = baseName.find_last_of('.');
+    if (lastDot != eastl::string::npos) {
+        baseName = baseName.substr(0, lastDot);
+    }
+
+    // Compile each entry point as a separate shader
+    for (const auto& entryPoint : entryPoints) {
+        // Generate shader name: "filename_entrypoint" (e.g., "pbr_bindless_vertexMain")
+        eastl::string shaderName = baseName + "_" + entryPoint.name;
+
+        // Check if already loaded
+        if (has(shaderName)) {
+            Log::debug("ShaderLibrary", "Shader '{}' already loaded, skipping", shaderName.c_str());
+            loadedShaders.push_back(get(shaderName));
+            continue;
+        }
+
+        // Create shader info
+        Shader::CreateInfo info;
+        info.name = shaderName;
+        info.filePath = filePath;
+        info.entryPoint = entryPoint.name;
+        info.stage = entryPoint.stage;
+        info.language = Shader::Language::Slang;
+        info.includePaths = defaultIncludePaths;
+        info.defines = globalDefines;
+
+        // Load (compile + auto-register layouts)
+        auto shader = load(shaderName, info);
+        loadedShaders.push_back(shader);
+
+        if (!shader.expired()) {
+            const char* stageNames[] = {"vert", "frag", "comp", "geom", "tesc", "tese"};
+            Log::info("ShaderLibrary", "  ✓ Loaded '{}' ({})",
+                     shaderName.c_str(), stageNames[static_cast<int>(entryPoint.stage)]);
+        } else {
+            Log::error("ShaderLibrary", "  ✗ Failed to load '{}' ({})",
+                      shaderName.c_str(), entryPoint.name.c_str());
+        }
+    }
+
+    Log::info("ShaderLibrary", "Loaded {} shaders from '{}'",
+             loadedShaders.size(), filePath.c_str());
+
+    return loadedShaders;
 }
 
 eastl::weak_ptr<Shader> ShaderLibrary::load(const eastl::string& name, const Shader::CreateInfo& info) {
@@ -72,6 +145,19 @@ eastl::weak_ptr<Shader> ShaderLibrary::load(const eastl::string& name, const Sha
     // Create shader object with shared_ptr
     auto shader = eastl::make_shared<Shader>(mergedInfo, result.spirv);
     shader->updateSPIRV(result.spirv, result.sourceHash);
+
+    // Set reflection data and auto-register layouts (Slang only)
+    if (mergedInfo.language == Shader::Language::Slang) {
+        auto* slang = static_cast<SlangCompiler*>(compiler);
+        if (slang->hasReflection()) {
+            shader->setReflection(slang->getReflection());
+
+            // Automatically register descriptor layouts from reflection
+            if (descriptorManager) {
+                shader->registerDescriptorLayouts(descriptorManager);
+            }
+        }
+    }
 
     shaders[name] = shader;
 
@@ -131,6 +217,15 @@ bool ShaderLibrary::reload(const eastl::string& name) {
 
     // Update SPIRV
     shader->updateSPIRV(result.spirv, result.sourceHash);
+
+    // Re-register descriptor layouts if Slang shader with reflection
+    if (shader->getLanguage() == Shader::Language::Slang && descriptorManager) {
+        auto* slang = static_cast<SlangCompiler*>(compiler);
+        if (slang->hasReflection()) {
+            shader->setReflection(slang->getReflection());
+            shader->registerDescriptorLayouts(descriptorManager);
+        }
+    }
 
     Log::info("ShaderLibrary", "Successfully reloaded shader '{}'", name.c_str());
     return true;

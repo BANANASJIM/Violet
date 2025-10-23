@@ -23,7 +23,7 @@ void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
     descriptorManager.init(context, maxFramesInFlight);
 
     // 2. Initialize sub-managers in dependency order using make_unique
-    shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx);
+    shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx, &descriptorManager);
 
     textureManager = eastl::make_unique<TextureManager>();
     textureManager->init(ctx, &descriptorManager);
@@ -42,6 +42,25 @@ void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
 
 void ResourceManager::loadAllShaders() {
     violet::Log::info("ResourceManager", "Pre-loading all shaders into ShaderLibrary...");
+
+    // ============================================================================
+    // TEMPORARY: Test new Slang auto-loading API (TODO: Replace old GLSL loading)
+    // ============================================================================
+    violet::Log::info("ResourceManager", "=== TESTING: loadSlangShader() API ===");
+
+    // Test auto-loading PBR shader with automatic entry point detection
+    auto pbrShaders = shaderLibrary->loadSlangShader(
+        FileSystem::resolveRelativePath("shaders/slang/pbr_bindless.slang"));
+
+    violet::Log::info("ResourceManager", "PBR shader auto-loaded {} shaders:", pbrShaders.size());
+    for (const auto& shader : pbrShaders) {
+        if (auto s = shader.lock()) {
+            violet::Log::info("ResourceManager", "  - {}", s->getName().c_str());
+        }
+    }
+
+    violet::Log::info("ResourceManager", "=== END TESTING ===");
+    // ============================================================================
 
     using Language = Shader::Language;
     using Stage = Shader::Stage;

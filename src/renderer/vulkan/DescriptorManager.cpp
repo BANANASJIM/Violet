@@ -3,6 +3,7 @@
 #include "resource/gpu/UniformBuffer.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
+#include "resource/shader/Shader.hpp"
 #include "core/Log.hpp"
 #include <functional>
 #include <EASTL/algorithm.h>
@@ -44,6 +45,41 @@ bool SamplerConfig::operator==(const SamplerConfig& other) const {
            borderColor == other.borderColor &&
            compareEnable == other.compareEnable &&
            compareOp == other.compareOp;
+}
+
+// ===== DescriptorLayoutDesc Implementation =====
+
+LayoutHandle DescriptorLayoutDesc::hash() const {
+    uint32_t h = 0;
+
+    // Hash frequency and flags
+    h ^= std::hash<int>{}(static_cast<int>(frequency)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(flags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<bool>{}(isBindless) + 0x9e3779b9 + (h << 6) + (h >> 2);
+
+    // Hash each binding (包括per-binding flags)
+    for (const auto& binding : bindings) {
+        h ^= std::hash<uint32_t>{}(binding.binding) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(static_cast<int>(binding.type)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(binding.stages)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(binding.count) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(binding.flags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    }
+
+    return h;
+}
+
+PushConstantHandle PushConstantDesc::hash() const {
+    uint32_t h = 0;
+
+    // Hash each push constant range
+    for (const auto& range : ranges) {
+        h ^= std::hash<uint32_t>{}(range.offset) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(range.size) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(range.stageFlags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    }
+
+    return h != 0 ? h : 1;  // Ensure we never return 0 (reserved for "no push constants")
 }
 
 SamplerConfig SamplerConfig::getDefault(float maxAnisotropy) {
@@ -186,23 +222,18 @@ void DescriptorManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
 void DescriptorManager::cleanup() {
     auto device = context->getDevice();
 
-    // Clean up samplers
     for (auto& [hash, sampler] : samplerCache) {
         device.destroySampler(sampler);
     }
     samplerCache.clear();
     predefinedSamplers.clear();
-    violet::Log::info("Renderer", "Destroyed {} cached samplers", samplerCache.size());
 
-    // Clean up material data buffer
     if (materialDataEnabled && materialDataBuffer.buffer) {
         ResourceFactory::destroyBuffer(context, materialDataBuffer);
         materialDataEnabled = false;
         materialDataMapped = nullptr;
-        violet::Log::info("Renderer", "MaterialDataBuffer destroyed");
     }
 
-    // Clean up all pools
     for (auto& [frequency, pools] : poolsByFrequency) {
         for (auto& poolInfo : pools) {
             if (poolInfo.pool) {
@@ -212,24 +243,26 @@ void DescriptorManager::cleanup() {
     }
     poolsByFrequency.clear();
 
-    // Clean up all layouts
-    for (auto& [name, layoutInfo] : layouts) {
+    for (auto& [handle, layoutInfo] : layouts) {
         if (layoutInfo.layout) {
             device.destroyDescriptorSetLayout(layoutInfo.layout);
         }
     }
     layouts.clear();
+    nameToHandle.clear();
 
     violet::Log::info("Renderer", "DescriptorManager cleaned up");
 }
 
-void DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc) {
-    if (layouts.find(desc.name) != layouts.end()) {
-        violet::Log::warn("Renderer", "Descriptor layout '{}' already registered, skipping", desc.name.c_str());
-        return;
+LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc) {
+    LayoutHandle handle = desc.hash();
+
+    if (layouts.find(handle) != layouts.end()) {
+        violet::Log::debug("Renderer", "Descriptor layout '{}' (hash={}) already registered, reusing",
+                          desc.name.c_str(), handle);
+        return handle;
     }
 
-    // Convert bindings to Vulkan format
     eastl::vector<vk::DescriptorSetLayoutBinding> vkBindings;
     eastl::vector<vk::DescriptorPoolSize> poolSizes;
 
@@ -256,17 +289,22 @@ void DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc) {
         }
     }
 
-    // Create layout
+    // Collect per-binding flags
+    eastl::vector<vk::DescriptorBindingFlags> bindingFlagsArray;
+    bindingFlagsArray.reserve(desc.bindings.size());
+    for (const auto& binding : desc.bindings) {
+        bindingFlagsArray.push_back(binding.flags);
+    }
+
+    // Create layout with per-binding flags
     vk::DescriptorSetLayoutCreateInfo layoutInfo;
     layoutInfo.flags = desc.flags;
     layoutInfo.bindingCount = static_cast<uint32_t>(vkBindings.size());
     layoutInfo.pBindings = vkBindings.data();
 
-    // Add binding flags if specified (for bindless)
+    // Chain binding flags if any bindless bindings exist
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo;
-    eastl::vector<vk::DescriptorBindingFlags> bindingFlagsArray;
-    if (desc.bindingFlags) {
-        bindingFlagsArray.resize(vkBindings.size(), desc.bindingFlags);
+    if (desc.isBindless && !bindingFlagsArray.empty()) {
         bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlagsArray.size());
         bindingFlagsInfo.pBindingFlags = bindingFlagsArray.data();
         layoutInfo.pNext = &bindingFlagsInfo;
@@ -280,15 +318,22 @@ void DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc) {
     info.frequency = desc.frequency;
     info.poolSizes = poolSizes;
     info.createFlags = desc.flags;
-    layouts[desc.name] = info;
+    layouts[handle] = info;
 
-    violet::Log::info("Renderer", "Registered descriptor layout '{}' with {} bindings", desc.name.c_str(), desc.bindings.size());
+    // Store name->handle mapping for legacy API
+    if (!desc.name.empty()) {
+        nameToHandle[desc.name] = handle;
+    }
+
+    violet::Log::info("Renderer", "Registered descriptor layout '{}' (hash={}) with {} bindings",
+                     desc.name.c_str(), handle, desc.bindings.size());
+    return handle;
 }
 
-vk::DescriptorSet DescriptorManager::allocateSet(const eastl::string& layoutName, uint32_t frameIndex) {
-    auto it = layouts.find(layoutName);
+vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle, uint32_t frameIndex) {
+    auto it = layouts.find(handle);
     if (it == layouts.end()) {
-        violet::Log::error("Renderer", "Descriptor layout '{}' not found", layoutName.c_str());
+        violet::Log::error("Renderer", "Descriptor layout handle {} not found", handle);
         return nullptr;
     }
 
@@ -316,43 +361,6 @@ vk::DescriptorSet DescriptorManager::allocateSet(const eastl::string& layoutName
     return sets[0];
 }
 
-eastl::vector<vk::DescriptorSet> DescriptorManager::allocateSets(const eastl::string& layoutName, uint32_t count) {
-    auto it = layouts.find(layoutName);
-    if (it == layouts.end()) {
-        violet::Log::error("Renderer", "Descriptor layout '{}' not found", layoutName.c_str());
-        return {};
-    }
-
-    const LayoutInfo& layoutInfo = it->second;
-    vk::DescriptorPool pool = getOrCreatePool(layoutInfo.frequency);
-
-    // Allocate multiple descriptor sets
-    eastl::vector<vk::DescriptorSetLayout> layoutArray(count, layoutInfo.layout);
-    vk::DescriptorSetAllocateInfo allocInfo;
-    allocInfo.descriptorPool = pool;
-    allocInfo.descriptorSetCount = count;
-    allocInfo.pSetLayouts = layoutArray.data();
-
-    auto stdSets = context->getDevice().allocateDescriptorSets(allocInfo);
-
-    // Update remaining sets count
-    auto& pools = poolsByFrequency[layoutInfo.frequency];
-    for (auto& poolInfo : pools) {
-        if (poolInfo.pool == pool) {
-            poolInfo.remainingSets -= count;
-            break;
-        }
-    }
-
-    // Convert std::vector to eastl::vector
-    eastl::vector<vk::DescriptorSet> sets;
-    sets.reserve(stdSets.size());
-    for (const auto& set : stdSets) {
-        sets.push_back(set);
-    }
-
-    return sets;
-}
 
 void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<ResourceBindingDesc>& bindings) {
     if (!set) {
@@ -434,23 +442,56 @@ void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<Res
     }
 }
 
-vk::DescriptorSetLayout DescriptorManager::getLayout(const eastl::string& layoutName) const {
-    auto it = layouts.find(layoutName);
+vk::DescriptorSetLayout DescriptorManager::getLayout(LayoutHandle handle) const {
+    auto it = layouts.find(handle);
     if (it == layouts.end()) {
-        violet::Log::error("Renderer", "Descriptor layout '{}' not found", layoutName.c_str());
+        violet::Log::error("Renderer", "Descriptor layout handle {} not found", handle);
         return nullptr;
     }
 
     vk::DescriptorSetLayout layout = it->second.layout;
     if (!layout) {
-        violet::Log::error("Renderer", "Descriptor layout '{}' found but handle is null", layoutName.c_str());
+        violet::Log::error("Renderer", "Descriptor layout handle {} found but Vulkan handle is null", handle);
     }
 
     return layout;
 }
 
+bool DescriptorManager::hasLayout(LayoutHandle handle) const {
+    return layouts.find(handle) != layouts.end();
+}
+
+// @deprecated Legacy String-Based API - Remove once all code migrates to LayoutHandle
+eastl::vector<vk::DescriptorSet> DescriptorManager::allocateSets(const eastl::string& layoutName, uint32_t count) {
+    auto it = nameToHandle.find(layoutName);
+    if (it == nameToHandle.end()) {
+        violet::Log::error("Renderer", "Descriptor layout '{}' not found", layoutName.c_str());
+        return {};
+    }
+
+    LayoutHandle handle = it->second;
+    eastl::vector<vk::DescriptorSet> sets;
+    sets.reserve(count);
+
+    for (uint32_t i = 0; i < count; ++i) {
+        sets.push_back(allocateSet(handle, i % maxFrames));
+    }
+
+    return sets;
+}
+
+vk::DescriptorSetLayout DescriptorManager::getLayout(const eastl::string& layoutName) const {
+    auto it = nameToHandle.find(layoutName);
+    if (it == nameToHandle.end()) {
+        violet::Log::error("Renderer", "Descriptor layout '{}' not found", layoutName.c_str());
+        return nullptr;
+    }
+
+    return getLayout(it->second);
+}
+
 bool DescriptorManager::hasLayout(const eastl::string& layoutName) const {
-    return layouts.find(layoutName) != layouts.end();
+    return nameToHandle.find(layoutName) != nameToHandle.end();
 }
 
 void DescriptorManager::initBindless(uint32_t maxTextures) {
@@ -481,9 +522,14 @@ void DescriptorManager::initBindless(uint32_t maxTextures) {
         bindlessCubemapFreeIndices.push_back(i);
     }
 
-    // Allocate bindless descriptor set
-    bindlessSet = allocateSet("Bindless", 0);
-    bindlessEnabled = true;
+    // Allocate bindless descriptor set (using legacy API)
+    auto it = nameToHandle.find("Bindless");
+    if (it != nameToHandle.end()) {
+        bindlessSet = allocateSet(it->second, 0);
+        bindlessEnabled = true;
+    } else {
+        violet::Log::error("Renderer", "Bindless layout not found in nameToHandle mapping");
+    }
 
     violet::Log::info("Renderer", "DescriptorManager bindless initialized with {} max 2D textures and {} max cubemaps", maxTextures, bindlessMaxCubemaps);
 }
@@ -649,7 +695,7 @@ void DescriptorManager::createPool(UpdateFrequency frequency) {
 
     // Collect pool sizes from all layouts with this frequency
     eastl::vector<vk::DescriptorPoolSize> poolSizes;
-    for (const auto& [name, layoutInfo] : layouts) {
+    for (const auto& [handle, layoutInfo] : layouts) {
         if (layoutInfo.frequency == frequency) {
             for (const auto& size : layoutInfo.poolSizes) {
                 bool found = false;
@@ -674,7 +720,7 @@ void DescriptorManager::createPool(UpdateFrequency frequency) {
 
     // Determine pool flags based on frequency and layout flags
     vk::DescriptorPoolCreateFlags poolFlags = {};
-    for (const auto& [name, layoutInfo] : layouts) {
+    for (const auto& [handle, layoutInfo] : layouts) {
         if (layoutInfo.frequency == frequency) {
             if (layoutInfo.createFlags & vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool) {
                 poolFlags |= vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind;
@@ -756,8 +802,13 @@ bool DescriptorManager::initMaterialDataBuffer(uint32_t maxMaterials) {
         return false;
     }
 
-    // Allocate descriptor set
-    materialDataSet = allocateSet("MaterialData", 0);
+    // Allocate descriptor set (using legacy API)
+    auto it = nameToHandle.find("MaterialData");
+    if (it == nameToHandle.end()) {
+        violet::Log::error("Renderer", "MaterialData layout not found in nameToHandle mapping");
+        return false;
+    }
+    materialDataSet = allocateSet(it->second, 0);
     if (!materialDataSet) {
         violet::Log::error("Renderer", "Failed to allocate MaterialData descriptor set");
         return false;
@@ -934,6 +985,454 @@ vk::Sampler DescriptorManager::getSampler(SamplerType type) {
     violet::Log::info("Renderer", "Created predefined sampler type {}", static_cast<int>(type));
 
     return sampler;
+}
+
+void DescriptorManager::setReflection(LayoutHandle handle, const ShaderReflection& reflection) {
+    auto it = layouts.find(handle);
+    if (it != layouts.end()) {
+        it->second.reflection = reflection;
+    }
+}
+
+const ShaderReflection* DescriptorManager::getReflection(LayoutHandle handle) const {
+    auto it = layouts.find(handle);
+    if (it != layouts.end()) {
+        return &it->second.reflection;
+    }
+    return nullptr;
+}
+
+bool DescriptorManager::hasReflection(LayoutHandle handle) const {
+    auto it = layouts.find(handle);
+    if (it != layouts.end()) {
+        return !it->second.reflection.getBuffers().empty();
+    }
+    return false;
+}
+
+// ===== Reflection-Based Uniform Management Implementation =====
+
+// Helper function to align value up to alignment
+static inline uint32_t alignUp(uint32_t value, uint32_t alignment) {
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+// UniformHandle implementation
+FieldProxy UniformHandle::operator[](const eastl::string& fieldName) {
+    if (!info || !manager) {
+        return FieldProxy(nullptr, 0, 0, fieldName);
+    }
+
+    // Cast void* to correct types
+    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
+    auto* descriptorMgr = static_cast<DescriptorManager*>(manager);
+
+    if (!uniformInfo->buffer.mappedData) {
+        return FieldProxy(nullptr, 0, 0, fieldName);
+    }
+
+    // Get reflection data from layout
+    const ShaderReflection* reflection = descriptorMgr->getReflection(uniformInfo->layoutHandle);
+    if (!reflection) {
+        violet::Log::error("DescriptorManager", "No reflection data for uniform");
+        return FieldProxy(nullptr, 0, 0, fieldName);
+    }
+
+    // Find the first buffer (assuming single UBO per set for now)
+    const auto& buffers = reflection->getBuffers();
+    if (buffers.empty()) {
+        violet::Log::error("DescriptorManager", "No buffers found in reflection data");
+        return FieldProxy(nullptr, 0, 0, fieldName);
+    }
+
+    // Get the first buffer
+    const auto& buffer = buffers[0];
+    const auto* field = reflection->findField(buffer.name, fieldName);
+
+    if (!field) {
+        violet::Log::error("DescriptorManager", "Field '{}' not found in buffer '{}'",
+            fieldName.c_str(), buffer.name.c_str());
+        return FieldProxy(nullptr, 0, 0, fieldName);
+    }
+
+    // Calculate dynamic offset for PerFrame
+    uint32_t dynamicOffset = 0;
+    if (uniformInfo->frequency == UpdateFrequency::PerFrame) {
+        dynamicOffset = descriptorMgr->currentFrame * uniformInfo->alignedSize;
+    }
+
+    // Calculate address: base + dynamicOffset + field offset
+    void* fieldAddress = static_cast<uint8_t*>(uniformInfo->buffer.mappedData) + dynamicOffset + field->offset;
+    return FieldProxy(fieldAddress, field->offset, field->size, fieldName);
+}
+
+vk::DescriptorSet UniformHandle::getSet() const {
+    if (!info) {
+        return vk::DescriptorSet{};
+    }
+    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
+    return uniformInfo->descriptorSet;
+}
+
+uint32_t UniformHandle::getDynamicOffset() const {
+    if (!info || !manager) {
+        return 0;
+    }
+
+    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
+    auto* descriptorMgr = static_cast<DescriptorManager*>(manager);
+
+    if (uniformInfo->frequency != UpdateFrequency::PerFrame) {
+        return 0;
+    }
+
+    return descriptorMgr->currentFrame * uniformInfo->alignedSize;
+}
+
+// DescriptorManager implementation
+void DescriptorManager::setCurrentFrame(uint32_t frameIndex) {
+    if (frameIndex >= maxFrames) {
+        violet::Log::warn("DescriptorManager", "Frame index {} exceeds maxFrames {}", frameIndex, maxFrames);
+        return;
+    }
+    currentFrame = frameIndex;
+}
+
+UniformHandle DescriptorManager::createUniform(const eastl::string& name, LayoutHandle layout, UpdateFrequency frequency) {
+    // Check if layout exists
+    auto layoutIt = layouts.find(layout);
+    if (layoutIt == layouts.end()) {
+        violet::Log::error("DescriptorManager", "Layout handle {} not found", layout);
+        return UniformHandle();
+    }
+
+    // Check if uniform already exists
+    if (uniforms.find(layout) != uniforms.end()) {
+        violet::Log::warn("DescriptorManager", "Uniform for layout {} already exists, returning existing", layout);
+        return UniformHandle(&uniforms[layout], this);
+    }
+
+    const LayoutInfo& layoutInfo = layoutIt->second;
+
+    // Get buffer size from reflection
+    if (!hasReflection(layout)) {
+        violet::Log::error("DescriptorManager", "No reflection data for layout {}", layout);
+        return UniformHandle();
+    }
+
+    const ShaderReflection* reflection = getReflection(layout);
+    const auto& buffers = reflection->getBuffers();
+    if (buffers.empty()) {
+        violet::Log::error("DescriptorManager", "No buffers in reflection data for layout {}", layout);
+        return UniformHandle();
+    }
+
+    // Get size from first buffer (assuming single UBO per set)
+    uint32_t bufferSize = buffers[0].totalSize;
+    uint32_t alignedStride = bufferSize;
+    uint32_t totalSize = bufferSize;
+
+    // For PerFrame: align stride to minUniformBufferOffsetAlignment
+    if (frequency == UpdateFrequency::PerFrame) {
+        vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
+        uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
+
+        alignedStride = alignUp(bufferSize, minAlignment);
+        totalSize = alignedStride * maxFrames;
+
+        violet::Log::debug("DescriptorManager",
+            "PerFrame uniform '{}': bufferSize={}, alignedStride={}, totalSize={} (minAlignment={})",
+            name.c_str(), bufferSize, alignedStride, totalSize, minAlignment);
+    }
+
+    // Create buffer using ResourceFactory
+    BufferInfo bufferInfo{
+        .size = totalSize,
+        .usage = vk::BufferUsageFlagBits::eUniformBuffer,
+        .memoryUsage = MemoryUsage::CPU_TO_GPU,
+        .debugName = name
+    };
+    BufferResource buffer = ResourceFactory::createBuffer(context, bufferInfo);
+
+    if (!buffer.buffer || !buffer.mappedData) {
+        violet::Log::error("DescriptorManager", "Failed to create buffer for uniform '{}'", name.c_str());
+        return UniformHandle();
+    }
+
+    // Allocate descriptor set
+    vk::DescriptorSet descriptorSet = allocateSet(layout, 0);
+    if (!descriptorSet) {
+        violet::Log::error("DescriptorManager", "Failed to allocate descriptor set for uniform '{}'", name.c_str());
+        ResourceFactory::destroyBuffer(context, buffer);
+        return UniformHandle();
+    }
+
+    // Update descriptor set to bind buffer
+    vk::DescriptorBufferInfo bufferDescInfo;
+    bufferDescInfo.buffer = buffer.buffer;
+    bufferDescInfo.offset = 0;
+    // For PerFrame with dynamic offset, range is the aligned stride (not total buffer size)
+    bufferDescInfo.range = frequency == UpdateFrequency::PerFrame ? alignedStride : bufferSize;
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = descriptorSet;
+    write.dstBinding = 0;  // Assuming UBO is at binding 0
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eUniformBuffer;
+    write.pBufferInfo = &bufferDescInfo;
+
+    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+
+    // Store uniform info
+    UniformSetInfo info;
+    info.buffer = buffer;
+    info.descriptorSet = descriptorSet;
+    info.layoutHandle = layout;
+    info.frequency = frequency;
+    info.bufferSize = bufferSize;      // Original size from reflection
+    info.alignedSize = alignedStride;   // Aligned stride for dynamic offset
+    info.name = name;
+
+    uniforms[layout] = info;
+
+    violet::Log::info("DescriptorManager",
+        "Created uniform '{}' (layout={}, frequency={}, bufferSize={}, alignedStride={})",
+        name.c_str(), layout, static_cast<int>(frequency), bufferSize, alignedStride);
+
+    return UniformHandle(&uniforms[layout], this);
+}
+
+UniformHandle DescriptorManager::getUniform(const eastl::string& name) {
+    // Look up layout handle from name
+    auto it = nameToHandle.find(name);
+    if (it == nameToHandle.end()) {
+        violet::Log::error("DescriptorManager", "Uniform layout '{}' not found in nameToHandle", name.c_str());
+        return UniformHandle();
+    }
+
+    LayoutHandle handle = it->second;
+
+    // Look up uniform info
+    auto uniformIt = uniforms.find(handle);
+    if (uniformIt == uniforms.end()) {
+        violet::Log::error("DescriptorManager", "Uniform for layout '{}' not created yet", name.c_str());
+        return UniformHandle();
+    }
+
+    return UniformHandle(&uniformIt->second, this);
+}
+
+UniformHandle DescriptorManager::getUniform(const eastl::string& name, uint32_t frameIndex) {
+    // Temporarily override currentFrame
+    uint32_t savedFrame = currentFrame;
+    currentFrame = frameIndex;
+
+    UniformHandle handle = getUniform(name);
+
+    // Restore
+    currentFrame = savedFrame;
+
+    return handle;
+}
+
+// ===== Push Constant Management =====
+
+PushConstantHandle DescriptorManager::registerPushConstants(const PushConstantDesc& desc) {
+    if (desc.ranges.empty()) {
+        return 0;  // Return 0 for empty push constants
+    }
+
+    PushConstantHandle handle = desc.hash();
+
+    // Check if already registered (deduplication)
+    if (pushConstants.find(handle) != pushConstants.end()) {
+        Log::debug("DescriptorManager", "Push constants (handle={}) already registered, reusing", handle);
+        return handle;
+    }
+
+    // Register new push constant layout
+    pushConstants[handle] = desc.ranges;
+
+    Log::debug("DescriptorManager", "Registered push constants (handle={}, {} ranges)", handle, desc.ranges.size());
+
+    return handle;
+}
+
+const eastl::vector<vk::PushConstantRange>& DescriptorManager::getPushConstants(PushConstantHandle handle) const {
+    static const eastl::vector<vk::PushConstantRange> empty;
+
+    if (handle == 0) {
+        return empty;
+    }
+
+    auto it = pushConstants.find(handle);
+    if (it == pushConstants.end()) {
+        Log::warn("DescriptorManager", "Push constant handle {} not found", handle);
+        return empty;
+    }
+
+    return it->second;
+}
+
+bool DescriptorManager::hasPushConstants(PushConstantHandle handle) const {
+    return handle != 0 && pushConstants.find(handle) != pushConstants.end();
+}
+
+// ===== PipelineLayout Cache & Named Binding Implementation =====
+
+PipelineLayoutCacheHandle DescriptorManager::getOrCreatePipelineLayoutCache(
+    eastl::shared_ptr<Shader> vertShader,
+    eastl::shared_ptr<Shader> fragShader) {
+
+    if (!vertShader) {
+        Log::error("DescriptorManager", "Vertex shader is required for pipeline layout cache");
+        return 0;
+    }
+
+    // 1. Compute hash from shader layout handles (layout combination hash)
+    const auto& vertHandles = vertShader->getDescriptorLayoutHandles();
+    const auto* fragHandles = fragShader ? &fragShader->getDescriptorLayoutHandles() : nullptr;
+
+    // Determine max set index
+    size_t maxSetIndex = vertHandles.size();
+    if (fragHandles && fragHandles->size() > maxSetIndex) {
+        maxSetIndex = fragHandles->size();
+    }
+
+    // Compute layout combination hash
+    uint32_t hash = 0;
+    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
+        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
+        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
+
+        // Prefer non-zero handle (they should be identical if both non-zero due to deduplication)
+        LayoutHandle handle = (vertHandle != 0) ? vertHandle : fragHandle;
+
+        // Hash the layout handle into the combination hash
+        hash ^= std::hash<uint32_t>{}(handle) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+
+    // Include push constant handles in the hash
+    PushConstantHandle vertPC = vertShader->getPushConstantHandle();
+    PushConstantHandle fragPC = fragShader ? fragShader->getPushConstantHandle() : 0;
+    hash ^= std::hash<uint32_t>{}(vertPC) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^= std::hash<uint32_t>{}(fragPC) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+
+    // Ensure we never return 0 (reserved for error)
+    if (hash == 0) hash = 1;
+
+    // 2. Check if cache already exists (cache hit)
+    if (pipelineLayoutCache.find(hash) != pipelineLayoutCache.end()) {
+        Log::debug("DescriptorManager", "PipelineLayoutCache hit for hash {}", hash);
+        return hash;
+    }
+
+    // 3. Create new cache
+    PipelineLayoutCache cache;
+
+    // Store layout handles (preserving sparsity)
+    cache.layoutHandles.resize(maxSetIndex, 0);
+    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
+        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
+        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
+        cache.layoutHandles[setIndex] = (vertHandle != 0) ? vertHandle : fragHandle;
+    }
+
+    // Store push constant handle (prefer non-zero)
+    cache.pushConstantHandle = (vertPC != 0) ? vertPC : fragPC;
+
+    // Extract resource names and bindless sets from shader reflection
+    auto extractFromShader = [&](eastl::shared_ptr<Shader> shader) {
+        if (!shader || !shader->hasReflection()) return;
+
+        const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+
+        // 遍历每个set
+        for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
+            LayoutHandle handle = layoutHandles[setIndex];
+            if (handle == 0) continue;  // 跳过空set
+
+            // Get layout info
+            auto it = layouts.find(handle);
+            if (it != layouts.end()) {
+                const ShaderReflection& reflection = it->second.reflection;
+
+                // 从reflection提取buffer名称映射
+                for (const auto& buffer : reflection.getBuffers()) {
+                    cache.resourceNameToSet[buffer.name] = buffer.set;
+                }
+
+                // 检查是否为bindless (从descriptor flags推断)
+                if (it->second.createFlags & vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool) {
+                    cache.bindlessSets.insert(static_cast<uint32_t>(setIndex));
+                }
+            }
+        }
+    };
+
+    extractFromShader(vertShader);
+    extractFromShader(fragShader);
+
+    // 4. Store and return
+    pipelineLayoutCache[hash] = cache;
+
+    Log::info("DescriptorManager", "Created PipelineLayoutCache (hash={}, {} resources, {} bindless sets)",
+              hash, cache.resourceNameToSet.size(), cache.bindlessSets.size());
+
+    return hash;
+}
+
+void DescriptorManager::bindDescriptors(
+    vk::CommandBuffer cmd,
+    PipelineLayoutCacheHandle cacheHandle,
+    vk::PipelineLayout pipelineLayout,
+    vk::PipelineBindPoint bindPoint,
+    const eastl::vector<NamedDescriptor>& descriptors) {
+
+    // 查找pipeline layout cache
+    auto cacheIt = pipelineLayoutCache.find(cacheHandle);
+    if (cacheIt == pipelineLayoutCache.end()) {
+        Log::warn("DescriptorManager", "PipelineLayoutCache handle {} not found - call getOrCreatePipelineLayoutCache first", cacheHandle);
+        return;
+    }
+
+    const PipelineLayoutCache& cache = cacheIt->second;
+
+    for (const auto& desc : descriptors) {
+        // 从cache查找set index
+        auto setIt = cache.resourceNameToSet.find(desc.name);
+        if (setIt == cache.resourceNameToSet.end()) {
+            Log::warn("DescriptorManager", "Resource '{}' not found in pipeline layout cache", desc.name);
+            continue;
+        }
+
+        uint32_t setIndex = setIt->second;
+        bool isBindless = cache.bindlessSets.find(setIndex) != cache.bindlessSets.end();
+
+        // Bindless特殊处理
+        if (isBindless) {
+            if (desc.descriptorSet) {
+                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
+                    1, &desc.descriptorSet, 0, nullptr);
+                Log::debug("DescriptorManager", "Bound bindless set '{}' at index {}", desc.name, setIndex);
+            }
+        } else {
+            // 普通descriptor：必须存在
+            if (!desc.descriptorSet) {
+                Log::error("DescriptorManager", "Descriptor '{}' is required but not provided", desc.name);
+                continue;
+            }
+
+            if (desc.dynamicOffset > 0) {
+                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
+                    1, &desc.descriptorSet, 1, &desc.dynamicOffset);
+            } else {
+                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
+                    1, &desc.descriptorSet, 0, nullptr);
+            }
+        }
+    }
 }
 
 } // namespace violet

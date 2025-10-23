@@ -1,21 +1,28 @@
 #include "ReflectionHelper.hpp"
+#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
+#include "renderer/vulkan/DescriptorManager.hpp"  // For DescriptorLayoutDesc
 #include "core/Log.hpp"
 
 namespace violet {
 
-ReflectionHelper::ReflectionHelper(slang::ProgramLayout* layout)
-    : layout(layout) {
+ReflectionHelper::ReflectionHelper(slang::ProgramLayout* layout, SlangSession* session)
+    : layout(layout), session(session) {
 }
 
-eastl::vector<ReflectionHelper::SetLayoutInfo> ReflectionHelper::extractDescriptorSetLayouts() const {
+eastl::vector<DescriptorLayoutDesc> ReflectionHelper::extractDescriptorLayouts(
+    const eastl::string& shaderName
+) const {
     if (!layout) return {};
 
-    eastl::vector<SetLayoutInfo> setLayouts;
+    eastl::vector<DescriptorLayoutDesc> descriptorLayouts;
     auto globalParams = layout->getGlobalParamsVarLayout();
     if (!globalParams) return {};
 
     auto typeLayout = globalParams->getTypeLayout();
     if (!typeLayout) return {};
+
+    vk::ShaderStageFlags shaderStages = getShaderStageFlags();
 
     // Process each parameter to extract binding information
     uint32_t paramCount = typeLayout->getFieldCount();
@@ -23,39 +30,45 @@ eastl::vector<ReflectionHelper::SetLayoutInfo> ReflectionHelper::extractDescript
         auto varLayout = typeLayout->getFieldByIndex(i);
         if (!varLayout) continue;
 
-        auto param = varLayout->getTypeLayout();
-        if (!param) continue;
-
         // Get descriptor set (binding space) and binding index
         uint32_t setIndex = varLayout->getBindingSpace();
-        uint32_t binding = varLayout->getBindingIndex();
+        uint32_t bindingIndex = varLayout->getBindingIndex();
 
-        // Ensure setLayouts has enough capacity
-        if (setIndex >= setLayouts.size()) {
-            setLayouts.resize(setIndex + 1);
-            for (uint32_t j = 0; j <= setIndex; ++j) {
-                setLayouts[j].setIndex = j;
+        // Check for [[bindless]] attribute
+        bool isBindlessAttribute = false;
+        if (session && varLayout->getVariable()) {
+            if (varLayout->getVariable()->findUserAttributeByName(session, "bindless")) {
+                isBindlessAttribute = true;
             }
         }
 
-        SetLayoutInfo& setInfo = setLayouts[setIndex];
+        // Ensure descriptorLayouts has enough capacity
+        if (setIndex >= descriptorLayouts.size()) {
+            descriptorLayouts.resize(setIndex + 1);
+        }
 
-        BindingInfo bindingInfo;
-        bindingInfo.set = setIndex;
-        bindingInfo.binding = binding;
-        bindingInfo.name = varLayout->getName();
-        bindingInfo.stageFlags = getShaderStageFlags();
+        DescriptorLayoutDesc& layoutDesc = descriptorLayouts[setIndex];
+
+        // Set name (format: "shaderName_setN")
+        if (layoutDesc.name.empty()) {
+            char buffer[16];
+            sprintf(buffer, "%u", setIndex);
+            layoutDesc.name = shaderName + "_set" + buffer;
+        }
+
+        // Create binding descriptor
+        BindingDesc bindingDesc;
+        bindingDesc.binding = bindingIndex;
+        bindingDesc.stages = shaderStages;
 
         auto paramType = varLayout->getType();
         if (!paramType) continue;
 
-        auto kind = paramType->getKind();
-
-        // Determine descriptor type based on resource kind
-        switch (kind) {
+        // Determine descriptor type and count
+        switch (paramType->getKind()) {
             case slang::TypeReflection::Kind::ConstantBuffer:
-                bindingInfo.type = vk::DescriptorType::eUniformBuffer;
-                bindingInfo.descriptorCount = 1;
+                bindingDesc.type = vk::DescriptorType::eUniformBuffer;
+                bindingDesc.count = 1;
                 break;
 
             case slang::TypeReflection::Kind::Resource: {
@@ -64,57 +77,76 @@ eastl::vector<ReflectionHelper::SetLayoutInfo> ReflectionHelper::extractDescript
 
                 if (shape == SLANG_TEXTURE_1D || shape == SLANG_TEXTURE_2D ||
                     shape == SLANG_TEXTURE_3D || shape == SLANG_TEXTURE_CUBE) {
-                    bindingInfo.type = (access == SLANG_RESOURCE_ACCESS_READ_WRITE)
+                    bindingDesc.type = (access == SLANG_RESOURCE_ACCESS_READ_WRITE)
                         ? vk::DescriptorType::eStorageImage
                         : vk::DescriptorType::eCombinedImageSampler;
                 } else if (shape == SLANG_STRUCTURED_BUFFER) {
-                    bindingInfo.type = (access == SLANG_RESOURCE_ACCESS_READ_WRITE)
-                        ? vk::DescriptorType::eStorageBuffer
-                        : vk::DescriptorType::eStorageBuffer;  // Use SSBO for both
+                    bindingDesc.type = vk::DescriptorType::eStorageBuffer;
                 }
 
-                bindingInfo.descriptorCount = paramType->getElementCount();
-                if (bindingInfo.descriptorCount == 0) {
-                    bindingInfo.descriptorCount = 1;  // Default to 1 for non-array
+                bindingDesc.count = paramType->getElementCount();
+                if (bindingDesc.count == 0) {
+                    bindingDesc.count = 1;
                 }
                 break;
             }
 
             case slang::TypeReflection::Kind::SamplerState:
-                bindingInfo.type = vk::DescriptorType::eSampler;
-                bindingInfo.descriptorCount = 1;
+                bindingDesc.type = vk::DescriptorType::eSampler;
+                bindingDesc.count = 1;
                 break;
 
             case slang::TypeReflection::Kind::Array: {
-                // Handle arrays (e.g., Texture2D textures[])
                 auto elementType = paramType->getElementType();
-                if (elementType) {
-                    auto elementKind = elementType->getKind();
-                    if (elementKind == slang::TypeReflection::Kind::Resource) {
-                        bindingInfo.type = vk::DescriptorType::eCombinedImageSampler;
-                    }
+                if (elementType && elementType->getKind() == slang::TypeReflection::Kind::Resource) {
+                    bindingDesc.type = vk::DescriptorType::eCombinedImageSampler;
                 }
 
                 uint32_t arraySize = paramType->getElementCount();
-                bindingInfo.descriptorCount = arraySize;
 
-                // Check for unsized arrays (bindless)
-                if (arraySize == 0 || arraySize > 10000) {
-                    bindingInfo.isBindless = true;
-                    bindingInfo.descriptorCount = 1024;  // Conservative estimate
-                    setInfo.flags |= vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+                // Priority 1: Explicit [[bindless]] attribute
+                if (isBindlessAttribute) {
+                    bindingDesc.count = (arraySize == 0) ? 1024 : arraySize;
+                    layoutDesc.isBindless = true;
+                    layoutDesc.flags |= vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+
+                    // Set per-binding flags for bindless
+                    bindingDesc.flags = vk::DescriptorBindingFlagBits::eUpdateAfterBind |
+                                       vk::DescriptorBindingFlagBits::ePartiallyBound;
+                }
+                // Priority 2: Fallback heuristic (unsized or very large arrays)
+                else if (arraySize == 0 || arraySize > 10000) {
+                    bindingDesc.count = 1024;
+                    layoutDesc.isBindless = true;
+                    layoutDesc.flags |= vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+
+                    bindingDesc.flags = vk::DescriptorBindingFlagBits::eUpdateAfterBind |
+                                       vk::DescriptorBindingFlagBits::ePartiallyBound;
+
+                    Log::warn("ReflectionHelper", "Array detected as bindless via heuristic - consider using [[bindless]] attribute");
+                }
+                // Normal sized array
+                else {
+                    bindingDesc.count = arraySize;
                 }
                 break;
             }
 
             default:
-                continue;  // Skip unsupported types
+                continue;
         }
 
-        setInfo.bindings.push_back(bindingInfo);
+        layoutDesc.bindings.push_back(bindingDesc);
     }
 
-    return setLayouts;
+    // Infer update frequency for each set
+    for (auto& layoutDesc : descriptorLayouts) {
+        if (!layoutDesc.bindings.empty()) {
+            layoutDesc.frequency = inferUpdateFrequency(layoutDesc.bindings);
+        }
+    }
+
+    return descriptorLayouts;
 }
 
 eastl::vector<ReflectionHelper::PushConstantInfo> ReflectionHelper::extractPushConstants() const {
@@ -198,23 +230,45 @@ vk::ShaderStageFlags ReflectionHelper::slangStageToVulkan(SlangStage stage) {
     }
 }
 
-void ReflectionHelper::processParameter(
-    slang::VariableLayoutReflection* param,
-    uint32_t setIndex,
-    eastl::vector<BindingInfo>& bindings
-) const {
-    if (!param) return;
+UpdateFrequency ReflectionHelper::inferUpdateFrequency(const eastl::vector<BindingDesc>& bindings) {
+    // Heuristics to determine update frequency based on binding types and counts
 
-    BindingInfo binding;
-    binding.set = setIndex;
-    binding.name = param->getName();
+    bool hasLargeArray = false;
+    bool hasUniformBuffer = false;
+    bool hasStorageImage = false;
 
-    auto typeLayout = param->getTypeLayout();
-    if (typeLayout) {
-        binding.descriptorCount = static_cast<uint32_t>(typeLayout->getElementCount());
+    for (const auto& binding : bindings) {
+        // Large arrays (bindless) are typically Static
+        if (binding.count > 100) {
+            hasLargeArray = true;
+        }
+
+        // Uniform buffers often contain per-frame data (camera, lights)
+        if (binding.type == vk::DescriptorType::eUniformBuffer) {
+            hasUniformBuffer = true;
+        }
+
+        // Storage images are often render targets (per-pass)
+        if (binding.type == vk::DescriptorType::eStorageImage) {
+            hasStorageImage = true;
+        }
     }
 
-    bindings.push_back(binding);
+    // Decision logic (prioritize from most specific to least specific)
+    if (hasLargeArray) {
+        return UpdateFrequency::Static;  // Bindless arrays rarely change
+    }
+
+    if (hasStorageImage) {
+        return UpdateFrequency::PerPass;  // Storage images often used for render targets
+    }
+
+    if (hasUniformBuffer) {
+        return UpdateFrequency::PerFrame;  // UBOs often contain camera/view/proj
+    }
+
+    // Default: Material-level updates (textures, material properties)
+    return UpdateFrequency::PerMaterial;
 }
 
 } // namespace violet

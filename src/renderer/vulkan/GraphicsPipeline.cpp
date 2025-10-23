@@ -1,10 +1,13 @@
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/DescriptorSet.hpp"
 #include "resource/Material.hpp"
 #include "resource/Vertex.hpp"
 #include "resource/shader/Shader.hpp"
+#include "resource/shader/ReflectionHelper.hpp"
 #include "core/Log.hpp"
+#include <EASTL/sort.h>
 #include <glm/glm.hpp>
 
 namespace violet {
@@ -13,10 +16,11 @@ namespace violet {
 // Dynamic rendering init (no RenderPass dependency)
 // ========================================
 
-void GraphicsPipeline::init(VulkanContext* ctx, Material* mat,
+void GraphicsPipeline::init(VulkanContext* ctx, DescriptorManager* descMgr, Material* mat,
                             eastl::weak_ptr<Shader> vert, eastl::weak_ptr<Shader> frag,
                             const PipelineConfig& cfg) {
     context = ctx;
+    descriptorManager = descMgr;
     material = mat;
     vertShader = vert;
     fragShader = frag;
@@ -101,24 +105,24 @@ void GraphicsPipeline::buildPipeline() {
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
     inputAssembly.topology = config.topology;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
+    inputAssembly.primitiveRestartEnable = config.primitiveRestartEnable;
 
     vk::PipelineViewportStateCreateInfo viewportState;
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
     vk::PipelineRasterizationStateCreateInfo rasterizer;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.depthClampEnable = config.depthClampEnable;
+    rasterizer.rasterizerDiscardEnable = config.rasterizerDiscardEnable;
     rasterizer.polygonMode = config.polygonMode;
     rasterizer.lineWidth = config.lineWidth;
     rasterizer.cullMode = config.cullMode;
-    rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    rasterizer.frontFace = config.frontFace;
+    rasterizer.depthBiasEnable = config.depthBiasEnable;
 
     vk::PipelineMultisampleStateCreateInfo multisampling;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+    multisampling.sampleShadingEnable = config.sampleShadingEnable;
+    multisampling.rasterizationSamples = config.sampleCount;
 
     // Color blend state - only needed if we have color attachments
     vk::PipelineColorBlendAttachmentState colorBlendAttachment;
@@ -129,12 +133,12 @@ void GraphicsPipeline::buildPipeline() {
                                                vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
         colorBlendAttachment.blendEnable = config.enableBlending;
         if (config.enableBlending) {
-            colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-            colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-            colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
-            colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-            colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eZero;
-            colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+            colorBlendAttachment.srcColorBlendFactor = config.srcColorBlendFactor;
+            colorBlendAttachment.dstColorBlendFactor = config.dstColorBlendFactor;
+            colorBlendAttachment.colorBlendOp = config.colorBlendOp;
+            colorBlendAttachment.srcAlphaBlendFactor = config.srcAlphaBlendFactor;
+            colorBlendAttachment.dstAlphaBlendFactor = config.dstAlphaBlendFactor;
+            colorBlendAttachment.alphaBlendOp = config.alphaBlendOp;
         }
 
         colorBlending.logicOpEnable = VK_FALSE;
@@ -142,16 +146,18 @@ void GraphicsPipeline::buildPipeline() {
         colorBlending.attachmentCount = 1;
         colorBlending.pAttachments = &colorBlendAttachment;
     } else {
-        // Depth-only pass - no color attachments
         colorBlending.logicOpEnable = VK_FALSE;
         colorBlending.attachmentCount = 0;
         colorBlending.pAttachments = nullptr;
     }
 
+    // Dynamic states (viewport and scissor always included)
     eastl::vector<vk::DynamicState> dynamicStates = {
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor
     };
+    dynamicStates.insert(dynamicStates.end(), config.additionalDynamicStates.begin(), config.additionalDynamicStates.end());
+
     vk::PipelineDynamicStateCreateInfo dynamicState;
     dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
@@ -160,30 +166,20 @@ void GraphicsPipeline::buildPipeline() {
     depthStencil.depthTestEnable = config.enableDepthTest;
     depthStencil.depthWriteEnable = config.enableDepthWrite;
     depthStencil.depthCompareOp = config.depthCompareOp;
-    depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
+    depthStencil.depthBoundsTestEnable = config.depthBoundsTestEnable;
+    depthStencil.stencilTestEnable = config.stencilTestEnable;
 
-    // Descriptor set layouts
-    eastl::vector<vk::DescriptorSetLayout> setLayouts;
-    if (config.globalDescriptorSetLayout) {
-        setLayouts.push_back(config.globalDescriptorSetLayout);
-    }
-    for (const auto& layout : config.additionalDescriptorSets) {
-        setLayouts.push_back(layout);
-    }
-    if (config.materialDescriptorSetLayout) {
-        setLayouts.push_back(config.materialDescriptorSetLayout);
-    }
+    // Merge descriptor layouts and push constants from shaders
+    auto merged = mergeShaderResources(vert, frag);
 
-    // Pipeline layout - use push constants from config (no defaults)
-    // Copy to local vector to ensure data lifetime during pipeline layout creation
-    eastl::vector<vk::PushConstantRange> localPushConstants = config.pushConstantRanges;
+    Log::debug("Pipeline", "Merged {} descriptor sets and {} push constant ranges",
+              merged.setLayouts.size(), merged.pushConstants.size());
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-    pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(localPushConstants.size());
-    pipelineLayoutInfo.pPushConstantRanges = localPushConstants.empty() ? nullptr : localPushConstants.data();
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(merged.setLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = merged.setLayouts.data();
+    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(merged.pushConstants.size());
+    pipelineLayoutInfo.pPushConstantRanges = merged.pushConstants.empty() ? nullptr : merged.pushConstants.data();
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
@@ -228,6 +224,73 @@ void GraphicsPipeline::cleanup() {
 
 void GraphicsPipeline::bind(vk::CommandBuffer commandBuffer) {
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
+}
+
+GraphicsPipeline::MergedShaderResources GraphicsPipeline::mergeShaderResources(
+    eastl::shared_ptr<Shader> vert, eastl::shared_ptr<Shader> frag) {
+
+    MergedShaderResources result;
+
+    if (!vert) {
+        return result;  // No shaders, return empty
+    }
+
+    // Collect layout handles from both shaders (sparse vectors preserving set index)
+    const auto& vertHandles = vert->getDescriptorLayoutHandles();
+    const auto* fragHandles = frag ? &frag->getDescriptorLayoutHandles() : nullptr;
+
+    // Determine max set index
+    size_t maxSetIndex = vertHandles.size();
+    if (fragHandles && fragHandles->size() > maxSetIndex) {
+        maxSetIndex = fragHandles->size();
+    }
+
+    // Merge layouts using bit mask for quick set usage tracking
+    uint32_t usedSetsMask = 0;  // Bit i = 1 if set i is used
+    result.setLayouts.resize(maxSetIndex, nullptr);
+
+    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
+        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
+        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
+
+        if (vertHandle != 0 || fragHandle != 0) {
+            // Prefer non-zero handle (they should be identical if both non-zero due to deduplication)
+            LayoutHandle handle = (vertHandle != 0) ? vertHandle : fragHandle;
+            result.setLayouts[setIndex] = descriptorManager->getLayout(handle);
+            usedSetsMask |= (1u << setIndex);  // Mark set as used
+        }
+        // else: both are 0, leave nullptr in result.setLayouts[setIndex]
+    }
+
+    // Merge push constants from cached handles
+    PushConstantHandle vertPC = vert->getPushConstantHandle();
+    PushConstantHandle fragPC = frag ? frag->getPushConstantHandle() : 0;
+
+    if (vertPC != 0) {
+        const auto& ranges = descriptorManager->getPushConstants(vertPC);
+        result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
+    }
+
+    if (fragPC != 0 && fragPC != vertPC) {  // Avoid duplicates if handles are same
+        const auto& ranges = descriptorManager->getPushConstants(fragPC);
+        result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
+    }
+
+    // Optional: Log which sets are used (using bit mask)
+    if (usedSetsMask != 0) {
+        eastl::string setsUsed;
+        for (uint32_t i = 0; i < 32; ++i) {
+            if (usedSetsMask & (1u << i)) {
+                if (!setsUsed.empty()) setsUsed += ", ";
+                char buf[8];
+                sprintf(buf, "%u", i);
+                setsUsed += buf;
+            }
+        }
+        Log::debug("Pipeline", "Used descriptor sets: {}", setsUsed.c_str());
+    }
+
+    return result;
 }
 
 } // namespace violet
