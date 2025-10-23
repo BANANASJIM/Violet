@@ -3,6 +3,7 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/MaterialManager.hpp"
 #include "resource/Material.hpp"
+#include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 #include "core/Log.hpp"
 
@@ -24,7 +25,8 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
         return;
     }
 
-    // Allocate descriptor sets for HDR color and depth textures (one per frame in flight)
+    // For now, allocate descriptor sets using deprecated allocateSets API
+    // TODO: Replace with reflection-based texture descriptor API once implemented
     auto sets = descriptorManager->allocateSets("PostProcess", MAX_FRAMES_IN_FLIGHT);
     descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {

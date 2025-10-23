@@ -22,7 +22,6 @@ class Mesh;
 class GraphicsPipeline;
 class DescriptorSet;
 class UniformBuffer;
-class GlobalUniforms;
 class World;
 class ForwardRenderer;
 class DescriptorManager;
@@ -45,8 +44,8 @@ public:
     DebugRenderer& operator=(const DebugRenderer&) = delete;
 
     // Simplified init - no RenderPass dependency
-    void init(VulkanContext* context, GlobalUniforms* globalUniforms,
-              DescriptorManager* descMgr, ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
+    void init(VulkanContext* context, DescriptorManager* descMgr,
+              ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
 
     void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
 
@@ -98,7 +97,7 @@ private:
     void generateWireframeGeometry(const eastl::vector<Vertex>& meshVertices, const eastl::vector<uint32_t>& meshIndices,
                                   const glm::vec3& color, eastl::vector<Vertex>& outVertices, eastl::vector<uint32_t>& outIndices);
 
-    GlobalUniforms* globalUniforms = nullptr;
+    DescriptorManager* descriptorManager = nullptr;
 
     eastl::unique_ptr<Material> debugMaterial;
 

@@ -1,20 +1,15 @@
-// Types.slang - Data structures for 3-set descriptor layout
-module Types;
+// TypeDefinitions.slang - Shared type definitions (use with __include)
+// NOTE: This file should be __include'd, not import'ed
 
-// ========================================
-// Set 0: Per-Frame Data
-// ========================================
-
-// Camera and view parameters (Dynamic Offset for triple buffering)
-public struct CameraUBO {
+struct CameraUBO {
     float4x4 view;
     float4x4 proj;
     float3 cameraPos;
     float padding0;
 
     // Light data (physical units: lux for directional, lumens for point)
-    float4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
-    float4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
+    float4 lightPositions[8];
+    float4 lightColors[8];
     int numLights;
     float3 ambientLight;
 
@@ -37,16 +32,14 @@ public struct CameraUBO {
     uint brdfLUTIndex;
 };
 
-// Light data structure (unchanged)
-public struct LightData {
+struct LightData {
     float4 positionAndType;  // xyz=position/direction, w=type
     float4 colorAndRadius;   // xyz=color*intensity, w=radius
     int shadowIndex;
     uint padding[3];
 };
 
-// Shadow data structure (unchanged from original)
-public struct ShadowData {
+struct ShadowData {
     float4x4 cascadeViewProjMatrices[4];
     float4 cascadeSplitDepths;
     float4 atlasRects[4];
@@ -62,11 +55,7 @@ public struct ShadowData {
     uint padding1_1;
 };
 
-// ========================================
-// Set 2: Material Data
-// ========================================
-
-public struct MaterialData {
+struct MaterialData {
     float4 baseColorFactor;
     float metallicFactor;
     float roughnessFactor;
@@ -83,24 +72,8 @@ public struct MaterialData {
     uint padding[3];
 };
 
-// ========================================
-// Push Constants
-// ========================================
-
-public struct PushConstants {
+struct PushConstants {
     float4x4 model;
     uint materialID;
-    uint padding[3];  // Align to 16 bytes
-};
-
-public struct ShadowPushConstants {
-    float4x4 lightSpaceMatrix;
-    float4x4 model;
-};
-
-public struct PostProcessParams {
-    float ev100;
-    float gamma;
-    uint tonemapMode;
-    float padding;
+    uint padding[3];
 };

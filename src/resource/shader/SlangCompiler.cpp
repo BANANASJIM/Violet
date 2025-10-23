@@ -65,6 +65,23 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
         return result;
     }
 
+    // Pre-load common modules that might be imported by shaders
+    const char* commonModules[] = {
+        "shaders/slang/Common.slang",
+        "shaders/slang/PBR.slang",
+        "shaders/slang/Sampling.slang",
+        "shaders/slang/Utilities.slang"
+    };
+
+    for (const char* modulePath : commonModules) {
+        Slang::ComPtr<slang::IBlob> moduleDiag;
+        slang::IModule* commonModule = session->loadModule(modulePath, moduleDiag.writeRef());
+        if (!commonModule) {
+            // It's okay if module doesn't exist or fails to load - not all shaders need all modules
+            Log::debug("SlangCompiler", "Could not preload module '{}' (this is normal if not needed)", modulePath);
+        }
+    }
+
     // Load module
     Slang::ComPtr<slang::IBlob> diagnostics;
     slang::IModule* module = session->loadModule(info.filePath.c_str(), diagnostics.writeRef());
@@ -212,6 +229,11 @@ eastl::vector<SlangCompiler::EntryPointInfo> SlangCompiler::getModuleEntryPoints
 
     if (!module) {
         Log::error("SlangCompiler", "Failed to load module '{}' for entry point enumeration", filePath.c_str());
+        // Print diagnostics if available
+        if (diagnostics && diagnostics->getBufferSize() > 0) {
+            const char* diagText = reinterpret_cast<const char*>(diagnostics->getBufferPointer());
+            Log::error("SlangCompiler", "Module load diagnostics:\n{}", diagText);
+        }
         return entryPoints;
     }
 

@@ -232,27 +232,9 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 )
 
 # Shader compilation
+# NOTE: Shaders are now compiled at runtime using Slang.
+# GLSL shaders are kept for reference but not compiled during build.
 add_custom_target(shaders)
-file(GLOB_RECURSE GLSL_SOURCE_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.comp"
-)
-
-foreach(GLSL ${GLSL_SOURCE_FILES})
-    get_filename_component(FILE_NAME ${GLSL} NAME)
-    set(SPIRV "${CMAKE_CURRENT_BINARY_DIR}/shaders/${FILE_NAME}.spv")
-    add_custom_command(
-        OUTPUT ${SPIRV}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders/"
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} ${GLSL} -o ${SPIRV}
-        DEPENDS ${GLSL}
-    )
-    list(APPEND SPIRV_BINARY_FILES ${SPIRV})
-endforeach()
-
-add_custom_target(compile_shaders DEPENDS ${SPIRV_BINARY_FILES})
-add_dependencies(${PROJECT_NAME} compile_shaders)
 
 # Copy compile_commands.json to project root for clangd
 add_custom_command(

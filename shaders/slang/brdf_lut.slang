@@ -1,6 +1,7 @@
 // BRDF LUT Generation - Slang version
 // Generates 2D lookup table for split-sum approximation of specular IBL
 
+import Common;
 import Sampling;
 
 // ========================================

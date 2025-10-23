@@ -1,9 +1,50 @@
 // Physically Based Rendering - Bindless (Slang)
 // Cook-Torrance microfacet BRDF with image-based lighting
 
-import Types;
+import Common;
 import PBR;
-import Bindless;
+import Sampling;
+
+#include "TypeDefinitions.slang"
+
+// ========================================
+// Descriptor Bindings
+// ========================================
+
+// Set 0: PER-FRAME (Dynamic Offset)
+[[vk::binding(0, 0)]]
+ConstantBuffer<CameraUBO> camera;
+#define global camera
+
+[[vk::binding(1, 0)]]
+StructuredBuffer<LightData> lights;
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<ShadowData> shadows;
+
+// Set 1: BINDLESS (Static, UPDATE_AFTER_BIND)
+[[vk::binding(0, 1)]]
+Texture2D textures[1024];
+
+[[vk::binding(1, 1)]]
+TextureCube cubemaps[64];
+
+[[vk::binding(2, 1)]]
+SamplerState linearSampler;
+
+[[vk::binding(3, 1)]]
+SamplerState nearestSampler;
+
+[[vk::binding(4, 1)]]
+SamplerState shadowSampler;
+
+// Set 2: PER-MATERIAL
+[[vk::binding(0, 2)]]
+StructuredBuffer<MaterialData> materials;
+
+// Push Constants
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> push;
 
 // ========================================
 // Vertex Shader
@@ -60,7 +101,7 @@ float3 getNormalFromMap(float2 texCoord, MaterialData material, float3 fragNorma
         return normalize(fragNormal);
     }
 
-    float3 tangentNormal = textures[NonUniformResourceIndex(normalIdx)].Sample(textureSampler, texCoord).xyz * 2.0 - 1.0;
+    float3 tangentNormal = textures[NonUniformResourceIndex(normalIdx)].Sample(linearSampler, texCoord).xyz * 2.0 - 1.0;
     tangentNormal.xy *= material.normalScale;
 
     float3 N = normalize(fragNormal);
@@ -117,7 +158,7 @@ float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, f
     for(int x = -pcfSamples; x <= pcfSamples; ++x) {
         for(int y = -pcfSamples; y <= pcfSamples; ++y) {
             float2 offset = float2(x, y) * texelSize;
-            float pcfDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(textureSampler, atlasUV + offset).r;
+            float pcfDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(linearSampler, atlasUV + offset).r;
             shadowValue += currentDepth > pcfDepth ? 0.0 : 1.0;
         }
     }
@@ -172,13 +213,13 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     // Sample material textures
     uint baseColorIdx = material.baseColorTexIndex;
     float4 baseColor = (baseColorIdx != 0)
-        ? textures[NonUniformResourceIndex(baseColorIdx)].Sample(textureSampler, input.fragTexCoord)
+        ? textures[NonUniformResourceIndex(baseColorIdx)].Sample(linearSampler, input.fragTexCoord)
         : float4(1.0, 1.0, 1.0, 1.0);
     baseColor *= material.baseColorFactor;
 
     uint metallicRoughnessIdx = material.metallicRoughnessTexIndex;
     float3 metallicRoughnessMap = (metallicRoughnessIdx != 0)
-        ? textures[NonUniformResourceIndex(metallicRoughnessIdx)].Sample(textureSampler, input.fragTexCoord).rgb
+        ? textures[NonUniformResourceIndex(metallicRoughnessIdx)].Sample(linearSampler, input.fragTexCoord).rgb
         : float3(1.0, 1.0, 1.0);
 
     float metallic = metallicRoughnessMap.b * material.metallicFactor;
@@ -186,12 +227,12 @@ float4 fragmentMain(VSOutput input) : SV_Target {
 
     uint occlusionIdx = material.occlusionTexIndex;
     float occlusion = (occlusionIdx != 0)
-        ? textures[NonUniformResourceIndex(occlusionIdx)].Sample(textureSampler, input.fragTexCoord).r
+        ? textures[NonUniformResourceIndex(occlusionIdx)].Sample(linearSampler, input.fragTexCoord).r
         : 1.0;
 
     uint emissiveIdx = material.emissiveTexIndex;
     float3 emissive = (emissiveIdx != 0)
-        ? textures[NonUniformResourceIndex(emissiveIdx)].Sample(textureSampler, input.fragTexCoord).rgb
+        ? textures[NonUniformResourceIndex(emissiveIdx)].Sample(linearSampler, input.fragTexCoord).rgb
         : float3(0.0, 0.0, 0.0);
     emissive *= material.emissiveFactor;
 
@@ -266,16 +307,16 @@ float4 fragmentMain(VSOutput input) : SV_Target {
         float3 R_rotated = rotateY(R, global.skyboxRotation);
 
         // Diffuse IBL
-        float3 irradiance = cubemaps[NonUniformResourceIndex(global.irradianceMapIndex)].Sample(textureSampler, N_rotated).rgb;
+        float3 irradiance = cubemaps[NonUniformResourceIndex(global.irradianceMapIndex)].Sample(linearSampler, N_rotated).rgb;
         float3 diffuse = irradiance * albedo;
 
         // Specular IBL
         uint prefilteredIdx = global.prefilteredMapIndex;
         // Query mipmap levels (Slang returns max LOD as number of levels - 1)
         float maxLod = 4.0; // Assume 5 mip levels (128x128 cubemap)
-        float3 prefilteredColor = cubemaps[NonUniformResourceIndex(prefilteredIdx)].SampleLevel(textureSampler, R_rotated, roughness * maxLod).rgb;
+        float3 prefilteredColor = cubemaps[NonUniformResourceIndex(prefilteredIdx)].SampleLevel(linearSampler, R_rotated, roughness * maxLod).rgb;
 
-        float2 envBRDF = textures[NonUniformResourceIndex(global.brdfLUTIndex)].Sample(textureSampler, float2(max(dot(N, V), 0.0), roughness)).rg;
+        float2 envBRDF = textures[NonUniformResourceIndex(global.brdfLUTIndex)].Sample(linearSampler, float2(max(dot(N, V), 0.0), roughness)).rg;
         float3 specular = prefilteredColor * (F * envBRDF.x + envBRDF.y);
 
         float ao = lerp(1.0, occlusion, material.occlusionStrength);

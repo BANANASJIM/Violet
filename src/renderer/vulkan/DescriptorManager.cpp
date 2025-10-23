@@ -461,6 +461,11 @@ bool DescriptorManager::hasLayout(LayoutHandle handle) const {
     return layouts.find(handle) != layouts.end();
 }
 
+LayoutHandle DescriptorManager::getLayoutHandle(const eastl::string& name) const {
+    auto it = nameToHandle.find(name);
+    return it != nameToHandle.end() ? it->second : 0;
+}
+
 // @deprecated Legacy String-Based API - Remove once all code migrates to LayoutHandle
 eastl::vector<vk::DescriptorSet> DescriptorManager::allocateSets(const eastl::string& layoutName, uint32_t count) {
     auto it = nameToHandle.find(layoutName);

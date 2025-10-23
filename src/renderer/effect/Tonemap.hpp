@@ -11,7 +11,6 @@ class DescriptorManager;
 class MaterialManager;
 class RenderGraph;
 class Material;
-class GlobalUniforms;
 
 // Tonemap operator modes
 enum class TonemapMode : uint32_t {
@@ -37,10 +36,13 @@ struct TonemapParams {
 // Applies tone mapping and gamma correction to HDR image
 // Integrates with AutoExposure for automatic EV100 values
 // Uses MaterialManager-owned pipeline, RenderGraph for resource management
+class ShaderLibrary;
+
 class Tonemap {
 public:
     void init(VulkanContext* context, MaterialManager* materialManager,
-              DescriptorManager* descriptorManager, RenderGraph* renderGraph,
+              DescriptorManager* descriptorManager,
+              RenderGraph* renderGraph,
               const eastl::string& hdrImageName, const eastl::string& swapchainImageName);
     void cleanup();
 

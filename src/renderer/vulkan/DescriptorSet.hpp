@@ -18,15 +18,23 @@ enum class DescriptorSetType {
 /**
  * DescriptorSet - Lightweight wrapper around pre-allocated descriptor sets
  *
- * NOTE: This class is now a thin wrapper that holds descriptor set handles.
- * All pool/layout creation is managed centrally by DescriptorManager.
+ * DEPRECATED: Use DescriptorManager::createUniform() with UniformHandle instead
+ * - UniformHandle manages descriptor sets automatically with dynamic offset
+ * - No need to manually allocate sets or update descriptors
+ * - Reflection-based field updates via uniform["fieldName"] = value
  *
- * Usage:
+ * Old usage (DEPRECATED):
  *   auto sets = descriptorManager.allocateSets("Global", 3);
  *   descriptorSet.init(context, sets);
  *   descriptorSet.updateBuffer(0, buffer);
+ *
+ * New usage:
+ *   UniformHandle uniform = descriptorManager.createUniform("Global", layoutHandle, UpdateFrequency::PerFrame);
+ *   uniform["view"] = viewMatrix;
+ *   vk::DescriptorSet set = uniform.getSet();
+ *   uint32_t offset = uniform.getDynamicOffset();
  */
-class DescriptorSet {
+class [[deprecated("Use DescriptorManager::createUniform() with UniformHandle instead of manual DescriptorSet management")]] DescriptorSet {
 public:
     ~DescriptorSet();
 

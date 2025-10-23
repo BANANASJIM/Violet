@@ -57,43 +57,9 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // DescriptorManager is now owned by ResourceManager and already initialized
     auto& descMgr = resourceManager->getDescriptorManager();
 
-    // Declare all descriptor set layouts (declarative registration)
-    registerDescriptorLayouts();
-
-    // ============================================================================
-    // TEMPORARY: Verify Slang shader auto-registration (TODO: Remove after testing)
-    // ============================================================================
-    violet::Log::info("Renderer", "=== TESTING: Verifying Slang auto-registered layouts ===");
-
-    // Check if Slang shaders auto-registered any layouts
-    // Expected pattern: "shader_name_setN" (e.g., "pbr_vert_set0")
-    const char* testLayouts[] = {
-        "pbr_vert_set0", "pbr_vert_set1", "pbr_vert_set2",
-        "pbr_vert_set3", "pbr_vert_set4", "pbr_vert_set5"
-    };
-
-    for (const char* layoutName : testLayouts) {
-        if (descMgr.hasLayout(layoutName)) {
-            violet::Log::info("Renderer", "  ✓ Slang auto-registered: '{}'", layoutName);
-
-            // Check if reflection data is stored
-            auto layout = descMgr.getLayout(layoutName);
-            // TODO: Add hasReflection() and getReflection() API to check field metadata
-        } else {
-            violet::Log::debug("Renderer", "  ✗ Layout '{}' not found (expected if using GLSL)", layoutName);
-        }
-    }
-
-    violet::Log::info("Renderer", "=== END TESTING ===");
-    // ============================================================================
-
-    // Initialize subsystems
-    globalUniforms.init(context, &descMgr, maxFramesInFlight);
-
     // Initialize RenderGraph early so it can be passed to sub-systems
     renderGraph = eastl::make_unique<RenderGraph>();
     renderGraph->init(context);
-
 
     auto* matMgr = getMaterialManager();
     if (matMgr) {
@@ -106,14 +72,26 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
+    // Create materials (pipelines have descriptor layouts auto-registered from Slang reflection)
     matMgr->createPostProcessMaterial();
     matMgr->createPBRBindlessMaterial();
     matMgr->createSkyboxMaterial();
 
+    // Create Global uniform using reflection-based API
+    // Query layout handle from DescriptorManager (shaders auto-register layouts during pipeline creation)
+    LayoutHandle globalLayout = descMgr.getLayoutHandle("Global");
+    if (globalLayout != 0) {
+        // Create per-frame uniform (triple buffering with dynamic offset)
+        globalUniformHandle = descMgr.createUniform("Global", globalLayout, UpdateFrequency::PerFrame);
+        violet::Log::info("Renderer", "Created Global uniform with LayoutHandle = {}", globalLayout);
+    } else {
+        violet::Log::error("Renderer", "Global descriptor layout not found - ensure shaders are compiled first");
+    }
+
     tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
 
-    // Initialize debug renderer
-    debugRenderer.init(context, &globalUniforms, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
+    // Initialize debug renderer (using reflection-based descriptor API)
+    debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
     debugRenderer.setEnabled(false);  // Disable debug renderer for testing
 
     // Initialize bindless through DescriptorManager
@@ -166,8 +144,8 @@ void ForwardRenderer::cleanup() {
 
     // Step 3: Samplers are now managed by DescriptorManager (no cleanup needed)
 
-    // Step 4: Cleanup global uniforms (may reference textures)
-    globalUniforms.cleanup();
+    // Step 4: Global uniform is managed by DescriptorManager (no manual cleanup needed)
+    globalUniformHandle = UniformHandle();  // Reset handle
 
     // Step 5: Cleanup RenderGraph
     if (renderGraph) {
@@ -180,6 +158,10 @@ void ForwardRenderer::cleanup() {
 void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     currentWorld = &world;
 
+    // Set current frame for descriptor manager (enables per-frame uniform updates)
+    auto& descMgr = resourceManager->getDescriptorManager();
+    descMgr.setCurrentFrame(frameIndex);
+
     // Update auto-exposure (internal time tracking)
     autoExposure.updateExposure();
 
@@ -191,7 +173,7 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
 
     // Update lighting and shadow systems
     if (lightingSystem && shadowSystem) {
-        Camera* activeCamera = globalUniforms.findActiveCamera(world);
+        Camera* activeCamera = findActiveCamera(world);
         if (activeCamera) {
             lightingSystem->update(world, activeCamera->getFrustum(), frameIndex);
             shadowSystem->update(world, *lightingSystem, activeCamera, frameIndex, getSceneBounds());
@@ -344,7 +326,8 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
 
                     // Rebind descriptor sets with Skybox's pipeline layout (different from PBR due to no push constants)
                     auto& descMgr = resourceManager->getDescriptorManager();
-                    vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frame);
+                    UniformHandle uniform = descMgr.getUniform("Global");
+                    vk::DescriptorSet globalSet = uniform.getSet();
                     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
 
                     eastl::array<vk::DescriptorSet, 2> descriptorSets = {globalSet, bindlessSet};
@@ -415,16 +398,45 @@ void ForwardRenderer::collectRenderables(entt::registry& world) {
 }
 
 void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frameIndex) {
-    // CRITICAL: Update IBL indices BEFORE calling update() so they're available when assembling the UBO
-    globalUniforms.setIBLIndices(
-        environmentMap.getEnvironmentMapIndex(),
-        environmentMap.getIrradianceMapIndex(),
-        environmentMap.getPrefilteredMapIndex(),
-        environmentMap.getBRDFLUTIndex()
-    );
+    Camera* activeCamera = findActiveCamera(world);
+    if (!activeCamera) {
+        violet::Log::warn("Renderer", "No active camera found!");
+        return;
+    }
 
-    // Update global uniforms with environment map parameters
-    globalUniforms.update(world, frameIndex, environmentMap.getExposure(), environmentMap.getRotation(), environmentMap.isEnabled(), environmentMap.getIntensity());
+    // Get uniform handle from descriptor manager
+    auto& descMgr = resourceManager->getDescriptorManager();
+    UniformHandle uniform = descMgr.getUniform("Global");
+
+    if (!uniform.isValid()) {
+        violet::Log::error("Renderer", "Global uniform not initialized");
+        return;
+    }
+
+    // Update uniform fields using reflection-based API
+    uniform["view"] = activeCamera->getViewMatrix();
+    uniform["proj"] = activeCamera->getProjectionMatrix();
+    uniform["cameraPos"] = activeCamera->getPosition();
+
+    // Initialize light data (will be populated by LightingSystem)
+    uniform["numLights"] = 0;
+    uniform["ambientLight"] = glm::vec3(0.03f, 0.03f, 0.04f);
+
+    // Set skybox parameters
+    uniform["skyboxExposure"] = environmentMap.getExposure();
+    uniform["skyboxRotation"] = environmentMap.getRotation();
+    uniform["skyboxEnabled"] = environmentMap.isEnabled() ? 1 : 0;
+    uniform["iblIntensity"] = environmentMap.getIntensity();
+
+    // Shadow parameters (will be set by ShadowSystem)
+    uniform["shadowsEnabled"] = 1;  // Enable shadows by default
+    uniform["cascadeDebugMode"] = 0;  // Off by default
+
+    // Update IBL bindless indices from EnvironmentMap
+    uniform["environmentMapIndex"] = environmentMap.getEnvironmentMapIndex();
+    uniform["irradianceMapIndex"] = environmentMap.getIrradianceMapIndex();
+    uniform["prefilteredMapIndex"] = environmentMap.getPrefilteredMapIndex();
+    uniform["brdfLUTIndex"] = environmentMap.getBRDFLUTIndex();
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {
@@ -527,7 +539,7 @@ void ForwardRenderer::buildSceneBVH(entt::registry& world) {
 void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world) {
 
     // Get camera frustum for culling
-    Camera* activeCamera = globalUniforms.findActiveCamera(world);
+    Camera* activeCamera = findActiveCamera(world);
     if (!activeCamera) {
         return;
     }
@@ -598,7 +610,8 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
 
     // Bind all descriptor sets once (set 0-4: Global, Bindless, MaterialData, Lighting, Shadow)
     auto& descMgr = resourceManager->getDescriptorManager();
-    vk::DescriptorSet globalSet = globalUniforms.getDescriptorSet()->getDescriptorSet(frameIndex);
+    UniformHandle uniform = descMgr.getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
     vk::DescriptorSet materialDataSet = descMgr.getMaterialDataSet();
     vk::DescriptorSet lightingSet = lightingSystem ? lightingSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};
@@ -738,37 +751,8 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
 
 // All material creation methods removed - use MaterialManager instead
 
-// GlobalUniforms implementation
-GlobalUniforms::~GlobalUniforms() {
-    cleanup();
-}
-
-void GlobalUniforms::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t maxFramesInFlight) {
-    context = ctx;
-
-    // Allocate descriptor sets from DescriptorManager
-    auto sets = descMgr->allocateSets("Global", maxFramesInFlight);
-    descriptorSet = eastl::make_unique<DescriptorSet>();
-    descriptorSet->init(context, sets);
-
-    uniformBuffers.resize(maxFramesInFlight);
-    for (uint32_t i = 0; i < maxFramesInFlight; ++i) {
-        uniformBuffers[i] = eastl::make_unique<UniformBuffer>();
-        uniformBuffers[i]->create(context, sizeof(GlobalUBO));
-
-        // Update descriptor set with uniform buffer
-        descriptorSet->updateBuffer(i, uniformBuffers[i].get());
-    }
-}
-
-void GlobalUniforms::cleanup() {
-    // GlobalUniforms cleanup
-    // descriptorSet的析构函数会自动调用cleanup，不需要手动调用
-    uniformBuffers.clear();
-    descriptorSet.reset();
-}
-
-Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
+// Helper function: Find active camera in the scene
+Camera* ForwardRenderer::findActiveCamera(entt::registry& world) {
     auto view = world.view<CameraComponent>();
     for (auto entity : view) {
         auto& cameraComp = view.get<CameraComponent>(entity);
@@ -777,232 +761,6 @@ Camera* GlobalUniforms::findActiveCamera(entt::registry& world) {
         }
     }
     return nullptr;
-}
-
-void GlobalUniforms::update(entt::registry& world, uint32_t frameIndex, float skyboxExposure, float skyboxRotation, bool skyboxEnabled, float iblIntensity) {
-    Camera* activeCamera = findActiveCamera(world);
-    if (!activeCamera) {
-        violet::Log::warn("Renderer", "No active camera found!");
-        return;
-    }
-
-    cachedUBO.view      = activeCamera->getViewMatrix();
-    cachedUBO.proj      = activeCamera->getProjectionMatrix();
-    cachedUBO.cameraPos = activeCamera->getPosition();
-
-    // Initialize light data (will be populated by LightingSystem)
-    cachedUBO.numLights = 0;
-    for (int i = 0; i < 8; i++) {
-        cachedUBO.lightPositions[i] = glm::vec4(0.0f);
-        cachedUBO.lightColors[i] = glm::vec4(0.0f);
-    }
-    cachedUBO.ambientLight = glm::vec3(0.03f, 0.03f, 0.04f);
-
-    // Set skybox parameters (will be configurable via UI)
-    cachedUBO.skyboxExposure = skyboxExposure;
-    cachedUBO.skyboxRotation = skyboxRotation;
-    cachedUBO.skyboxEnabled = skyboxEnabled ? 1 : 0;
-    cachedUBO.iblIntensity = iblIntensity;
-
-    // Shadow parameters (will be set by ShadowSystem)
-    cachedUBO.shadowsEnabled = 1;  // Enable shadows by default
-    cachedUBO.cascadeDebugMode = 0;  // Off by default
-    cachedUBO.padding1_0 = 0;
-    cachedUBO.padding1_1 = 0;
-
-    // Update IBL bindless indices
-    cachedUBO.environmentMapIndex = iblEnvironmentMapIndex;
-    cachedUBO.irradianceMapIndex = iblIrradianceMapIndex;
-    cachedUBO.prefilteredMapIndex = iblPrefilteredMapIndex;
-    cachedUBO.brdfLUTIndex = iblBRDFLUTIndex;
-
-    uniformBuffers[frameIndex]->update(&cachedUBO, sizeof(cachedUBO));
-    // REMOVED: descriptorSet->updateBuffer() - This was causing the UBO data to be lost!
-    // The descriptor set is already bound to the buffer during initialization,
-    // we only need to update the buffer contents, not rebind the descriptor set.
-}
-
-void GlobalUniforms::setSkyboxTexture(Texture* texture) {
-    if (!descriptorSet) {
-        violet::Log::error("Renderer", "Cannot set skybox texture - descriptor set not initialized");
-        return;
-    }
-
-    if (!texture) {
-        violet::Log::warn("Renderer", "Setting null skybox texture");
-        return;
-    }
-
-    // Validate texture is properly initialized
-    if (!texture->getImageView() || !texture->getSampler()) {
-        violet::Log::error("Renderer", "Cannot set skybox texture - texture not fully initialized");
-        return;
-    }
-
-    violet::Log::info("Renderer", "Setting skybox texture for {} frames", uniformBuffers.size());
-
-    // Update all frames in flight with the same skybox texture
-    for (uint32_t i = 0; i < uniformBuffers.size(); ++i) {
-        descriptorSet->updateTexture(i, texture, 1); // Binding 1 for skybox texture
-    }
-}
-
-void GlobalUniforms::setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_t prefiltered, uint32_t brdfLUT) {
-    // Only log if values actually changed
-    bool changed = (iblEnvironmentMapIndex != envMap ||
-                    iblIrradianceMapIndex != irradiance ||
-                    iblPrefilteredMapIndex != prefiltered ||
-                    iblBRDFLUTIndex != brdfLUT);
-
-    iblEnvironmentMapIndex = envMap;
-    iblIrradianceMapIndex = irradiance;
-    iblPrefilteredMapIndex = prefiltered;
-    iblBRDFLUTIndex = brdfLUT;
-
-    if (changed) {
-        violet::Log::info("Renderer", "IBL indices set - Env: {}, Irradiance: {}, Prefiltered: {}, BRDF: {}",
-                         envMap, irradiance, prefiltered, brdfLUT);
-        // Note: Don't upload UBO here. update() will use these member variables in the next frame.
-        // Uploading cachedUBO here would overwrite other fields (view, proj, etc.) with stale values.
-    }
-}
-
-void ForwardRenderer::registerDescriptorLayouts() {
-    auto& descMgr = resourceManager->getDescriptorManager();
-
-    // Global uniforms layout - per-frame updates
-    // Only binding 0 (GlobalUBO) - skybox now uses bindless cubemaps
-    descMgr.registerLayout({
-        .name = "Global",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment}
-        },
-        .frequency = UpdateFrequency::PerFrame
-    });
-
-    // PBR material layout - per-material updates
-    descMgr.registerLayout({
-        .name = "PBRMaterial",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
-            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Base color
-            {.binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Metallic-roughness
-            {.binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Normal
-            {.binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Occlusion
-            {.binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Emissive
-        },
-        .frequency = UpdateFrequency::PerMaterial
-    });
-
-    // Unlit material layout - per-material updates
-    descMgr.registerLayout({
-        .name = "UnlitMaterial",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eUniformBuffer, .stages = vk::ShaderStageFlagBits::eFragment},
-            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Base color
-        },
-        .frequency = UpdateFrequency::PerMaterial
-    });
-
-    // PostProcess layout - per-pass updates
-    descMgr.registerLayout({
-        .name = "PostProcess",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}, // Color texture
-            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment}  // Depth texture
-        },
-        .frequency = UpdateFrequency::PerPass
-    });
-
-    // Compute shader layout for equirect to cubemap
-    descMgr.registerLayout({
-        .name = "EquirectToCubemap",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input equirect
-            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output cubemap
-        },
-        .frequency = UpdateFrequency::Static
-    });
-
-    // IBL compute shader layouts
-    descMgr.registerLayout({
-        .name = "IrradianceConvolution",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
-            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output irradiance cubemap
-        },
-        .frequency = UpdateFrequency::Static
-    });
-
-    descMgr.registerLayout({
-        .name = "PrefilterEnvironment",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute}, // Input environment cubemap
-            {.binding = 1, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output prefiltered cubemap (mip level)
-        },
-        .frequency = UpdateFrequency::Static
-    });
-
-    descMgr.registerLayout({
-        .name = "BRDFLUT",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eStorageImage, .stages = vk::ShaderStageFlagBits::eCompute}           // Output BRDF LUT (2D texture)
-        },
-        .frequency = UpdateFrequency::Static
-    });
-
-    // Bindless texture array layout - static, rarely updated
-    // Binding 0: 2D textures, Binding 1: Cubemaps
-    descMgr.registerLayout({
-        .name = "Bindless",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment, .count = 1024},  // 2D textures
-            {.binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eVertex, .count = 64}    // Cubemaps
-        },
-        .frequency = UpdateFrequency::Static,
-        .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,
-        .bindingFlags = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eUpdateAfterBind
-    });
-
-    // Material data SSBO - bindless architecture (set 2)
-    // Contains all material parameters + texture indices
-    descMgr.registerLayout({
-        .name = "MaterialData",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
-        },
-        .frequency = UpdateFrequency::Static
-    });
-
-    // Auto-exposure luminance compute - per-frame update
-    descMgr.registerLayout({
-        .name = "LuminanceCompute",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .stages = vk::ShaderStageFlagBits::eCompute},
-            {.binding = 1, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eCompute}
-        },
-        .frequency = UpdateFrequency::PerFrame
-    });
-
-    // Lighting system - LightData SSBO (set 3)
-    descMgr.registerLayout({
-        .name = "Lighting",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
-        },
-        .frequency = UpdateFrequency::PerFrame
-    });
-
-    // Shadow system - ShadowData SSBO (set 4)
-    descMgr.registerLayout({
-        .name = "Shadow",
-        .bindings = {
-            {.binding = 0, .type = vk::DescriptorType::eStorageBuffer, .stages = vk::ShaderStageFlagBits::eFragment}
-        },
-        .frequency = UpdateFrequency::PerFrame
-    });
-
-    violet::Log::info("Renderer", "Registered all descriptor layouts declaratively");
 }
 
 

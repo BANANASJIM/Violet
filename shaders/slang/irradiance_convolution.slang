@@ -1,6 +1,7 @@
 // Irradiance Convolution - Slang version
 // Convolves environment map to generate diffuse irradiance cubemap
 
+import Common;
 import Sampling;
 
 // ========================================

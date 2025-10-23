@@ -220,12 +220,16 @@ public:
     LayoutHandle registerLayout(const DescriptorLayoutDesc& desc);
 
     // Allocate descriptor set from registered layout
-    vk::DescriptorSet allocateSet(LayoutHandle handle, uint32_t frameIndex);
+    // frameIndex is only used for internal tracking, defaults to 0 for non-dynamic-offset sets
+    vk::DescriptorSet allocateSet(LayoutHandle handle, uint32_t frameIndex = 0);
 
     // Get layout for pipeline creation
     vk::DescriptorSetLayout getLayout(LayoutHandle handle) const;
 
     bool hasLayout(LayoutHandle handle) const;
+
+    // Query registered layout handle by name (for deferred lookup after registration)
+    LayoutHandle getLayoutHandle(const eastl::string& name) const;
 
     // @deprecated Legacy string-based API - use LayoutHandle-based API instead
     // TODO: Remove once all code migrates to hash-based LayoutHandle
@@ -278,7 +282,7 @@ public:
     vk::DescriptorSet getMaterialDataSet() const { return materialDataSet; }
     bool isMaterialDataEnabled() const { return materialDataEnabled; }
     const MaterialData* getMaterialData(uint32_t index) const;
-    uint32_t getMaxMaterialData() const { return maxMaterialData; }
+uint32_t getMaxMaterialData() const { return maxMaterialData; }
 
     // Reflection-based descriptor API (modern, preferred)
     void setReflection(LayoutHandle handle, const ShaderReflection& reflection);

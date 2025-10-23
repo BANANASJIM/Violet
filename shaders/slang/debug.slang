@@ -1,8 +1,48 @@
 // Debug Shader - Slang version
 // Simple colored geometry rendering for debugging
 
-import Types;
-import Bindless;
+import Common;
+
+#include "TypeDefinitions.slang"
+
+// ========================================
+// Descriptor Bindings
+// ========================================
+
+// Set 0: PER-FRAME (Dynamic Offset)
+[[vk::binding(0, 0)]]
+ConstantBuffer<CameraUBO> camera;
+#define global camera
+
+[[vk::binding(1, 0)]]
+StructuredBuffer<LightData> lights;
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<ShadowData> shadows;
+
+// Set 1: BINDLESS (Static, UPDATE_AFTER_BIND)
+[[vk::binding(0, 1)]]
+Texture2D textures[1024];
+
+[[vk::binding(1, 1)]]
+TextureCube cubemaps[64];
+
+[[vk::binding(2, 1)]]
+SamplerState linearSampler;
+
+[[vk::binding(3, 1)]]
+SamplerState nearestSampler;
+
+[[vk::binding(4, 1)]]
+SamplerState shadowSampler;
+
+// Set 2: PER-MATERIAL
+[[vk::binding(0, 2)]]
+StructuredBuffer<MaterialData> materials;
+
+// Push Constants
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> push;
 
 // ========================================
 // Vertex Shader

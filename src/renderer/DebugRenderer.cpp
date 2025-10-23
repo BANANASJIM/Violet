@@ -20,11 +20,11 @@ DebugRenderer::~DebugRenderer() {
     cleanup();
 }
 
-void DebugRenderer::init(VulkanContext* ctx, GlobalUniforms* globalUnif,
-                         DescriptorManager* descMgr, ShaderLibrary* shaderLib, uint32_t framesInFlight) {
+void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
+                         ShaderLibrary* shaderLib, uint32_t framesInFlight) {
     context = ctx;
     maxFramesInFlight = framesInFlight;
-    globalUniforms = globalUnif;
+    descriptorManager = descMgr;
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -302,8 +302,9 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    // Get Global uniform descriptor set using reflection-based API
+    UniformHandle uniform = descriptorManager->getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers
@@ -370,8 +371,9 @@ void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frame
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    // Get Global uniform descriptor set using reflection-based API
+    UniformHandle uniform = descriptorManager->getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind vertex and index buffers
@@ -437,8 +439,9 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    // Get Global uniform descriptor set using reflection-based API
+    UniformHandle uniform = descriptorManager->getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind vertex and index buffers
@@ -548,8 +551,9 @@ void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameInd
     // Bind triangle pipeline for filled mesh rendering
     trianglePipeline->bind(commandBuffer);
 
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    // Get Global uniform descriptor set using reflection-based API
+    UniformHandle uniform = descriptorManager->getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers
@@ -708,8 +712,9 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
     // Bind triangle pipeline for filled mesh rendering
     trianglePipeline->bind(commandBuffer);
 
-    // Use BaseRenderer's bindGlobalDescriptors helper
-    vk::DescriptorSet globalSet = globalUniforms->getDescriptorSet()->getDescriptorSet(frameIndex);
+    // Get Global uniform descriptor set using reflection-based API
+    UniformHandle uniform = descriptorManager->getUniform("Global");
+    vk::DescriptorSet globalSet = uniform.getSet();
     bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
 
     // Bind buffers

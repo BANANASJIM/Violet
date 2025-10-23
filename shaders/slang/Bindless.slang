@@ -1,6 +1,10 @@
 // Bindless.slang - 3-set descriptor layout with bindless resources
+// NOTE: This is an implementing file, meant to be __include'd into shader modules
+// Shaders must import Types before including this file
 
-import Types;
+implementing pbr_bindless;
+implementing skybox;
+implementing debug;
 
 // ========================================
 // Set 0: PER-FRAME (Dynamic Offset)
@@ -9,6 +13,9 @@ import Types;
 // Binding 0: Camera data (with dynamic offset for triple buffering)
 [[vk::binding(0, 0)]]
 ConstantBuffer<CameraUBO> camera;
+
+// Legacy alias for compatibility
+#define global camera
 
 // Binding 1: Lighting data (SSBO array, count in camera.lightCount)
 [[vk::binding(1, 0)]]
@@ -22,14 +29,12 @@ StructuredBuffer<ShadowData> shadows;
 // Set 1: BINDLESS (Static, UPDATE_AFTER_BIND)
 // ========================================
 
-// Binding 0: 2D texture array
+// Binding 0: 2D texture array (bindless, large array)
 [[vk::binding(0, 1)]]
-[[bindless]]
 Texture2D textures[1024];
 
-// Binding 1: Cubemap array
+// Binding 1: Cubemap array (bindless, large array)
 [[vk::binding(1, 1)]]
-[[bindless]]
 TextureCube cubemaps[64];
 
 // Binding 2-4: Common samplers (immutable, shared across all materials)

@@ -9,7 +9,11 @@ namespace violet {
 
 class VulkanContext;
 
-class UniformBuffer : public GPUResource {
+// DEPRECATED: Use DescriptorManager::createUniform() with UniformHandle instead
+// - Automatic buffer management with dynamic offset for per-frame data
+// - Reflection-based field updates: uniform["fieldName"] = value
+// - No manual buffer creation or descriptor updates needed
+class [[deprecated("Use DescriptorManager::createUniform() with UniformHandle and reflection API")]] UniformBuffer : public GPUResource {
 public:
     UniformBuffer() = default;
     ~UniformBuffer() override { cleanup(); }

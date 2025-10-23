@@ -1,13 +1,14 @@
 // Sampling.slang - Common sampling and conversion utilities
+module Sampling;
 
-static const float PI = 3.14159265359;
+import Common;
 
 // ========================================
 // Cubemap Direction Conversions
 // ========================================
 
 // Convert cubemap UV coordinates to 3D direction vector
-float3 uvToDirection(float2 uv, uint face) {
+public float3 uvToDirection(float2 uv, uint face) {
     // Map UV from [0, 1] to [-1, 1]
     float2 ndc = uv * 2.0 - 1.0;
 
@@ -26,7 +27,7 @@ float3 uvToDirection(float2 uv, uint face) {
 }
 
 // Convert 3D direction to equirectangular UV coordinates
-float2 directionToEquirectUV(float3 dir) {
+public float2 directionToEquirectUV(float3 dir) {
     // Calculate spherical coordinates
     float theta = atan2(dir.z, dir.x);
     float phi = acos(clamp(dir.y, -1.0, 1.0));
@@ -43,7 +44,7 @@ float2 directionToEquirectUV(float3 dir) {
 // ========================================
 
 // Van der Corput radical inverse (base 2)
-float radicalInverse_VdC(uint bits) {
+public float radicalInverse_VdC(uint bits) {
     bits = (bits << 16u) | (bits >> 16u);
     bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
     bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
@@ -53,7 +54,7 @@ float radicalInverse_VdC(uint bits) {
 }
 
 // Hammersley low-discrepancy sequence
-float2 hammersley(uint i, uint N) {
+public float2 hammersley(uint i, uint N) {
     return float2(float(i) / float(N), radicalInverse_VdC(i));
 }
 
@@ -62,7 +63,7 @@ float2 hammersley(uint i, uint N) {
 // ========================================
 
 // Cosine-weighted hemisphere sampling (Malley's method)
-float3 cosineSampleHemisphere(float2 u) {
+public float3 cosineSampleHemisphere(float2 u) {
     float r = sqrt(u.x);
     float phi = 2.0 * PI * u.y;
 
@@ -74,7 +75,7 @@ float3 cosineSampleHemisphere(float2 u) {
 }
 
 // GGX importance sampling for specular IBL
-float3 importanceSampleGGX(float2 u, float3 N, float roughness) {
+public float3 importanceSampleGGX(float2 u, float3 N, float roughness) {
     float a = roughness * roughness;
 
     float phi = 2.0 * PI * u.x;
@@ -102,7 +103,7 @@ float3 importanceSampleGGX(float2 u, float3 N, float roughness) {
 // ========================================
 
 // Build orthonormal basis from normal (Frisvad method)
-void buildOrthonormalBasis(float3 n, out float3 tangent, out float3 bitangent) {
+public void buildOrthonormalBasis(float3 n, out float3 tangent, out float3 bitangent) {
     if (n.z < -0.9999999) {
         tangent = float3(0.0, -1.0, 0.0);
         bitangent = float3(-1.0, 0.0, 0.0);

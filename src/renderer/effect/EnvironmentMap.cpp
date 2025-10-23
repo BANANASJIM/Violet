@@ -307,18 +307,20 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
 auto shader = shaderLibrary->get("equirect_to_cubemap");
     pipeline.init(context, shader, config);
 
-    // Step 4: Allocate descriptor set
-    auto descriptorSets = descriptorManager->allocateSets("EquirectToCubemap", 1);
-    auto descSet = eastl::make_unique<DescriptorSet>();
-    descSet->init(context, descriptorSets);
+    // Step 4: Allocate descriptor set using reflection-based API
+    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+    if (layoutHandles.empty()) {
+        violet::Log::error("Renderer", "No descriptor layouts found in equirect_to_cubemap shader");
+        return;
+    }
+
+    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
 
     // Update descriptor set
-    descSet->updateTexture(0, equirectTexturePtr, 0);  // Binding 0: input
-    descSet->updateStorageImage(0, cubemapPtr, 1);     // Binding 1: output
-
-    // Keep descriptor set alive to prevent validation errors
-    DescriptorSet* descSetPtr = descSet.get();
-    tempDescriptorSets.push_back(eastl::move(descSet));
+    eastl::vector<ResourceBindingDesc> bindings;
+    bindings.push_back(ResourceBindingDesc::texture(0, equirectTexturePtr));  // Binding 0: input
+    bindings.push_back(ResourceBindingDesc::storageImage(1, cubemapPtr->getImageView()));  // Binding 1: output
+    descriptorManager->updateSet(descSet, bindings);
 
     // Step 5: Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
@@ -348,7 +350,7 @@ auto shader = shaderLibrary->get("equirect_to_cubemap");
         cmd.bindDescriptorSets(
             vk::PipelineBindPoint::eCompute,
             pipeline.getPipelineLayout(),
-            0, descSetPtr->getDescriptorSet(0), {}
+            0, descSet, {}
         );
 
         // Single dispatch for all 6 faces using Z dimension (ultimate optimization)
@@ -427,18 +429,20 @@ void EnvironmentMap::generateIrradianceMap() {
     auto shader = shaderLibrary->get("irradiance_convolution");
     pipeline.init(context, shader, config);
 
-    // Allocate and update descriptor set
-    auto descriptorSets = descriptorManager->allocateSets("IrradianceConvolution", 1);
-    auto descSet = eastl::make_unique<DescriptorSet>();
-    descSet->init(context, descriptorSets);
+    // Allocate and update descriptor set using reflection-based API
+    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+    if (layoutHandles.empty()) {
+        violet::Log::error("Renderer", "No descriptor layouts found in irradiance_convolution shader");
+        return;
+    }
+
+    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
 
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
-    descSet->updateTexture(0, envTex, 0);
-    descSet->updateStorageImage(0, irradiance.get(), 1);
-
-    // Keep descriptor set alive to prevent validation errors
-    DescriptorSet* descSetPtr = descSet.get();
-    tempDescriptorSets.push_back(eastl::move(descSet));
+    eastl::vector<ResourceBindingDesc> bindings;
+    bindings.push_back(ResourceBindingDesc::texture(0, envTex));
+    bindings.push_back(ResourceBindingDesc::storageImage(1, irradiance->getImageView()));
+    descriptorManager->updateSet(descSet, bindings);
 
     // Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
@@ -464,7 +468,7 @@ void EnvironmentMap::generateIrradianceMap() {
         );
 
         pipeline.bind(cmd);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSetPtr->getDescriptorSet(0), {});
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSet, {});
 
         // Single dispatch for all 6 faces using Z dimension
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -563,10 +567,14 @@ void EnvironmentMap::generatePrefilteredMap() {
             pc.size = mipSize;
             pc.roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
 
-            // Create per-mip descriptor set
-            auto mipDescriptorSets = descriptorManager->allocateSets("PrefilterEnvironment", 1);
-            auto mipDescSet = eastl::make_unique<DescriptorSet>();
-            mipDescSet->init(context, mipDescriptorSets);
+            // Get layout handle from shader
+            const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+            if (layoutHandles.empty()) {
+                violet::Log::error("Renderer", "No descriptor layouts found in prefilter_environment shader");
+                return;
+            }
+
+            vk::DescriptorSet mipDescSet = descriptorManager->allocateSet(layoutHandles[0], 0);
 
             // Create per-mip image view for storage
             vk::raii::ImageView mipView = prefiltered->createMipImageView(context, mip);
@@ -575,15 +583,12 @@ void EnvironmentMap::generatePrefilteredMap() {
             eastl::vector<ResourceBindingDesc> bindings;
             bindings.push_back(ResourceBindingDesc::texture(0, envTex));
             bindings.push_back(ResourceBindingDesc::storageImage(1, *mipView));
-            descriptorManager->updateSet(mipDescriptorSets[0], bindings);
+            descriptorManager->updateSet(mipDescSet, bindings);
 
-            // Keep descriptor set and image view alive to prevent validation errors
-            DescriptorSet* mipDescSetPtr = mipDescSet.get();
-            vk::DescriptorSet descriptorSetHandle = mipDescriptorSets[0];
-            tempDescriptorSets.push_back(eastl::move(mipDescSet));
+            // Keep image view alive to prevent validation errors
             tempImageViews.push_back(eastl::move(mipView));
 
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descriptorSetHandle, {});
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, mipDescSet, {});
 
             uint32_t workgroups = (mipSize + 15) / 16;
 
@@ -650,10 +655,14 @@ void EnvironmentMap::generateBRDFLUT() {
     auto shader = shaderLibrary->get("brdf_lut");
     pipeline.init(context, shader, config);
 
-    // Allocate and update descriptor set
-    auto descriptorSets = descriptorManager->allocateSets("BRDFLUT", 1);
-    auto descSet = eastl::make_unique<DescriptorSet>();
-    descSet->init(context, descriptorSets);
+    // Allocate and update descriptor set using reflection-based API
+    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+    if (layoutHandles.empty()) {
+        violet::Log::error("Renderer", "No descriptor layouts found in brdf_lut shader");
+        return;
+    }
+
+    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
 
     // Create image view for storage
     vk::raii::ImageView lutView = brdfLUT->createMipImageView(context, 0);
@@ -661,12 +670,9 @@ void EnvironmentMap::generateBRDFLUT() {
     // Update descriptor set
     eastl::vector<ResourceBindingDesc> bindings;
     bindings.push_back(ResourceBindingDesc::storageImage(0, *lutView));
-    descriptorManager->updateSet(descriptorSets[0], bindings);
+    descriptorManager->updateSet(descSet, bindings);
 
-    // Keep descriptor set and image view alive to prevent validation errors
-    DescriptorSet* descSetPtr = descSet.get();
-    vk::DescriptorSet descriptorSetHandle = descriptorSets[0];
-    tempDescriptorSets.push_back(eastl::move(descSet));
+    // Keep image view alive to prevent validation errors
     tempImageViews.push_back(eastl::move(lutView));
 
     // Execute compute shader
@@ -693,7 +699,7 @@ void EnvironmentMap::generateBRDFLUT() {
         );
 
         pipeline.bind(cmd);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descriptorSetHandle, {});
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSet, {});
 
         // Push constants
         cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(uint32_t), &lutSize);

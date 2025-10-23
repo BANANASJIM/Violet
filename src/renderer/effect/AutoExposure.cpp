@@ -27,21 +27,35 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedLuminanceData = static_cast<LuminanceData*>(luminanceBuffer.mappedData);
     *mappedLuminanceData = {};
 
-    // Allocate descriptor sets for all frames in flight
-    auto luminanceSets = descriptorManager->allocateSets("LuminanceCompute", MAX_FRAMES_IN_FLIGHT);
+    // Get layout handle from DescriptorManager (shader auto-registers during pipeline creation later)
+    // For now, we need to create pipeline first to register layout, then allocate sets
+    auto luminanceShader = shaderLibrary->get("luminance_average").lock();
+    if (!luminanceShader) {
+        violet::Log::error("Renderer", "Failed to get luminance_average shader");
+        return;
+    }
+
+    // Create pipeline first (registers layouts automatically)
+    luminancePipeline = eastl::make_unique<ComputePipeline>();
+    const auto& luminanceLayoutHandles = luminanceShader->getDescriptorLayoutHandles();
+    if (luminanceLayoutHandles.empty()) {
+        violet::Log::error("Renderer", "No descriptor layouts found in luminance_average shader");
+        return;
+    }
+
+    ComputePipelineConfig config{};
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout(luminanceLayoutHandles[0]));
+    luminancePipeline->init(context, luminanceShader, config);
+
+    // Allocate descriptor sets for all frames in flight using reflection-based API
     luminanceDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        luminanceDescriptorSets[i] = luminanceSets[i];
+        luminanceDescriptorSets[i] = descriptorManager->allocateSet(luminanceLayoutHandles[0]);
         // Update storage buffer binding (same buffer for all frames)
         descriptorManager->updateSet(luminanceDescriptorSets[i], {
             ResourceBindingDesc::storageBuffer(1, luminanceBuffer.buffer, 0, sizeof(LuminanceData))
         });
     }
-
-    luminancePipeline = eastl::make_unique<ComputePipeline>();
-    ComputePipelineConfig config{};
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
-    luminancePipeline->init(context, shaderLibrary->get("luminance_average"), config);
 
     histogramBuffer = ResourceFactory::createBuffer(context, {
         .size = sizeof(HistogramData),
@@ -54,11 +68,18 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedHistogramData->minLogLuminance = params.minLogLuminance;
     mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
 
-    // Allocate descriptor sets for all frames in flight
-    auto histogramSets = descriptorManager->allocateSets("LuminanceCompute", MAX_FRAMES_IN_FLIGHT);
+    // Get shader and extract layout handles
+    auto histogramShader = shaderLibrary->get("luminance_histogram");
+    const auto& histogramLayoutHandles = histogramShader->getDescriptorLayoutHandles();
+    if (histogramLayoutHandles.empty()) {
+        violet::Log::error("Renderer", "No descriptor layouts found in luminance_histogram shader");
+        return;
+    }
+
+    // Allocate descriptor sets for all frames in flight using reflection-based API
     histogramDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        histogramDescriptorSets[i] = histogramSets[i];
+        histogramDescriptorSets[i] = descriptorManager->allocateSet(histogramLayoutHandles[0]);
         // Update storage buffer binding (same buffer for all frames)
         descriptorManager->updateSet(histogramDescriptorSets[i], {
             ResourceBindingDesc::storageBuffer(1, histogramBuffer.buffer, 0, sizeof(HistogramData))
@@ -67,9 +88,9 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
 
     histogramPipeline = eastl::make_unique<ComputePipeline>();
     config = {};
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("LuminanceCompute"));
+    config.descriptorSetLayouts.push_back(descriptorManager->getLayout(histogramLayoutHandles[0]));
     config.pushConstantRanges.push_back({vk::ShaderStageFlagBits::eCompute, 0, 4 * sizeof(float)});
-    histogramPipeline->init(context, shaderLibrary->get("luminance_histogram"), config);
+    histogramPipeline->init(context, histogramShader, config);
 }
 
 void AutoExposure::cleanup() {

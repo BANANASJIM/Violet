@@ -41,74 +41,48 @@ void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
 }
 
 void ResourceManager::loadAllShaders() {
-    violet::Log::info("ResourceManager", "Pre-loading all shaders into ShaderLibrary...");
+    violet::Log::info("ResourceManager", "Pre-loading all Slang shaders into ShaderLibrary...");
 
-    // ============================================================================
-    // TEMPORARY: Test new Slang auto-loading API (TODO: Replace old GLSL loading)
-    // ============================================================================
-    violet::Log::info("ResourceManager", "=== TESTING: loadSlangShader() API ===");
+    // Slang shader modules to load (auto-detects all entry points via reflection)
+    eastl::vector<const char*> slangShaders = {
+        // Graphics shaders
+        "shaders/slang/pbr_bindless.slang",    // vertexMain, fragmentMain
+        "shaders/slang/skybox.slang",          // vertexMain, fragmentMain
+        "shaders/slang/debug.slang",           // vertexMain, fragmentMain
+        "shaders/slang/shadow.slang",          // vertexMain
+        "shaders/slang/postprocess.slang",     // vertexMain, fragmentMain
 
-    // Test auto-loading PBR shader with automatic entry point detection
-    auto pbrShaders = shaderLibrary->loadSlangShader(
-        FileSystem::resolveRelativePath("shaders/slang/pbr_bindless.slang"));
+        // Compute shaders (IBL)
+        "shaders/slang/equirect_to_cubemap.slang",
+        "shaders/slang/irradiance_convolution.slang",
+        "shaders/slang/prefilter_environment.slang",
+        "shaders/slang/brdf_lut.slang",
 
-    violet::Log::info("ResourceManager", "PBR shader auto-loaded {} shaders:", pbrShaders.size());
-    for (const auto& shader : pbrShaders) {
-        if (auto s = shader.lock()) {
-            violet::Log::info("ResourceManager", "  - {}", s->getName().c_str());
+        // Compute shaders (Auto-exposure)
+        "shaders/slang/luminance_histogram.slang",
+        "shaders/slang/luminance_average.slang",
+    };
+
+    // Load all Slang shaders with automatic entry point detection
+    int totalShaders = 0;
+    for (const char* shaderPath : slangShaders) {
+        auto shaders = shaderLibrary->loadSlangShader(FileSystem::resolveRelativePath(shaderPath));
+
+        if (!shaders.empty()) {
+            violet::Log::info("ResourceManager", "Loaded '{}' -> {} entry point(s):", shaderPath, shaders.size());
+            for (const auto& shader : shaders) {
+                if (auto s = shader.lock()) {
+                    violet::Log::info("ResourceManager", "  - {}", s->getName().c_str());
+                    totalShaders++;
+                }
+            }
+        } else {
+            violet::Log::error("ResourceManager", "Failed to load Slang shader: {}", shaderPath);
         }
     }
 
-    violet::Log::info("ResourceManager", "=== END TESTING ===");
-    // ============================================================================
-
-    using Language = Shader::Language;
-    using Stage = Shader::Stage;
-
-    // Shader definitions list
-    struct ShaderDef {
-        const char* name;
-        const char* filePath;
-        Stage stage;
-    };
-
-    eastl::vector<ShaderDef> shaders = {
-        // Graphics shaders (vertex + fragment pairs)
-        {"pbr_vert", "shaders/pbr_bindless.vert", Stage::Vertex},
-        {"pbr_frag", "shaders/pbr_bindless.frag", Stage::Fragment},
-
-        {"skybox_vert", "shaders/skybox.vert", Stage::Vertex},
-        {"skybox_frag", "shaders/skybox.frag", Stage::Fragment},
-
-        {"debug_vert", "shaders/debug.vert", Stage::Vertex},
-        {"debug_frag", "shaders/debug.frag", Stage::Fragment},
-
-        {"postprocess_vert", "shaders/postprocess.vert", Stage::Vertex},
-        {"postprocess_frag", "shaders/postprocess.frag", Stage::Fragment},
-
-        {"shadow_vert", "shaders/shadow.vert", Stage::Vertex},
-
-        // Compute shaders
-        {"equirect_to_cubemap", "shaders/equirect_to_cubemap.comp", Stage::Compute},
-        {"irradiance_convolution", "shaders/irradiance_convolution.comp", Stage::Compute},
-        {"prefilter_environment", "shaders/prefilter_environment.comp", Stage::Compute},
-        {"brdf_lut", "shaders/brdf_lut.comp", Stage::Compute},
-        {"luminance_average", "shaders/luminance_average.comp", Stage::Compute},
-        {"luminance_histogram", "shaders/luminance_histogram.comp", Stage::Compute},
-    };
-
-    // Load all shaders
-    for (const auto& shader : shaders) {
-        shaderLibrary->load(shader.name, {
-            .name = shader.name,
-            .filePath = FileSystem::resolveRelativePath(shader.filePath),
-            .entryPoint = "main",
-            .stage = shader.stage,
-            .language = Language::GLSL
-        });
-    }
-
-    violet::Log::info("ResourceManager", "All {} shaders pre-loaded successfully", shaders.size());
+    violet::Log::info("ResourceManager", "All {} Slang shader(s) from {} module(s) pre-loaded successfully",
+                     totalShaders, slangShaders.size());
 }
 
 void ResourceManager::cleanup() {

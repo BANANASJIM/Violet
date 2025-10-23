@@ -1,6 +1,7 @@
 // Prefilter Environment - Slang version
 // Generates mip chain for specular IBL using GGX importance sampling
 
+import Common;
 import Sampling;
 import PBR;
 

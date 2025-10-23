@@ -48,61 +48,7 @@ struct RenderStats {
     uint32_t skippedRenderables = 0;
 };
 
-class GlobalUniforms {
-public:
-    ~GlobalUniforms();
-    void           init(VulkanContext* context, DescriptorManager* descMgr, uint32_t maxFramesInFlight);
-    void           cleanup();
-    void           update(entt::registry& world, uint32_t frameIndex, float skyboxExposure = 1.0f, float skyboxRotation = 0.0f, bool skyboxEnabled = false, float iblIntensity = 1.0f);
-    DescriptorSet* getDescriptorSet() const { return descriptorSet.get(); }
-    Camera* findActiveCamera(entt::registry& world);  // Made public for frustum culling
-    void setSkyboxTexture(Texture* texture);
-    void setIBLIndices(uint32_t envMap, uint32_t irradiance, uint32_t prefiltered, uint32_t brdfLUT);
-    void setCascadeDebugMode(bool enabled) { cachedUBO.cascadeDebugMode = enabled ? 1 : 0; }
-
-private:
-
-    VulkanContext*                                  context = nullptr;
-    eastl::unique_ptr<DescriptorSet>                descriptorSet;
-    eastl::vector<eastl::unique_ptr<UniformBuffer>> uniformBuffers;
-
-    // IBL bindless indices (cached values)
-    uint32_t iblEnvironmentMapIndex = 0;
-    uint32_t iblIrradianceMapIndex = 0;
-    uint32_t iblPrefilteredMapIndex = 0;
-    uint32_t iblBRDFLUTIndex = 0;
-
-    struct GlobalUBO {
-        alignas(16) glm::mat4 view;
-        alignas(16) glm::mat4 proj;
-        alignas(16) glm::vec3 cameraPos;
-        alignas(4) float padding0;
-
-        // Light data (physical units: lux for directional, lumens for point)
-        alignas(16) glm::vec4 lightPositions[8];  // xyz=position/direction, w=type (0=dir, 1=point)
-        alignas(16) glm::vec4 lightColors[8];     // xyz=color*intensity (physical units), w=radius
-        alignas(4) int numLights;
-        alignas(16) glm::vec3 ambientLight;
-
-        // Skybox data
-        alignas(4) float skyboxExposure;
-        alignas(4) float skyboxRotation;
-        alignas(4) int skyboxEnabled;
-        alignas(4) float iblIntensity;
-
-        // Shadow data
-        alignas(4) int shadowsEnabled;
-        alignas(4) int cascadeDebugMode;  // 0=off, 1=visualize cascades with colors
-        alignas(4) uint32_t padding1_0;  // Padding (not array to avoid std140 alignment issues)
-        alignas(4) uint32_t padding1_1;
-
-        // IBL bindless texture indices
-        alignas(4) uint32_t environmentMapIndex;
-        alignas(4) uint32_t irradianceMapIndex;
-        alignas(4) uint32_t prefilteredMapIndex;
-        alignas(4) uint32_t brdfLUTIndex;
-    } cachedUBO;
-};
+// GlobalUniforms class removed - now using DescriptorManager::createUniform() + UniformHandle
 
 class ForwardRenderer : public BaseRenderer {
 public:
@@ -130,7 +76,8 @@ public:
     void updateGlobalUniforms(entt::registry& world, uint32_t frameIndex);
     void renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world);
 
-    DescriptorSet* getGlobalDescriptorSet() const { return globalUniforms.getDescriptorSet(); }
+    // Helper to find active camera (moved from GlobalUniforms)
+    Camera* findActiveCamera(entt::registry& world);
 
     // Resource manager access
     ResourceManager* getResourceManager() { return resourceManager; }
@@ -164,7 +111,6 @@ public:
 
     // Skybox access
     EnvironmentMap& getEnvironmentMap() { return environmentMap; }
-    GlobalUniforms& getGlobalUniforms() { return globalUniforms; }
 
     // Auto-exposure access
     AutoExposure& getAutoExposure() { return autoExposure; }
@@ -205,7 +151,9 @@ private:
     vk::Extent2D currentExtent = {1280, 720};
     uint32_t currentFrameIndex = 0;
 
-    GlobalUniforms globalUniforms;
+    // Global uniform using reflection-based API (replaces GlobalUniforms class)
+    UniformHandle globalUniformHandle = 0;
+
     DebugRenderer debugRenderer;
 
     EnvironmentMap environmentMap;
