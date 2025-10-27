@@ -14,11 +14,9 @@
 namespace violet {
 
 class VulkanContext;
-class UniformBuffer;
 class Texture;
 class FieldProxy;
-class UniformProxy;
-class UniformHandle;
+class Shader;
 
 // Type alias for descriptor layout handle (hash-based ID)
 using LayoutHandle = uint32_t;
@@ -28,6 +26,9 @@ using PushConstantHandle = uint32_t;
 
 // Type alias for pipeline layout cache handle (hash-based ID for layout combination)
 using PipelineLayoutCacheHandle = uint32_t;
+
+// Type alias for ShaderResources handle (managed by DescriptorManager)
+using ShaderResourcesHandle = uint64_t;
 
 //todo remove
 // Bindless push constants for PBR rendering
@@ -115,8 +116,8 @@ struct PushConstantDesc {
     PushConstantHandle hash() const;
 };
 
-//todo remove
-// Resource binding for declarative updates
+// Resource binding for declarative descriptor set updates
+// Used for compute shader and manual descriptor set management
 struct ResourceBindingDesc {
     uint32_t binding = 0;
     vk::DescriptorType type = vk::DescriptorType::eUniformBuffer;
@@ -127,7 +128,6 @@ struct ResourceBindingDesc {
 
     // Resource union (only one should be valid based on type)
     union {
-        UniformBuffer* bufferPtr;
         Texture* texturePtr;
         struct {
             vk::ImageView imageView;
@@ -144,10 +144,9 @@ struct ResourceBindingDesc {
     vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
     // Default constructor (required because union has non-trivial member)
-    ResourceBindingDesc() : bufferPtr(nullptr) {}
+    ResourceBindingDesc() : texturePtr(nullptr) {}
 
     // Helper constructors for type safety
-    static ResourceBindingDesc uniformBuffer(uint32_t binding, UniformBuffer* buffer);
     static ResourceBindingDesc storageBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range);
     static ResourceBindingDesc texture(uint32_t binding, Texture* texture);
     static ResourceBindingDesc storageImage(uint32_t binding, vk::ImageView imageView);
@@ -186,26 +185,28 @@ private:
     eastl::string fieldName;
 };
 
-// Handle class returned to users for uniform access
-class UniformHandle {
-public:
-    UniformHandle() : info(nullptr), manager(nullptr) {}
-    UniformHandle(void* info, void* manager)
-        : info(info), manager(manager) {}
+// ===== Centralized ShaderResources Management Data =====
+struct ManagedShaderResources {
+    eastl::shared_ptr<Shader> shader;
+    eastl::string instanceName;
+    const ShaderReflection* reflection;
 
-    // Direct field access: uniform["fieldName"] = value
-    FieldProxy operator[](const eastl::string& fieldName);
-    FieldProxy operator[](const char* fieldName) {
-        return operator[](eastl::string(fieldName));
-    }
+    // 每个 descriptor set 的完整信息
+    struct SetData {
+        vk::DescriptorSet descriptorSet;
+        LayoutHandle layoutHandle;
+        uint32_t setIndex;
+        bool isBindless;
+        UpdateFrequency frequency;
 
-    vk::DescriptorSet getSet() const;
-    uint32_t getDynamicOffset() const;
-    bool isValid() const { return info != nullptr; }
+        // Buffer 资源（如果此 set 包含 UBO/SSBO）
+        BufferResource buffer;
+        uint32_t alignedSize;      // For dynamic offset (PerFrame)
+        void* mappedData;          // Direct pointer to mapped memory
+        bool hasBuffer;
+    };
 
-private:
-    void* info;    // Points to DescriptorManager::UniformSetInfo
-    void* manager; // Points to DescriptorManager
+    eastl::unordered_map<uint32_t, SetData> sets;  // setIndex -> SetData
 };
 
 // Central descriptor management system with declarative API
@@ -215,6 +216,9 @@ class DescriptorManager {
 public:
     void init(VulkanContext* context, uint32_t maxFramesInFlight);
     void cleanup();
+
+    // Context access
+    VulkanContext* getContext() const { return context; }
 
     // Register layout, returns handle (automatically deduplicates based on hash)
     LayoutHandle registerLayout(const DescriptorLayoutDesc& desc);
@@ -289,19 +293,25 @@ uint32_t getMaxMaterialData() const { return maxMaterialData; }
     const ShaderReflection* getReflection(LayoutHandle handle) const;
     bool hasReflection(LayoutHandle handle) const;
 
-    // ===== Reflection-Based Uniform Management API =====
-    // Set current frame for internal tracking (eliminates need to pass frameIndex everywhere)
+    // ===== Shader Resources Factory API (Modern Reflection-Based) =====
+    // Create ShaderResources instance for a shader (all descriptor sets)
+    // 返回 handle，实际资源由 DescriptorManager 持有
+    ShaderResourcesHandle createShaderResources(
+        eastl::shared_ptr<Shader> shader,
+        const eastl::string& instanceName = ""
+    );
+
+    // 销毁 ShaderResources（释放所有相关的 descriptor sets 和 buffers）
+    void destroyShaderResources(ShaderResourcesHandle handle);
+
+    // 访问 ShaderResources 数据（供 ShaderResources 类使用）
+    const ManagedShaderResources* getShaderResourcesData(ShaderResourcesHandle handle) const;
+    ManagedShaderResources* getShaderResourcesData(ShaderResourcesHandle handle);
+
+    // ===== Frame Management =====
+    // Set current frame for internal tracking
     void setCurrentFrame(uint32_t frameIndex);
-
-    // Create a managed uniform buffer with reflection support
-    // Returns UniformHandle for field-based updates
-    UniformHandle createUniform(const eastl::string& name, LayoutHandle layout, UpdateFrequency frequency);
-
-    // Get uniform by name (uses currentFrame for PerFrame uniforms)
-    UniformHandle getUniform(const eastl::string& name);
-
-    // Get uniform by name with explicit frame override
-    UniformHandle getUniform(const eastl::string& name, uint32_t frameIndex);
+    uint32_t getCurrentFrame() const { return currentFrame; }
 
     // ===== Push Constant Management API =====
     // Register push constants, returns handle (automatically deduplicates based on hash)
@@ -321,12 +331,8 @@ uint32_t getMaxMaterialData() const { return maxMaterialData; }
         uint32_t dynamicOffset;           // Dynamic offset（bindless为0）
 
         // 便利构造函数
-        static NamedDescriptor fromUniform(const char* name, const UniformHandle& uniform) {
-            return {name, uniform.getSet(), uniform.getDynamicOffset()};
-        }
-
-        static NamedDescriptor fromSet(const char* name, vk::DescriptorSet set) {
-            return {name, set, 0};
+        static NamedDescriptor fromSet(const char* name, vk::DescriptorSet set, uint32_t offset = 0) {
+            return {name, set, offset};
         }
     };
 
@@ -358,17 +364,6 @@ private:
         vk::DescriptorPool pool;
         uint32_t remainingSets = 0;
         uint32_t maxSets = 0;
-    };
-
-    // Internal structure for managed uniforms
-    struct UniformSetInfo {
-        BufferResource buffer;           // VMA-managed buffer with auto-mapping
-        vk::DescriptorSet descriptorSet; // Descriptor set bound to buffer
-        LayoutHandle layoutHandle;       // For reflection lookup
-        UpdateFrequency frequency;       // Update frequency
-        uint32_t bufferSize;            // Total buffer size
-        uint32_t alignedSize;           // Size aligned to minUniformBufferOffsetAlignment (for PerFrame)
-        eastl::string name;             // For debugging and lookup
     };
 
     void createPool(UpdateFrequency frequency);
@@ -411,10 +406,6 @@ private:
     eastl::vector<uint32_t> materialDataFreeIndices;
     uint32_t maxMaterialData = 0;
 
-    // Reflection-based uniform management (LayoutHandle -> single UniformSetInfo)
-    // PerFrame uses dynamic offset, so only one descriptor set per layout
-    eastl::unordered_map<LayoutHandle, UniformSetInfo> uniforms;
-
     // Push constant management (handle -> ranges)
     eastl::unordered_map<PushConstantHandle, eastl::vector<vk::PushConstantRange>> pushConstants;
 
@@ -426,6 +417,11 @@ private:
         PushConstantHandle pushConstantHandle;
     };
     eastl::unordered_map<PipelineLayoutCacheHandle, PipelineLayoutCache> pipelineLayoutCache;  // Layout组合hash -> cache
+
+    // ===== Centralized ShaderResources Management =====
+    // DescriptorManager 持有所有 ShaderResources 的实际数据
+    eastl::unordered_map<ShaderResourcesHandle, ManagedShaderResources> managedShaderResources;
+    uint64_t nextShaderResourcesHandle = 1;
 
     //todo remove
     // Pool size configuration per frequency

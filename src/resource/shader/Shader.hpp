@@ -47,6 +47,7 @@ public:
     };
 
     Shader(const CreateInfo& info, const eastl::vector<uint32_t>& spirv);
+    ~Shader();
 
     // Accessors
     const eastl::string& getName() const { return name; }
@@ -77,6 +78,9 @@ public:
     bool hasReflection() const { return reflection != nullptr; }
     slang::ProgramLayout* getReflection() const { return reflection; }
 
+    // Get extracted shader reflection (all resources)
+    const class ShaderReflection* getShaderReflection() const { return shaderReflection; }
+
     void registerDescriptorLayouts(DescriptorManager* manager);
     const eastl::vector<LayoutHandle>& getDescriptorLayoutHandles() const { return descriptorLayoutHandles; }
     PushConstantHandle getPushConstantHandle() const { return pushConstantHandle; }
@@ -96,6 +100,7 @@ private:
 
     // Reflection data (Slang only)
     slang::ProgramLayout* reflection = nullptr;
+    class ShaderReflection* shaderReflection = nullptr;  // Extracted resource info
     eastl::vector<LayoutHandle> descriptorLayoutHandles;  // Ordered by set index
     PushConstantHandle pushConstantHandle = 0;  // 0 = no push constants
 };

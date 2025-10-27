@@ -7,7 +7,6 @@
 
 namespace violet {
 
-class DescriptorSet;
 class DescriptorManager;
 class Material;
 class Shader;

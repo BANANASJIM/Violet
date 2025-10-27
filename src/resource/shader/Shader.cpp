@@ -18,6 +18,14 @@ Shader::Shader(const CreateInfo& info, const eastl::vector<uint32_t>& spirv)
     , defines(info.defines) {
 }
 
+Shader::~Shader() {
+    // Clean up shader reflection data
+    if (shaderReflection) {
+        delete shaderReflection;
+        shaderReflection = nullptr;
+    }
+}
+
 void Shader::updateSPIRV(const eastl::vector<uint32_t>& spirv, size_t newHash) {
     spirvCode = spirv;
     sourceHash = newHash;
@@ -75,9 +83,11 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager) {
         return;
     }
 
-    // Extract ShaderReflection (field-level metadata for UBO/SSBO)
-    ShaderReflection shaderReflection;
-    bool hasFieldReflection = extractReflection(reflection, shaderReflection);
+    // Extract and store ShaderReflection (all resource metadata)
+    if (!this->shaderReflection) {
+        this->shaderReflection = new ShaderReflection();
+    }
+    bool hasFieldReflection = extractReflection(reflection, *this->shaderReflection);
 
     // Register each layout and store handles
     // IMPORTANT: Preserve set index sparsity (e.g., [set0, empty, set2] → [handle0, 0, handle2])
@@ -92,7 +102,7 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager) {
 
             // Store reflection data if available (for dynamic UBO updates)
             if (hasFieldReflection) {
-                manager->setReflection(handle, shaderReflection);
+                manager->setReflection(handle, *this->shaderReflection);
                 Log::debug("Shader", "Stored reflection data for set {} layout '{}' (handle={})",
                           setIndex, layout.name.c_str(), handle);
             }

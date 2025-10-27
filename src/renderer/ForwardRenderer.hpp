@@ -12,13 +12,11 @@
 
 #include <entt/entt.hpp>
 
-#include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/MaterialManager.hpp"
 #include "renderer/Renderable.hpp"
 #include "resource/Texture.hpp"
-#include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/DebugRenderer.hpp"
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/effect/AutoExposure.hpp"
@@ -151,8 +149,8 @@ private:
     vk::Extent2D currentExtent = {1280, 720};
     uint32_t currentFrameIndex = 0;
 
-    // Global uniform using reflection-based API (replaces GlobalUniforms class)
-    UniformHandle globalUniformHandle = 0;
+    // Global resources using ShaderResources API
+    eastl::shared_ptr<class ShaderResources> globalResources;
 
     DebugRenderer debugRenderer;
 

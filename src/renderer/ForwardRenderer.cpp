@@ -12,12 +12,11 @@
 #include "ui/SceneDebugLayer.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/camera/Camera.hpp"
-#include "renderer/vulkan/DescriptorSet.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "resource/Material.hpp"
 #include "resource/Mesh.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "renderer/graph/RenderPass.hpp"
-#include "resource/gpu/UniformBuffer.hpp"
 #include "renderer/vulkan/Swapchain.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 #include "renderer/LightingSystem.hpp"
@@ -77,21 +76,32 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     matMgr->createPBRBindlessMaterial();
     matMgr->createSkyboxMaterial();
 
-    // Create Global uniform using reflection-based API
-    // Query layout handle from DescriptorManager (shaders auto-register layouts during pipeline creation)
-    LayoutHandle globalLayout = descMgr.getLayoutHandle("Global");
-    if (globalLayout != 0) {
-        // Create per-frame uniform (triple buffering with dynamic offset)
-        globalUniformHandle = descMgr.createUniform("Global", globalLayout, UpdateFrequency::PerFrame);
-        violet::Log::info("Renderer", "Created Global uniform with LayoutHandle = {}", globalLayout);
+    // Create Global resources using ShaderResources API
+    // Use pbr_bindless vertex shader as it contains the Global UBO definition
+    auto pbrVertShader = resourceManager->getShaderLibrary()->get("pbr_bindless_vertexMain");
+    if (!pbrVertShader.expired()) {
+        ShaderResourcesHandle handle = descMgr.createShaderResources(pbrVertShader.lock(), "Global");
+        if (handle != 0) {
+            // Wrap handle in shared_ptr with custom deleter
+            globalResources = eastl::shared_ptr<ShaderResources>(
+                new ShaderResources(handle, &descMgr),
+                [&descMgr, handle](ShaderResources* ptr) {
+                    delete ptr;
+                    descMgr.destroyShaderResources(handle);
+                }
+            );
+            violet::Log::info("Renderer", "Created Global ShaderResources");
+        } else {
+            violet::Log::error("Renderer", "Failed to create Global ShaderResources");
+        }
     } else {
-        violet::Log::error("Renderer", "Global descriptor layout not found - ensure shaders are compiled first");
+        violet::Log::error("Renderer", "pbr_bindless_vertexMain shader not found - ensure shaders are loaded first");
     }
 
     tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
 
     // Initialize debug renderer (using reflection-based descriptor API)
-    debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
+    debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight, globalResources);
     debugRenderer.setEnabled(false);  // Disable debug renderer for testing
 
     // Initialize bindless through DescriptorManager
@@ -144,8 +154,8 @@ void ForwardRenderer::cleanup() {
 
     // Step 3: Samplers are now managed by DescriptorManager (no cleanup needed)
 
-    // Step 4: Global uniform is managed by DescriptorManager (no manual cleanup needed)
-    globalUniformHandle = UniformHandle();  // Reset handle
+    // Step 4: Global resources cleanup
+    globalResources.reset();
 
     // Step 5: Cleanup RenderGraph
     if (renderGraph) {
@@ -326,8 +336,7 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
 
                     // Rebind descriptor sets with Skybox's pipeline layout (different from PBR due to no push constants)
                     auto& descMgr = resourceManager->getDescriptorManager();
-                    UniformHandle uniform = descMgr.getUniform("Global");
-                    vk::DescriptorSet globalSet = uniform.getSet();
+                    vk::DescriptorSet globalSet = globalResources->getSet(0);
                     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
 
                     eastl::array<vk::DescriptorSet, 2> descriptorSets = {globalSet, bindlessSet};
@@ -404,39 +413,37 @@ void ForwardRenderer::updateGlobalUniforms(entt::registry& world, uint32_t frame
         return;
     }
 
-    // Get uniform handle from descriptor manager
-    auto& descMgr = resourceManager->getDescriptorManager();
-    UniformHandle uniform = descMgr.getUniform("Global");
-
-    if (!uniform.isValid()) {
-        violet::Log::error("Renderer", "Global uniform not initialized");
+    if (!globalResources) {
+        violet::Log::error("Renderer", "Global resources not initialized");
         return;
     }
 
-    // Update uniform fields using reflection-based API
-    uniform["view"] = activeCamera->getViewMatrix();
-    uniform["proj"] = activeCamera->getProjectionMatrix();
-    uniform["cameraPos"] = activeCamera->getPosition();
+    // Update shader resources using ShaderResources API
+    auto camera = (*globalResources)["camera"];
+
+    camera["view"] = activeCamera->getViewMatrix();
+    camera["proj"] = activeCamera->getProjectionMatrix();
+    camera["cameraPos"] = activeCamera->getPosition();
 
     // Initialize light data (will be populated by LightingSystem)
-    uniform["numLights"] = 0;
-    uniform["ambientLight"] = glm::vec3(0.03f, 0.03f, 0.04f);
+    camera["numLights"] = 0;
+    camera["ambientLight"] = glm::vec3(0.03f, 0.03f, 0.04f);
 
     // Set skybox parameters
-    uniform["skyboxExposure"] = environmentMap.getExposure();
-    uniform["skyboxRotation"] = environmentMap.getRotation();
-    uniform["skyboxEnabled"] = environmentMap.isEnabled() ? 1 : 0;
-    uniform["iblIntensity"] = environmentMap.getIntensity();
+    camera["skyboxExposure"] = environmentMap.getExposure();
+    camera["skyboxRotation"] = environmentMap.getRotation();
+    camera["skyboxEnabled"] = environmentMap.isEnabled() ? 1 : 0;
+    camera["iblIntensity"] = environmentMap.getIntensity();
 
     // Shadow parameters (will be set by ShadowSystem)
-    uniform["shadowsEnabled"] = 1;  // Enable shadows by default
-    uniform["cascadeDebugMode"] = 0;  // Off by default
+    camera["shadowsEnabled"] = 1;  // Enable shadows by default
+    camera["cascadeDebugMode"] = 0;  // Off by default
 
     // Update IBL bindless indices from EnvironmentMap
-    uniform["environmentMapIndex"] = environmentMap.getEnvironmentMapIndex();
-    uniform["irradianceMapIndex"] = environmentMap.getIrradianceMapIndex();
-    uniform["prefilteredMapIndex"] = environmentMap.getPrefilteredMapIndex();
-    uniform["brdfLUTIndex"] = environmentMap.getBRDFLUTIndex();
+    camera["environmentMapIndex"] = environmentMap.getEnvironmentMapIndex();
+    camera["irradianceMapIndex"] = environmentMap.getIrradianceMapIndex();
+    camera["prefilteredMapIndex"] = environmentMap.getPrefilteredMapIndex();
+    camera["brdfLUTIndex"] = environmentMap.getBRDFLUTIndex();
 }
 
 void ForwardRenderer::collectFromEntity(entt::entity entity, entt::registry& world) {
@@ -610,8 +617,7 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
 
     // Bind all descriptor sets once (set 0-4: Global, Bindless, MaterialData, Lighting, Shadow)
     auto& descMgr = resourceManager->getDescriptorManager();
-    UniformHandle uniform = descMgr.getUniform("Global");
-    vk::DescriptorSet globalSet = uniform.getSet();
+    vk::DescriptorSet globalSet = globalResources->getSet(0);
     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
     vk::DescriptorSet materialDataSet = descMgr.getMaterialDataSet();
     vk::DescriptorSet lightingSet = lightingSystem ? lightingSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};

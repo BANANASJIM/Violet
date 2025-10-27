@@ -1,9 +1,7 @@
 #include "Material.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
-#include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
-#include "resource/gpu/UniformBuffer.hpp"
 #include "resource/Texture.hpp"
 #include "core/Log.hpp"
 #include <EASTL/vector.h>

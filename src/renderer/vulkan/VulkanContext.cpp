@@ -212,14 +212,12 @@ void VulkanContext::createLogicalDevice() {
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
 
-    // Dynamic rendering local read extension feature
-    vk::PhysicalDeviceDynamicRenderingLocalReadFeaturesKHR localReadFeatures;
-    localReadFeatures.pNext = &features13;
-    localReadFeatures.dynamicRenderingLocalRead = VK_TRUE;
-
     // Vulkan 1.1 features for memory aliasing
     vk::PhysicalDeviceVulkan11Features features11;
-    features11.pNext = &localReadFeatures;
+    features11.pNext = &features13;
+
+    // Note: VK_KHR_dynamic_rendering_local_read is not supported on MoltenVK
+    // If needed in the future, check for extension support before enabling
 
     vk::PhysicalDeviceVulkan12Features features12;
     features12.pNext = &features11;
@@ -316,11 +314,19 @@ QueueFamilyIndices VulkanContext::findQueueFamilies(vk::PhysicalDevice device) {
 bool VulkanContext::checkDeviceExtensionSupport(vk::PhysicalDevice device) {
     auto availableExtensions = device.enumerateDeviceExtensionProperties();
     eastl::set<eastl::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
-    
+
     for (const auto& extension : availableExtensions) {
         requiredExtensions.erase(extension.extensionName.data());
     }
-    
+
+    // Log missing extensions
+    if (!requiredExtensions.empty()) {
+        violet::Log::warn("Renderer", "Missing required device extensions:");
+        for (const auto& ext : requiredExtensions) {
+            violet::Log::warn("Renderer", "  - {}", ext.c_str());
+        }
+    }
+
     return requiredExtensions.empty();
 }
 

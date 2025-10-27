@@ -14,7 +14,6 @@ namespace violet {
 
 class VulkanContext;
 class DescriptorManager;
-class DescriptorSet;
 class LightingSystem;
 class RenderGraph;
 class TextureManager;
@@ -87,7 +86,7 @@ private:
 
     eastl::vector<ShadowData> cpuShadowData;
     eastl::vector<class BufferResource> shadowBuffers;
-    eastl::unique_ptr<DescriptorSet> descriptorSet;
+    eastl::vector<vk::DescriptorSet> descriptorSets;
 
     // Shadow renderables (all objects that can cast shadows)
     eastl::vector<Renderable> shadowRenderables;

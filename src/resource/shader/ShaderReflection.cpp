@@ -66,6 +66,40 @@ void extractFields(slang::TypeLayoutReflection* typeLayout, eastl::vector<Reflec
 
 } // anonymous namespace
 
+// Get shader stage flags from program layout
+vk::ShaderStageFlags getShaderStageFlags(slang::ProgramLayout* programLayout) {
+    vk::ShaderStageFlags flags = {};
+    uint32_t entryPointCount = programLayout->getEntryPointCount();
+
+    for (uint32_t i = 0; i < entryPointCount; ++i) {
+        auto entryPoint = programLayout->getEntryPointByIndex(i);
+        if (!entryPoint) continue;
+
+        switch (entryPoint->getStage()) {
+            case SLANG_STAGE_VERTEX:
+                flags |= vk::ShaderStageFlagBits::eVertex;
+                break;
+            case SLANG_STAGE_FRAGMENT:
+                flags |= vk::ShaderStageFlagBits::eFragment;
+                break;
+            case SLANG_STAGE_COMPUTE:
+                flags |= vk::ShaderStageFlagBits::eCompute;
+                break;
+            case SLANG_STAGE_GEOMETRY:
+                flags |= vk::ShaderStageFlagBits::eGeometry;
+                break;
+            case SLANG_STAGE_HULL:
+                flags |= vk::ShaderStageFlagBits::eTessellationControl;
+                break;
+            case SLANG_STAGE_DOMAIN:
+                flags |= vk::ShaderStageFlagBits::eTessellationEvaluation;
+                break;
+        }
+    }
+
+    return flags;
+}
+
 // Extract reflection from Slang ProgramLayout
 bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
     if (!slangProgramLayout) {
@@ -89,6 +123,8 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
         return true;
     }
 
+    vk::ShaderStageFlags stageFlags = getShaderStageFlags(programLayout);
+
     // Extract each field (descriptor binding)
     uint32_t fieldCount = typeLayout->getFieldCount();
     for (uint32_t i = 0; i < fieldCount; i++) {
@@ -98,26 +134,123 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
         auto paramType = varLayout->getType();
         if (!paramType) continue;
 
-        // Only process ConstantBuffer and StructuredBuffer
         auto kind = paramType->getKind();
-        if (kind != slang::TypeReflection::Kind::ConstantBuffer &&
-            kind != slang::TypeReflection::Kind::Resource) {
-            continue;
+
+        // Create unified ReflectedResource
+        ReflectedResource resource;
+        resource.name = varLayout->getName();
+        resource.binding = varLayout->getBindingIndex();
+        resource.set = varLayout->getBindingSpace();
+        resource.stages = stageFlags;
+        resource.arraySize = 1;
+        resource.isBindless = false;
+        resource.bufferLayout = nullptr;
+
+        // Determine descriptor type and extract details
+        switch (kind) {
+            case slang::TypeReflection::Kind::ConstantBuffer: {
+                // UBO (UniformBuffer)
+                resource.type = vk::DescriptorType::eUniformBuffer;
+
+                // Extract detailed buffer layout
+                ReflectedBuffer buffer;
+                buffer.name = varLayout->getName();
+                buffer.binding = varLayout->getBindingIndex();
+                buffer.set = varLayout->getBindingSpace();
+
+                auto elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
+                if (elementTypeLayout) {
+                    buffer.totalSize = uint32_t(elementTypeLayout->getSize());
+                    extractFields(elementTypeLayout, buffer.fields);
+                }
+
+                reflection.addBuffer(buffer);
+                resource.bufferLayout = reflection.findBuffer(buffer.name);
+                break;
+            }
+
+            case slang::TypeReflection::Kind::Resource: {
+                auto shape = paramType->getResourceShape();
+                auto access = paramType->getResourceAccess();
+
+                // Texture types
+                if (shape == SLANG_TEXTURE_1D || shape == SLANG_TEXTURE_2D ||
+                    shape == SLANG_TEXTURE_3D || shape == SLANG_TEXTURE_CUBE) {
+
+                    if (access == SLANG_RESOURCE_ACCESS_READ_WRITE) {
+                        // RWTexture -> StorageImage
+                        resource.type = vk::DescriptorType::eStorageImage;
+                    } else {
+                        // Texture -> CombinedImageSampler
+                        resource.type = vk::DescriptorType::eCombinedImageSampler;
+                    }
+                }
+                // Structured Buffer
+                else if (shape == SLANG_STRUCTURED_BUFFER) {
+                    resource.type = vk::DescriptorType::eStorageBuffer;
+
+                    // Extract buffer layout for SSBO
+                    ReflectedBuffer buffer;
+                    buffer.name = varLayout->getName();
+                    buffer.binding = varLayout->getBindingIndex();
+                    buffer.set = varLayout->getBindingSpace();
+
+                    auto elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
+                    if (elementTypeLayout) {
+                        buffer.totalSize = uint32_t(elementTypeLayout->getSize());
+                        extractFields(elementTypeLayout, buffer.fields);
+                    }
+
+                    reflection.addBuffer(buffer);
+                    resource.bufferLayout = reflection.findBuffer(buffer.name);
+                }
+                break;
+            }
+
+            case slang::TypeReflection::Kind::SamplerState: {
+                resource.type = vk::DescriptorType::eSampler;
+                break;
+            }
+
+            case slang::TypeReflection::Kind::Array: {
+                auto elementType = paramType->getElementType();
+                uint32_t arraySize = paramType->getElementCount();
+
+                if (elementType && elementType->getKind() == slang::TypeReflection::Kind::Resource) {
+                    auto shape = elementType->getResourceShape();
+                    auto access = elementType->getResourceAccess();
+
+                    // Determine array element type
+                    if (shape == SLANG_TEXTURE_1D || shape == SLANG_TEXTURE_2D ||
+                        shape == SLANG_TEXTURE_3D || shape == SLANG_TEXTURE_CUBE) {
+
+                        if (access == SLANG_RESOURCE_ACCESS_READ_WRITE) {
+                            resource.type = vk::DescriptorType::eStorageImage;
+                        } else {
+                            resource.type = vk::DescriptorType::eCombinedImageSampler;
+                        }
+                    }
+
+                    // Check if bindless (unbounded or very large array)
+                    if (arraySize == 0 || arraySize > 100) {
+                        resource.isBindless = true;
+                        resource.arraySize = (arraySize == 0) ? 1024 : arraySize;
+                        Log::info("ShaderReflection", "Detected bindless array: {} (size: {})",
+                                 resource.name.c_str(), resource.arraySize);
+                    } else {
+                        resource.arraySize = arraySize;
+                    }
+                }
+                break;
+            }
+
+            default:
+                // Skip unknown types
+                continue;
         }
 
-        ReflectedBuffer buffer;
-        buffer.name = varLayout->getName();
-        buffer.binding = varLayout->getBindingIndex();
-        buffer.set = varLayout->getBindingSpace();
-
-        // Get element type layout (the struct inside ConstantBuffer<T>)
-        auto elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
-        if (elementTypeLayout) {
-            buffer.totalSize = uint32_t(elementTypeLayout->getSize());
-            extractFields(elementTypeLayout, buffer.fields);
-        }
-
-        reflection.addBuffer(buffer);
+        // Add to reflection
+        reflection.addResource(resource);
     }
 
     return true;

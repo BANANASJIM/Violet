@@ -11,7 +11,6 @@ namespace violet {
 
 class VulkanContext;
 class DescriptorManager;
-class DescriptorSet;
 class Frustum;
 
 // GPU light data (must match shader)
@@ -52,8 +51,9 @@ private:
     uint32_t maxFramesInFlight = 3;
 
     eastl::vector<LightData> cpuLightData;
-    eastl::vector<class BufferResource> lightBuffers;
-    eastl::unique_ptr<DescriptorSet> descriptorSet;
+    class BufferResource lightBuffer;          // Single buffer with per-frame sections
+    vk::DescriptorSet descriptorSet;          // Single descriptor set with dynamic offset
+    uint32_t alignedFrameSize = 0;             // Aligned size for each frame's data
 
     uint32_t bufferCapacity = 0;
 

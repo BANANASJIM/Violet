@@ -69,7 +69,11 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
 
     // Get shader and extract layout handles
-    auto histogramShader = shaderLibrary->get("luminance_histogram");
+    auto histogramShader = shaderLibrary->get("luminance_histogram").lock();
+    if (!histogramShader) {
+        violet::Log::error("Renderer", "Failed to get luminance_histogram shader");
+        return;
+    }
     const auto& histogramLayoutHandles = histogramShader->getDescriptorLayoutHandles();
     if (histogramLayoutHandles.empty()) {
         violet::Log::error("Renderer", "No descriptor layouts found in luminance_histogram shader");

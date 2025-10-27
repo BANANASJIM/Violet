@@ -8,7 +8,6 @@
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
-#include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 #include "renderer/graph/RenderPass.hpp"
 #include "core/Log.hpp"
@@ -103,9 +102,8 @@ void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, Descripto
 
 void EnvironmentMap::cleanup() {
     // Clear temporary compute resources (must be done first while device is still valid)
-    // Order matters: image views → descriptor sets → textures (which own the images)
+    // Order matters: image views → textures (which own the images)
     tempImageViews.clear();
-    tempDescriptorSets.clear();
     tempComputeTextures.clear();
 
     // Free bindless indices if allocated
@@ -304,7 +302,11 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
     pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
     config.pushConstantRanges.push_back(pushConstant);
 
-auto shader = shaderLibrary->get("equirect_to_cubemap");
+auto shader = shaderLibrary->get("equirect_to_cubemap").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get equirect_to_cubemap shader");
+        return;
+    }
     pipeline.init(context, shader, config);
 
     // Step 4: Allocate descriptor set using reflection-based API
@@ -426,7 +428,11 @@ void EnvironmentMap::generateIrradianceMap() {
     pushConstant.size = sizeof(uint32_t);
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("irradiance_convolution");
+    auto shader = shaderLibrary->get("irradiance_convolution").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get irradiance_convolution shader");
+        return;
+    }
     pipeline.init(context, shader, config);
 
     // Allocate and update descriptor set using reflection-based API
@@ -533,7 +539,11 @@ void EnvironmentMap::generatePrefilteredMap() {
     pushConstant.size = sizeof(uint32_t) * 4;
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("prefilter_environment");
+    auto shader = shaderLibrary->get("prefilter_environment").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get prefilter_environment shader");
+        return;
+    }
     pipeline.init(context, shader, config);
 
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
@@ -652,7 +662,11 @@ void EnvironmentMap::generateBRDFLUT() {
     pushConstant.size = sizeof(uint32_t);  // LUT size
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("brdf_lut");
+    auto shader = shaderLibrary->get("brdf_lut").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get brdf_lut shader");
+        return;
+    }
     pipeline.init(context, shader, config);
 
     // Allocate and update descriptor set using reflection-based API

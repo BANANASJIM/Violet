@@ -103,11 +103,12 @@ private:
     };
     
     const eastl::vector<const char*> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME  // For advanced rendering techniques
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
 #ifdef __APPLE__
         ,"VK_KHR_portability_subset"
 #endif
+        // Note: VK_KHR_dynamic_rendering_local_read is not supported on MoltenVK
+        // It's added conditionally in createLogicalDevice() if available
     };
     
     bool enableValidationLayers = false;

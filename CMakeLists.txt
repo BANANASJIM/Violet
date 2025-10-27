@@ -54,8 +54,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Find packages
 # Force use system Vulkan to avoid glfw compatibility issues
 if(UNIX AND NOT APPLE)
+    # Linux: Use system Vulkan
     set(Vulkan_LIBRARY "/usr/lib/libvulkan.so")
     set(Vulkan_INCLUDE_DIR "/usr/include")
+elseif(APPLE)
+    # macOS: Use system Vulkan SDK (MoltenVK)
+    # Tell CMake to use FindVulkan module instead of vcpkg's Vulkan
+    set(CMAKE_FIND_PACKAGE_PREFER_CONFIG FALSE)
 endif()
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)

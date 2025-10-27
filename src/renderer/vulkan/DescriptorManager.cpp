@@ -1,6 +1,6 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
-#include "resource/gpu/UniformBuffer.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/shader/Shader.hpp"
@@ -163,14 +163,6 @@ SamplerConfig SamplerConfig::getNearestClamp() {
 }
 
 // Helper constructors for ResourceBindingDesc
-ResourceBindingDesc ResourceBindingDesc::uniformBuffer(uint32_t binding, UniformBuffer* buffer) {
-    ResourceBindingDesc desc;
-    desc.binding = binding;
-    desc.type = vk::DescriptorType::eUniformBuffer;
-    desc.bufferPtr = buffer;
-    return desc;
-}
-
 ResourceBindingDesc ResourceBindingDesc::storageBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range) {
     ResourceBindingDesc desc;
     desc.binding = binding;
@@ -387,10 +379,9 @@ void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<Res
 
         switch (binding.type) {
             case vk::DescriptorType::eUniformBuffer: {
-                if (binding.bufferPtr) {
-                    bufferInfos.push_back(binding.bufferPtr->getDescriptorInfo());
-                    write.pBufferInfo = &bufferInfos.back();
-                }
+                // UniformBuffer class removed - use ShaderResources API instead
+                violet::Log::error("DescriptorManager",
+                    "eUniformBuffer type no longer supported in ResourceBindingDesc. Use ShaderResources API.");
                 break;
             }
             case vk::DescriptorType::eCombinedImageSampler: {
@@ -1022,78 +1013,6 @@ static inline uint32_t alignUp(uint32_t value, uint32_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-// UniformHandle implementation
-FieldProxy UniformHandle::operator[](const eastl::string& fieldName) {
-    if (!info || !manager) {
-        return FieldProxy(nullptr, 0, 0, fieldName);
-    }
-
-    // Cast void* to correct types
-    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
-    auto* descriptorMgr = static_cast<DescriptorManager*>(manager);
-
-    if (!uniformInfo->buffer.mappedData) {
-        return FieldProxy(nullptr, 0, 0, fieldName);
-    }
-
-    // Get reflection data from layout
-    const ShaderReflection* reflection = descriptorMgr->getReflection(uniformInfo->layoutHandle);
-    if (!reflection) {
-        violet::Log::error("DescriptorManager", "No reflection data for uniform");
-        return FieldProxy(nullptr, 0, 0, fieldName);
-    }
-
-    // Find the first buffer (assuming single UBO per set for now)
-    const auto& buffers = reflection->getBuffers();
-    if (buffers.empty()) {
-        violet::Log::error("DescriptorManager", "No buffers found in reflection data");
-        return FieldProxy(nullptr, 0, 0, fieldName);
-    }
-
-    // Get the first buffer
-    const auto& buffer = buffers[0];
-    const auto* field = reflection->findField(buffer.name, fieldName);
-
-    if (!field) {
-        violet::Log::error("DescriptorManager", "Field '{}' not found in buffer '{}'",
-            fieldName.c_str(), buffer.name.c_str());
-        return FieldProxy(nullptr, 0, 0, fieldName);
-    }
-
-    // Calculate dynamic offset for PerFrame
-    uint32_t dynamicOffset = 0;
-    if (uniformInfo->frequency == UpdateFrequency::PerFrame) {
-        dynamicOffset = descriptorMgr->currentFrame * uniformInfo->alignedSize;
-    }
-
-    // Calculate address: base + dynamicOffset + field offset
-    void* fieldAddress = static_cast<uint8_t*>(uniformInfo->buffer.mappedData) + dynamicOffset + field->offset;
-    return FieldProxy(fieldAddress, field->offset, field->size, fieldName);
-}
-
-vk::DescriptorSet UniformHandle::getSet() const {
-    if (!info) {
-        return vk::DescriptorSet{};
-    }
-    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
-    return uniformInfo->descriptorSet;
-}
-
-uint32_t UniformHandle::getDynamicOffset() const {
-    if (!info || !manager) {
-        return 0;
-    }
-
-    auto* uniformInfo = static_cast<DescriptorManager::UniformSetInfo*>(info);
-    auto* descriptorMgr = static_cast<DescriptorManager*>(manager);
-
-    if (uniformInfo->frequency != UpdateFrequency::PerFrame) {
-        return 0;
-    }
-
-    return descriptorMgr->currentFrame * uniformInfo->alignedSize;
-}
-
 // DescriptorManager implementation
 void DescriptorManager::setCurrentFrame(uint32_t frameIndex) {
     if (frameIndex >= maxFrames) {
@@ -1101,144 +1020,6 @@ void DescriptorManager::setCurrentFrame(uint32_t frameIndex) {
         return;
     }
     currentFrame = frameIndex;
-}
-
-UniformHandle DescriptorManager::createUniform(const eastl::string& name, LayoutHandle layout, UpdateFrequency frequency) {
-    // Check if layout exists
-    auto layoutIt = layouts.find(layout);
-    if (layoutIt == layouts.end()) {
-        violet::Log::error("DescriptorManager", "Layout handle {} not found", layout);
-        return UniformHandle();
-    }
-
-    // Check if uniform already exists
-    if (uniforms.find(layout) != uniforms.end()) {
-        violet::Log::warn("DescriptorManager", "Uniform for layout {} already exists, returning existing", layout);
-        return UniformHandle(&uniforms[layout], this);
-    }
-
-    const LayoutInfo& layoutInfo = layoutIt->second;
-
-    // Get buffer size from reflection
-    if (!hasReflection(layout)) {
-        violet::Log::error("DescriptorManager", "No reflection data for layout {}", layout);
-        return UniformHandle();
-    }
-
-    const ShaderReflection* reflection = getReflection(layout);
-    const auto& buffers = reflection->getBuffers();
-    if (buffers.empty()) {
-        violet::Log::error("DescriptorManager", "No buffers in reflection data for layout {}", layout);
-        return UniformHandle();
-    }
-
-    // Get size from first buffer (assuming single UBO per set)
-    uint32_t bufferSize = buffers[0].totalSize;
-    uint32_t alignedStride = bufferSize;
-    uint32_t totalSize = bufferSize;
-
-    // For PerFrame: align stride to minUniformBufferOffsetAlignment
-    if (frequency == UpdateFrequency::PerFrame) {
-        vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
-        uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
-
-        alignedStride = alignUp(bufferSize, minAlignment);
-        totalSize = alignedStride * maxFrames;
-
-        violet::Log::debug("DescriptorManager",
-            "PerFrame uniform '{}': bufferSize={}, alignedStride={}, totalSize={} (minAlignment={})",
-            name.c_str(), bufferSize, alignedStride, totalSize, minAlignment);
-    }
-
-    // Create buffer using ResourceFactory
-    BufferInfo bufferInfo{
-        .size = totalSize,
-        .usage = vk::BufferUsageFlagBits::eUniformBuffer,
-        .memoryUsage = MemoryUsage::CPU_TO_GPU,
-        .debugName = name
-    };
-    BufferResource buffer = ResourceFactory::createBuffer(context, bufferInfo);
-
-    if (!buffer.buffer || !buffer.mappedData) {
-        violet::Log::error("DescriptorManager", "Failed to create buffer for uniform '{}'", name.c_str());
-        return UniformHandle();
-    }
-
-    // Allocate descriptor set
-    vk::DescriptorSet descriptorSet = allocateSet(layout, 0);
-    if (!descriptorSet) {
-        violet::Log::error("DescriptorManager", "Failed to allocate descriptor set for uniform '{}'", name.c_str());
-        ResourceFactory::destroyBuffer(context, buffer);
-        return UniformHandle();
-    }
-
-    // Update descriptor set to bind buffer
-    vk::DescriptorBufferInfo bufferDescInfo;
-    bufferDescInfo.buffer = buffer.buffer;
-    bufferDescInfo.offset = 0;
-    // For PerFrame with dynamic offset, range is the aligned stride (not total buffer size)
-    bufferDescInfo.range = frequency == UpdateFrequency::PerFrame ? alignedStride : bufferSize;
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = descriptorSet;
-    write.dstBinding = 0;  // Assuming UBO is at binding 0
-    write.dstArrayElement = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eUniformBuffer;
-    write.pBufferInfo = &bufferDescInfo;
-
-    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
-    // Store uniform info
-    UniformSetInfo info;
-    info.buffer = buffer;
-    info.descriptorSet = descriptorSet;
-    info.layoutHandle = layout;
-    info.frequency = frequency;
-    info.bufferSize = bufferSize;      // Original size from reflection
-    info.alignedSize = alignedStride;   // Aligned stride for dynamic offset
-    info.name = name;
-
-    uniforms[layout] = info;
-
-    violet::Log::info("DescriptorManager",
-        "Created uniform '{}' (layout={}, frequency={}, bufferSize={}, alignedStride={})",
-        name.c_str(), layout, static_cast<int>(frequency), bufferSize, alignedStride);
-
-    return UniformHandle(&uniforms[layout], this);
-}
-
-UniformHandle DescriptorManager::getUniform(const eastl::string& name) {
-    // Look up layout handle from name
-    auto it = nameToHandle.find(name);
-    if (it == nameToHandle.end()) {
-        violet::Log::error("DescriptorManager", "Uniform layout '{}' not found in nameToHandle", name.c_str());
-        return UniformHandle();
-    }
-
-    LayoutHandle handle = it->second;
-
-    // Look up uniform info
-    auto uniformIt = uniforms.find(handle);
-    if (uniformIt == uniforms.end()) {
-        violet::Log::error("DescriptorManager", "Uniform for layout '{}' not created yet", name.c_str());
-        return UniformHandle();
-    }
-
-    return UniformHandle(&uniformIt->second, this);
-}
-
-UniformHandle DescriptorManager::getUniform(const eastl::string& name, uint32_t frameIndex) {
-    // Temporarily override currentFrame
-    uint32_t savedFrame = currentFrame;
-    currentFrame = frameIndex;
-
-    UniformHandle handle = getUniform(name);
-
-    // Restore
-    currentFrame = savedFrame;
-
-    return handle;
 }
 
 // ===== Push Constant Management =====
@@ -1438,6 +1219,225 @@ void DescriptorManager::bindDescriptors(
             }
         }
     }
+}
+
+// ===== Shader Resources Factory Implementation (Centralized Management) =====
+
+ShaderResourcesHandle DescriptorManager::createShaderResources(
+    eastl::shared_ptr<Shader> shader,
+    const eastl::string& instanceName) {
+
+    if (!shader) {
+        Log::error("DescriptorManager", "Cannot create ShaderResources: shader is null");
+        return 0;
+    }
+
+    if (!shader->hasReflection()) {
+        Log::error("DescriptorManager", "Cannot create ShaderResources: shader '{}' has no reflection data",
+                   shader->getName().c_str());
+        return 0;
+    }
+
+    // Generate instance name if not provided
+    eastl::string finalName = instanceName.empty()
+        ? shader->getName() + "_instance"
+        : instanceName;
+
+    // Allocate new handle
+    ShaderResourcesHandle handle = nextShaderResourcesHandle++;
+
+    // Create managed resources structure
+    ManagedShaderResources managedRes;
+    managedRes.shader = shader;
+    managedRes.instanceName = finalName;
+    managedRes.reflection = shader->getShaderReflection();
+
+    if (!managedRes.reflection) {
+        Log::error("DescriptorManager", "Shader '{}' has no extracted reflection data",
+                   shader->getName().c_str());
+        return 0;
+    }
+
+    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+    if (layoutHandles.empty()) {
+        Log::warn("DescriptorManager", "Shader '{}' has no descriptor layouts",
+                  shader->getName().c_str());
+        // Still valid - shader might not use descriptors
+    }
+
+    // Get resources grouped by set
+    const auto& resourcesBySet = managedRes.reflection->getResourcesBySetMap();
+
+    // Create descriptor sets for each set index
+    for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
+        LayoutHandle layoutHandle = layoutHandles[setIndex];
+        if (layoutHandle == 0) {
+            continue; // No layout for this set index (sparse)
+        }
+
+        // Get resources for this set
+        auto setResIt = resourcesBySet.find(static_cast<uint32_t>(setIndex));
+        if (setResIt == resourcesBySet.end() || setResIt->second.empty()) {
+            continue;
+        }
+
+        const auto& setResources = setResIt->second;
+
+        // Check if this is a bindless set
+        bool isBindless = false;
+        for (const auto& res : setResources) {
+            if (res.isBindless) {
+                isBindless = true;
+                break;
+            }
+        }
+
+        // Get layout info to determine frequency
+        auto layoutIt = layouts.find(layoutHandle);
+        if (layoutIt == layouts.end()) {
+            Log::error("DescriptorManager", "Layout handle {} not registered", layoutHandle);
+            continue;
+        }
+        UpdateFrequency frequency = layoutIt->second.frequency;
+
+        ManagedShaderResources::SetData setData;
+        setData.layoutHandle = layoutHandle;
+        setData.setIndex = static_cast<uint32_t>(setIndex);
+        setData.isBindless = isBindless;
+        setData.frequency = frequency;
+        setData.hasBuffer = false;
+        setData.alignedSize = 0;
+        setData.mappedData = nullptr;
+
+        if (isBindless) {
+            // Use global bindless set
+            setData.descriptorSet = getBindlessSet();
+            Log::debug("DescriptorManager", "Instance '{}' using global bindless set for set {}",
+                      finalName.c_str(), setIndex);
+        } else {
+            // Allocate descriptor set
+            setData.descriptorSet = allocateSet(layoutHandle, 0);
+
+            if (!setData.descriptorSet) {
+                Log::error("DescriptorManager", "Failed to allocate descriptor set for set {}",
+                          setIndex);
+                continue;
+            }
+
+            // Check if this set contains buffers (UBO/SSBO) that need memory allocation
+            uint32_t totalBufferSize = 0;
+            for (const auto& res : setResources) {
+                if (res.type == vk::DescriptorType::eUniformBuffer ||
+                    res.type == vk::DescriptorType::eStorageBuffer) {
+                    setData.hasBuffer = true;
+                    if (res.bufferLayout) {
+                        totalBufferSize += res.bufferLayout->totalSize;
+                    }
+                }
+            }
+
+            // Allocate buffer if needed
+            if (setData.hasBuffer && totalBufferSize > 0) {
+                // Determine buffer size based on frequency
+                uint32_t bufferSize = totalBufferSize;
+                setData.alignedSize = totalBufferSize;
+
+                if (frequency == UpdateFrequency::PerFrame) {
+                    // For PerFrame: align and multiply by frame count
+                    vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
+                    uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
+                    setData.alignedSize = (totalBufferSize + minAlignment - 1) & ~(minAlignment - 1);
+                    bufferSize = setData.alignedSize * maxFrames;
+                }
+
+                eastl::string debugName = finalName;
+                debugName += "_set";
+                char setIndexStr[16];
+                snprintf(setIndexStr, sizeof(setIndexStr), "%u", static_cast<uint32_t>(setIndex));
+                debugName += setIndexStr;
+
+                BufferInfo bufferInfo{
+                    .size = bufferSize,
+                    .usage = vk::BufferUsageFlagBits::eUniformBuffer |
+                             vk::BufferUsageFlagBits::eStorageBuffer,
+                    .memoryUsage = MemoryUsage::CPU_TO_GPU,
+                    .debugName = debugName
+                };
+
+                setData.buffer = ResourceFactory::createBuffer(context, bufferInfo);
+                setData.mappedData = setData.buffer.mappedData;
+
+                // Bind buffer to descriptor set
+                for (const auto& res : setResources) {
+                    if (res.type == vk::DescriptorType::eUniformBuffer) {
+                        vk::DescriptorBufferInfo bufferDescInfo;
+                        bufferDescInfo.buffer = setData.buffer.buffer;
+                        bufferDescInfo.offset = 0;
+                        bufferDescInfo.range = frequency == UpdateFrequency::PerFrame ?
+                                               setData.alignedSize : totalBufferSize;
+
+                        vk::WriteDescriptorSet write;
+                        write.dstSet = setData.descriptorSet;
+                        write.dstBinding = res.binding;
+                        write.descriptorType = vk::DescriptorType::eUniformBuffer;
+                        write.descriptorCount = 1;
+                        write.pBufferInfo = &bufferDescInfo;
+
+                        context->getDevice().updateDescriptorSets({write}, {});
+                    }
+                }
+
+                Log::debug("DescriptorManager", "Allocated buffer ({}B total, {}B per frame) for set {} in instance '{}'",
+                          bufferSize, setData.alignedSize, setIndex, finalName.c_str());
+            }
+        }
+
+        managedRes.sets[static_cast<uint32_t>(setIndex)] = setData;
+    }
+
+    // Store managed resources
+    managedShaderResources[handle] = eastl::move(managedRes);
+
+    Log::info("DescriptorManager", "Created ShaderResources handle {} (instance '{}') for shader '{}' ({} sets)",
+              handle, finalName.c_str(), shader->getName().c_str(), managedRes.sets.size());
+
+    return handle;
+}
+
+void DescriptorManager::destroyShaderResources(ShaderResourcesHandle handle) {
+    auto it = managedShaderResources.find(handle);
+    if (it == managedShaderResources.end()) {
+        Log::warn("DescriptorManager", "Attempted to destroy invalid ShaderResources handle {}", handle);
+        return;
+    }
+
+    // Cleanup all buffers
+    for (auto& [setIndex, setData] : it->second.sets) {
+        if (setData.hasBuffer && setData.buffer.buffer) {
+            ResourceFactory::destroyBuffer(context, setData.buffer);
+        }
+    }
+
+    Log::debug("DescriptorManager", "Destroyed ShaderResources handle {} (instance '{}')",
+              handle, it->second.instanceName.c_str());
+
+    managedShaderResources.erase(it);
+}
+
+const ManagedShaderResources* DescriptorManager::getShaderResourcesData(ShaderResourcesHandle handle) const {
+    auto it = managedShaderResources.find(handle);
+    if (it == managedShaderResources.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+ManagedShaderResources* DescriptorManager::getShaderResourcesData(ShaderResourcesHandle handle) {
+    auto it = managedShaderResources.find(handle);
+    if (it == managedShaderResources.end()) {
+        return nullptr;
+    }
+    return &it->second;
 }
 
 } // namespace violet

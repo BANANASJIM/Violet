@@ -5,15 +5,12 @@
 #include <EASTL/vector.h>
 #include <EASTL/string.h>
 #include <EASTL/unique_ptr.h>
-#include "renderer/vulkan/DescriptorSet.hpp"
 
 namespace violet {
 
 class VulkanContext;
 class GraphicsPipeline;
 class Texture;
-class UniformBuffer;
-class DescriptorSet;
 class DescriptorManager;
 
 class Material {

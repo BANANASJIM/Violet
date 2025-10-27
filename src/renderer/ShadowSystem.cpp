@@ -3,7 +3,6 @@
 #include "ecs/Components.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
-#include "renderer/vulkan/DescriptorSet.hpp"
 #include "renderer/camera/Camera.hpp"
 #include "renderer/camera/PerspectiveCamera.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
@@ -80,15 +79,13 @@ void ShadowSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureM
 
     ensureBufferCapacity(INITIAL_CAPACITY);
 
-    auto sets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
-    descriptorSet = eastl::make_unique<DescriptorSet>();
-    descriptorSet->init(context, sets);
+    descriptorSets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
 
     for (uint32_t i = 0; i < maxFramesInFlight; i++) {
         eastl::vector<ResourceBindingDesc> bindings;
         bindings.push_back(ResourceBindingDesc::storageBuffer(
             0, shadowBuffers[i].buffer, 0, bufferCapacity * sizeof(ShadowData)));
-        descriptorManager->updateSet(sets[i], bindings);
+        descriptorManager->updateSet(descriptorSets[i], bindings);
     }
 
     createAtlas();
@@ -100,7 +97,7 @@ void ShadowSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureM
 void ShadowSystem::cleanup() {
     if (!context) return;
 
-    descriptorSet.reset();
+    descriptorSets.clear();
 
     for (auto& buffer : shadowBuffers) {
         ResourceFactory::destroyBuffer(context, buffer);
@@ -500,7 +497,10 @@ void ShadowSystem::uploadToGPU(uint32_t frameIndex) {
 }
 
 vk::DescriptorSet ShadowSystem::getDescriptorSet(uint32_t frameIndex) const {
-    return descriptorSet->getDescriptorSet(frameIndex);
+    if (frameIndex >= descriptorSets.size()) {
+        return vk::DescriptorSet{};
+    }
+    return descriptorSets[frameIndex];
 }
 
 ShadowAtlasAllocation ShadowSystem::allocateSpace(uint32_t resolution, uint32_t lightIndex) {
@@ -575,7 +575,7 @@ void ShadowSystem::ensureBufferCapacity(uint32_t shadowCount) {
     uint32_t newCapacity = eastl::max(shadowCount, bufferCapacity * 2);
     newCapacity = eastl::min(newCapacity, MAX_SHADOWS);
 
-    auto sets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
+    descriptorSets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
 
     for (uint32_t i = 0; i < maxFramesInFlight; i++) {
         ResourceFactory::destroyBuffer(context, shadowBuffers[i]);
@@ -591,7 +591,7 @@ void ShadowSystem::ensureBufferCapacity(uint32_t shadowCount) {
         eastl::vector<ResourceBindingDesc> bindings;
         bindings.push_back(ResourceBindingDesc::storageBuffer(
             0, shadowBuffers[i].buffer, 0, newCapacity * sizeof(ShadowData)));
-        descriptorManager->updateSet(sets[i], bindings);
+        descriptorManager->updateSet(descriptorSets[i], bindings);
     }
 
     bufferCapacity = newCapacity;

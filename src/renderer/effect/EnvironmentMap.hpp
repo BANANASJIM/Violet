@@ -12,7 +12,6 @@ class MaterialManager;
 class DescriptorManager;
 class TextureManager;
 class Texture;
-class DescriptorSet;
 class ShaderLibrary;
 class RenderGraph;
 
@@ -100,7 +99,6 @@ private:
 
     // Temporary compute resources (kept alive to prevent validation errors)
     eastl::vector<eastl::unique_ptr<Texture>> tempComputeTextures;
-    eastl::vector<eastl::unique_ptr<DescriptorSet>> tempDescriptorSets;
     eastl::vector<vk::raii::ImageView> tempImageViews;
 
     // Parameters
