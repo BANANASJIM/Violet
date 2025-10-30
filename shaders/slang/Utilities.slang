@@ -41,3 +41,26 @@ public float4x4 inverse(float4x4 m) {
 
     return ret;
 }
+
+// 3x3 matrix inversion (for normal matrix calculation)
+// Based on Cramer's rule for 3x3 matrices
+public float3x3 inverse3x3(float3x3 m) {
+    float det = m[0][0] * (m[1][1] * m[2][2] - m[2][1] * m[1][2])
+              - m[1][0] * (m[0][1] * m[2][2] - m[2][1] * m[0][2])
+              + m[2][0] * (m[0][1] * m[1][2] - m[1][1] * m[0][2]);
+
+    float invDet = 1.0 / det;
+
+    float3x3 result;
+    result[0][0] = (m[1][1] * m[2][2] - m[2][1] * m[1][2]) * invDet;
+    result[1][0] = (m[2][0] * m[1][2] - m[1][0] * m[2][2]) * invDet;
+    result[2][0] = (m[1][0] * m[2][1] - m[2][0] * m[1][1]) * invDet;
+    result[0][1] = (m[2][1] * m[0][2] - m[0][1] * m[2][2]) * invDet;
+    result[1][1] = (m[0][0] * m[2][2] - m[2][0] * m[0][2]) * invDet;
+    result[2][1] = (m[2][0] * m[0][1] - m[0][0] * m[2][1]) * invDet;
+    result[0][2] = (m[0][1] * m[1][2] - m[1][1] * m[0][2]) * invDet;
+    result[1][2] = (m[1][0] * m[0][2] - m[0][0] * m[1][2]) * invDet;
+    result[2][2] = (m[0][0] * m[1][1] - m[1][0] * m[0][1]) * invDet;
+
+    return result;
+}

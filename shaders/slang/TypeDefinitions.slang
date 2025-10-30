@@ -2,8 +2,8 @@
 // NOTE: This file should be __include'd, not import'ed
 
 struct CameraUBO {
-    float4x4 view;
-    float4x4 proj;
+    column_major float4x4 view;
+    column_major float4x4 proj;
     float3 cameraPos;
 
     // Light count (actual light data in StructuredBuffer<LightData>)
@@ -34,7 +34,7 @@ struct LightData {
 };
 
 struct ShadowData {
-    float4x4 cascadeViewProjMatrices[4];
+    column_major float4x4 cascadeViewProjMatrices[4];
     float4 cascadeSplitDepths;
     float4 atlasRects[4];
 
@@ -43,8 +43,7 @@ struct ShadowData {
     uint cascadeCount;
     uint atlasIndex;
 
-    float4x4 cubeFaceMatrices[6];
-
+    column_major float4x4 cubeFaceMatrices[6];
 };
 
 struct MaterialData {
@@ -64,6 +63,6 @@ struct MaterialData {
 };
 
 struct PushConstants {
-    float4x4 model;
+    column_major float4x4 model;
     uint materialID;
 };

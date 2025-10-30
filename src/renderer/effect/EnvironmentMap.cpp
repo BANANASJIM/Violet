@@ -106,19 +106,19 @@ void EnvironmentMap::cleanup() {
     if (resourceManager) {
         auto& descriptorManager = resourceManager->getDescriptorManager();
         if (environmentMapIndex != 0) {
-            descriptorManager.freeBindlessTexture(environmentMapIndex);
+            descriptorManager.freeBindlessCubemap(environmentMapIndex);  // Cubemap, not 2D texture
             environmentMapIndex = 0;
         }
         if (irradianceMapIndex != 0) {
-            descriptorManager.freeBindlessTexture(irradianceMapIndex);
+            descriptorManager.freeBindlessCubemap(irradianceMapIndex);  // Cubemap, not 2D texture
             irradianceMapIndex = 0;
         }
         if (prefilteredMapIndex != 0) {
-            descriptorManager.freeBindlessTexture(prefilteredMapIndex);
+            descriptorManager.freeBindlessCubemap(prefilteredMapIndex);  // Cubemap, not 2D texture
             prefilteredMapIndex = 0;
         }
         if (brdfLUTIndex != 0) {
-            descriptorManager.freeBindlessTexture(brdfLUTIndex);
+            descriptorManager.freeBindlessTexture(brdfLUTIndex);  // 2D texture (correct)
             brdfLUTIndex = 0;
         }
     }

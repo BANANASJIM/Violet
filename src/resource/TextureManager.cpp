@@ -28,6 +28,7 @@ void TextureManager::cleanup() {
     }
     textureSlots.clear();
     freeSlots.clear();
+    nextSlot = 1;  // Reset to initial value (0 is reserved for invalid)
 
     defaultTextures = {};
     defaultResourcesCreated = false;

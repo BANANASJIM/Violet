@@ -3,8 +3,8 @@
 
 // Push constants for shadow rendering
 struct ShadowPushConstants {
-    float4x4 lightSpaceMatrix;
-    float4x4 model;
+    column_major float4x4 lightSpaceMatrix;
+    column_major float4x4 model;
 };
 
 [[vk::push_constant]]

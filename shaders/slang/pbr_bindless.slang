@@ -4,6 +4,7 @@
 import Common;
 import PBR;
 import Sampling;
+import Utilities;
 
 #include "TypeDefinitions.slang"
 
@@ -80,7 +81,8 @@ VSOutput vertexMain(VSInput input) {
     output.fragViewPos = viewPos.xyz;
 
     // Transform normal, tangent, bitangent to world space
-    float3x3 normalMatrix = transpose((float3x3)push.model);
+    float3x3 modelMatrix3x3 = (float3x3)push.model;
+    float3x3 normalMatrix = transpose(inverse3x3(modelMatrix3x3));
     output.fragNormal = normalize(mul(normalMatrix, input.normal));
     output.fragTangent = normalize(mul(normalMatrix, input.tangent.xyz));
     output.fragBitangent = cross(output.fragNormal, output.fragTangent) * input.tangent.w;
