@@ -59,6 +59,7 @@ private:
 
 // ===== ElementProxy - Proxy for array element access in SSBO =====
 // Supports syntax: lights[i]["fieldName"] = value
+// or direct struct assignment: lights[i] = lightData
 class ElementProxy {
 public:
     ElementProxy(ShaderResources* parent, const ReflectedResource* resourceInfo,
@@ -66,6 +67,29 @@ public:
 
     // Field access within array element
     FieldProxy operator[](const eastl::string& fieldName);
+
+    // Direct struct assignment (for complex types with arrays)
+    template<typename T>
+    requires std::is_trivially_copyable_v<T>
+    ElementProxy& operator=(const T& value) noexcept {
+        if (!bufferData || !parent) {
+            Log::error("ShaderResources", "Invalid element proxy");
+            return *this;
+        }
+
+        // Verify size matches element stride (with some tolerance for padding)
+        if (sizeof(T) > elementStride) {
+            Log::error("ShaderResources",
+                "Struct size mismatch: struct is {} bytes but element stride is {} bytes",
+                sizeof(T), elementStride);
+            return *this;
+        }
+
+        // Copy entire struct to this element's location
+        char* destPtr = static_cast<char*>(bufferData) + (elementIndex * elementStride);
+        memcpy(destPtr, &value, sizeof(T));
+        return *this;
+    }
 
 private:
     ShaderResources* parent;
@@ -147,7 +171,12 @@ public:
     vk::DescriptorSet getSet(uint32_t setIndex) const;
 
     // Get dynamic offset (only valid for PerFrame resources)
+    // DEPRECATED: Use getDynamicOffsetsForSet for sets with multiple dynamic bindings
     uint32_t getDynamicOffset(uint32_t setIndex, uint32_t frameIndex) const;
+
+    // Get all dynamic offsets for a set (one offset per dynamic binding, in binding order)
+    // Returns empty vector for Static sets or if set not found
+    eastl::vector<uint32_t> getDynamicOffsetsForSet(uint32_t setIndex) const;
 
     // Bind all descriptor sets to command buffer
     void bind(vk::CommandBuffer cmd, vk::PipelineLayout layout,
@@ -166,6 +195,14 @@ public:
     void setCurrentFrame(uint32_t frame) { currentFrame = frame; }
 
 private:
+    // Per-binding buffer data
+    struct BindingBufferData {
+        BufferResource buffer;
+        uint32_t alignedSize = 0;  // Size per frame (for PerFrame frequency)
+        void* mappedData = nullptr;
+        uint32_t elementSize = 0;  // Size of single element (for StructuredBuffer)
+    };
+
     // Per-set data
     struct SetData {
         vk::DescriptorSet descriptorSet;
@@ -174,10 +211,13 @@ private:
         UpdateFrequency frequency;
         bool isBindless;
 
-        // Buffer data (for UBO/SSBO)
+        // Buffer data (for UBO/SSBO) - indexed by binding number
+        eastl::unordered_map<uint32_t, BindingBufferData> buffersByBinding;
+
+        // Legacy single buffer support (deprecated, for compatibility)
         bool hasBuffer = false;
         BufferResource buffer;
-        uint32_t alignedSize = 0;  // Size per frame (for PerFrame frequency)
+        uint32_t alignedSize = 0;
         void* mappedData = nullptr;
     };
 

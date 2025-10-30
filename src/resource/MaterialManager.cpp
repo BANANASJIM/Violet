@@ -589,8 +589,10 @@ void MaterialManager::initMaterialsBuffer(ResourceManager* resMgr) {
     eastl::unordered_map<uint32_t, uint32_t> bufferSizeOverrides;
     bufferSizeOverrides[2] = maxMaterialSlots * materialDataSize;  // Set 2: materials SSBO
 
+    // Use PerFrame frequency to match shader's Set 0 (camera/lights/shadows)
+    // Set 2 (materials SSBO) will also be PerFrame but that's okay for correctness
     materialsBuffer = resMgr->createShaderResources("GlobalMaterials", "pbr_bindless_vertex",
-                                                    UpdateFrequency::Static, bufferSizeOverrides);
+                                                    UpdateFrequency::PerFrame, bufferSizeOverrides);
 
     if (!materialsBuffer) {
         violet::Log::error("MaterialManager", "Failed to create materials buffer from shader reflection");

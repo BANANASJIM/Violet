@@ -109,7 +109,11 @@ float3 getNormalFromMap(float2 texCoord, MaterialData material, float3 fragNorma
     float3 N = normalize(fragNormal);
     float3 T = normalize(fragTangent);
     float3 B = normalize(fragBitangent);
-    float3x3 TBN = float3x3(T, B, N);
+
+    // CRITICAL: Slang/HLSL matrix constructor float3x3(vec3, vec3, vec3) treats vectors as ROWS
+    // GLSL mat3(vec3, vec3, vec3) treats vectors as COLUMNS
+    // Solution: Transpose to convert rows → columns
+    float3x3 TBN = transpose(float3x3(T, B, N));
 
     return normalize(mul(TBN, tangentNormal));
 }
@@ -154,13 +158,13 @@ float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, f
 
     // PCF
     float shadowValue = 0.0;
-    float2 texelSize = 1.0 / 4096.0;
+    float2 texelSize = 1.0 / 8192.0;  // Match actual shadow atlas size
     int pcfSamples = 2;
 
     for(int x = -pcfSamples; x <= pcfSamples; ++x) {
         for(int y = -pcfSamples; y <= pcfSamples; ++y) {
             float2 offset = float2(x, y) * texelSize;
-            float pcfDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(linearSampler, atlasUV + offset).r;
+            float pcfDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(shadowSampler, atlasUV + offset).r;
             shadowValue += currentDepth > pcfDepth ? 0.0 : 1.0;
         }
     }

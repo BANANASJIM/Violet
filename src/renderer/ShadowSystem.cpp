@@ -2,10 +2,9 @@
 #include "LightingSystem.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
-#include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "renderer/camera/Camera.hpp"
 #include "renderer/camera/PerspectiveCamera.hpp"
-#include "resource/gpu/ResourceFactory.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/Texture.hpp"
 #include "core/Log.hpp"
@@ -64,62 +63,22 @@ namespace {
 
 namespace violet {
 
-ShadowSystem::~ShadowSystem() {
-    cleanup();
-}
 
-void ShadowSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, uint32_t framesInFlight) {
+void ShadowSystem::init(VulkanContext* ctx, TextureManager* texMgr, DescriptorManager* descMgr, eastl::shared_ptr<ShaderResources> globalRes) {
     context = ctx;
-    descriptorManager = descMgr;
     textureManager = texMgr;
-    maxFramesInFlight = framesInFlight;
+    descriptorManager = descMgr;
+    globalResources = globalRes;
 
-    cpuShadowData.reserve(INITIAL_CAPACITY);
-    shadowBuffers.resize(maxFramesInFlight);
-
-    // Register descriptor layout for shadows (single SSBO binding) BEFORE allocating buffers
-    if (!descriptorManager->hasLayout("Shadow")) {
-        DescriptorLayoutDesc layoutDesc;
-        layoutDesc.name = "Shadow";
-        layoutDesc.frequency = UpdateFrequency::PerFrame;  // Triple buffered
-
-        BindingDesc binding;
-        binding.binding = 0;
-        binding.type = vk::DescriptorType::eStorageBuffer;
-        binding.stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-        binding.count = 1;
-
-        layoutDesc.bindings.push_back(binding);
-        descriptorManager->registerLayout(layoutDesc);
-    }
-
-    // Allocate descriptor sets
-    descriptorSets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
-
-    // Create buffers
-    ensureBufferCapacity(INITIAL_CAPACITY);
-
-    // Bind buffers to descriptor sets
-    for (uint32_t i = 0; i < maxFramesInFlight; i++) {
-        descriptorManager->bindBuffer(descriptorSets[i], 0, shadowBuffers[i],
-                                     vk::DescriptorType::eStorageBuffer,
-                                     0, bufferCapacity * sizeof(ShadowData));
-    }
-
+    cpuShadowData.reserve(32);
     createAtlas();
 
-    violet::Log::info("ShadowSystem", "Initialized (atlas: {}x{}, capacity: {})",
-                      atlasSize, atlasSize, INITIAL_CAPACITY);
+    violet::Log::info("ShadowSystem", "Initialized with ShaderResources reflection API (atlas: {}x{})",
+                      atlasSize, atlasSize);
 }
 
 void ShadowSystem::cleanup() {
     if (!context) return;
-
-    descriptorSets.clear();
-
-    for (auto& buffer : shadowBuffers) {
-        ResourceFactory::destroyBuffer(context, buffer);
-    }
 
     // Remove shadow atlas texture from TextureManager
     if (atlasTextureHandle.isValid() && textureManager) {
@@ -127,12 +86,10 @@ void ShadowSystem::cleanup() {
         atlasTextureHandle = TextureHandle{};
     }
 
-    shadowBuffers.clear();
     cpuShadowData.clear();
     allocations.clear();
 
     context = nullptr;
-    descriptorManager = nullptr;
     textureManager = nullptr;
 }
 
@@ -495,31 +452,24 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
         }
     }
 
-    if (!cpuShadowData.empty()) {
-        ensureBufferCapacity(static_cast<uint32_t>(cpuShadowData.size()));
-    }
-}
-
-void ShadowSystem::uploadToGPU(uint32_t frameIndex) {
-    if (frameIndex >= maxFramesInFlight || cpuShadowData.empty()) {
+    // Upload shadow data via ShaderResources reflection API
+    if (!globalResources) {
+        violet::Log::error("ShadowSystem", "globalResources is null");
         return;
     }
 
-    if (!shadowBuffers[frameIndex].mappedData) {
-        violet::Log::error("ShadowSystem", "Buffer not mapped");
-        return;
+    // Upload each shadow's data using direct struct assignment
+    // This handles all fields including arrays (cascadeViewProjMatrices, atlasRects, cubeFaceMatrices)
+    violet::Log::debug("ShadowSystem", "Uploading {} shadow(s) at frame {}, globalResources currentFrame={}",
+                      cpuShadowData.size(), frameIndex, globalResources->getCurrentFrame());
+    for (size_t i = 0; i < cpuShadowData.size(); ++i) {
+        auto shadowProxy = (*globalResources)["shadows"][i];
+        shadowProxy = cpuShadowData[i];  // Direct struct copy
     }
-
-    size_t dataSize = cpuShadowData.size() * sizeof(ShadowData);
-    memcpy(shadowBuffers[frameIndex].mappedData, cpuShadowData.data(), dataSize);
 }
 
-vk::DescriptorSet ShadowSystem::getDescriptorSet(uint32_t frameIndex) const {
-    if (frameIndex >= descriptorSets.size()) {
-        return vk::DescriptorSet{};
-    }
-    return descriptorSets[frameIndex];
-}
+// Removed: uploadToGPU, getDescriptorSet
+// All data upload is now handled directly in update() via ShaderResources API
 
 ShadowAtlasAllocation ShadowSystem::allocateSpace(uint32_t resolution, uint32_t lightIndex) {
     // Simple linear packing algorithm
@@ -587,36 +537,8 @@ void ShadowSystem::clearAllAllocations() {
     allocations.clear();
 }
 
-void ShadowSystem::ensureBufferCapacity(uint32_t shadowCount) {
-    if (shadowCount <= bufferCapacity) return;
-
-    uint32_t newCapacity = eastl::max(shadowCount, bufferCapacity * 2);
-    newCapacity = eastl::min(newCapacity, MAX_SHADOWS);
-
-    for (uint32_t i = 0; i < maxFramesInFlight; i++) {
-        // Destroy old buffer if it exists
-        if (shadowBuffers[i].buffer) {
-            ResourceFactory::destroyBuffer(context, shadowBuffers[i]);
-        }
-
-        BufferInfo bufferInfo{
-            .size = newCapacity * sizeof(ShadowData),
-            .usage = vk::BufferUsageFlagBits::eStorageBuffer,
-            .memoryUsage = MemoryUsage::CPU_TO_GPU,
-            .debugName = "ShadowDataBuffer"
-        };
-        shadowBuffers[i] = ResourceFactory::createBuffer(context, bufferInfo);
-
-        // Only bind if descriptor sets are already allocated
-        if (i < descriptorSets.size() && descriptorSets[i]) {
-            descriptorManager->bindBuffer(descriptorSets[i], 0, shadowBuffers[i],
-                                         vk::DescriptorType::eStorageBuffer,
-                                         0, newCapacity * sizeof(ShadowData));
-        }
-    }
-
-    bufferCapacity = newCapacity;
-}
+// Removed: ensureBufferCapacity
+// Buffer allocation is now handled by ResourceManager via ShaderResources
 
 void ShadowSystem::createAtlas() {
     // Create depth texture through TextureManager
@@ -628,34 +550,29 @@ void ShadowSystem::createAtlas() {
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled
     );
 
-    // Set shadow sampler for the texture
-    vk::Sampler depthSampler = descriptorManager->getSamplerManager().getSampler(SamplerType::Shadow);
-    atlasTexture->setSampler(depthSampler);
-
-    // Register to bindless texture array manually
-    // Use a mid-range index to avoid conflicts with regular textures
-    atlasBindlessIndex = 512;
-
-    vk::DescriptorImageInfo descImageInfo;
-    descImageInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-    descImageInfo.imageView = atlasTexture->getImageView();
-    descImageInfo.sampler = depthSampler;
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = descriptorManager->getBindlessSet();
-    write.dstBinding = 0;
-    write.dstArrayElement = atlasBindlessIndex;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &descImageInfo;
-
-    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
-    // Add texture to TextureManager and store handle
+    // Add texture to TextureManager
     atlasTextureHandle = textureManager->addTexture(eastl::move(atlasTexture));
 
-    violet::Log::info("ShadowSystem", "Created shadow atlas {}x{} (bindless index: {}, handle: {})",
-                     atlasSize, atlasSize, atlasBindlessIndex, atlasTextureHandle.index);
+    if (!atlasTextureHandle.isValid()) {
+        violet::Log::error("ShadowSystem", "Failed to create shadow atlas texture");
+        return;
+    }
+
+    // Set shadow sampler for depth texture (required for bindless descriptor)
+    Texture* atlas = textureManager->getTexture(atlasTextureHandle);
+    if (atlas && descriptorManager) {
+        // Get shadow sampler from SamplerManager via DescriptorManager
+        vk::Sampler shadowSampler = descriptorManager->getSamplerManager().getSampler(SamplerType::Shadow);
+        atlas->setSampler(shadowSampler);
+
+        // Register shadow atlas to bindless descriptor array at fixed index 5
+        atlasBindlessIndex = descriptorManager->allocateBindlessTextureAt(atlas, 5);
+        violet::Log::info("ShadowSystem", "Created shadow atlas {}x{} (bindless index: {}, TextureManager handle: {})",
+                         atlasSize, atlasSize, atlasBindlessIndex, atlasTextureHandle.index);
+    } else {
+        violet::Log::error("ShadowSystem", "Failed to register shadow atlas to bindless array");
+        atlasBindlessIndex = 0;
+    }
 }
 
 const ImageResource* ShadowSystem::getAtlasImage() const {

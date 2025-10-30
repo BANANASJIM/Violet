@@ -84,6 +84,10 @@ public:
     void submitAsyncTask(eastl::shared_ptr<AsyncLoadTask> task);
     void processAsyncTasks();  // Call every frame to process completed CPU work
 
+    // === Frame Synchronization ===
+    // Synchronize current frame for DescriptorManager and all PerFrame ShaderResources
+    void setCurrentFrame(uint32_t frameIndex);
+
 private:
     void loadAllShaders();  // Pre-load all shaders into ShaderLibrary
     VulkanContext* context = nullptr;
@@ -97,6 +101,9 @@ private:
 
     // ShaderResources registry (reflection-driven descriptor sets + buffers)
     eastl::unordered_map<eastl::string, eastl::shared_ptr<ShaderResources>> shaderResourcesMap;
+
+    // PerFrame ShaderResources tracking (for frame synchronization)
+    eastl::vector<eastl::weak_ptr<ShaderResources>> perFrameResources;
 
     // Async loading support
     ThreadPool threadPool;

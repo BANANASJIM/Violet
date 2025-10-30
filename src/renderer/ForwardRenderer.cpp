@@ -71,17 +71,18 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
-    // CRITICAL: Pre-register pbr_bindless layouts with PerFrame for Global UBO (set 0)
+    // CRITICAL: Pre-register all shader layouts with PerFrame for Global UBO (set 0)
     // This must happen BEFORE any materials are created to ensure correct frequency
     {
-        auto vertShader = resourceManager->getShaderLibrary()->get("pbr_bindless_vertex").lock();
-        auto fragShader = resourceManager->getShaderLibrary()->get("pbr_bindless_frag").lock();
-        if (vertShader) {
-            vertShader->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
-        }
-        if (fragShader) {
-            fragShader->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
-        }
+        auto pbrVert = resourceManager->getShaderLibrary()->get("pbr_bindless_vertex").lock();
+        auto pbrFrag = resourceManager->getShaderLibrary()->get("pbr_bindless_frag").lock();
+        auto skyboxVert = resourceManager->getShaderLibrary()->get("skybox_vertex").lock();
+        auto skyboxFrag = resourceManager->getShaderLibrary()->get("skybox_frag").lock();
+
+        if (pbrVert) pbrVert->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+        if (pbrFrag) pbrFrag->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+        if (skyboxVert) skyboxVert->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+        if (skyboxFrag) skyboxFrag->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
     }
 
     // Create Global resources (uses pre-registered PerFrame layouts)
@@ -126,10 +127,11 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
 
     // Initialize lighting and shadow systems
     lightingSystem = new LightingSystem();
-    lightingSystem->init(context, &descMgr, maxFramesInFlight);
+    lightingSystem->init(globalResources);
 
     shadowSystem = new ShadowSystem();
-    shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
+    shadowSystem->init(context, resourceManager->getTextureManager(),
+                       &descMgr, globalResources);
 
     shadowPass = eastl::make_unique<ShadowPass>();
     shadowPass->init(context, &descMgr, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
@@ -156,7 +158,6 @@ void ForwardRenderer::cleanup() {
     }
 
     if (lightingSystem) {
-        lightingSystem->cleanup();
         delete lightingSystem;
         lightingSystem = nullptr;
     }
@@ -182,9 +183,8 @@ void ForwardRenderer::cleanup() {
 void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
     currentWorld = &world;
 
-    // Set current frame for descriptor manager (enables per-frame uniform updates)
-    auto& descMgr = resourceManager->getDescriptorManager();
-    descMgr.setCurrentFrame(frameIndex);
+    // Synchronize frame for all PerFrame resources (DescriptorManager + all ShaderResources)
+    resourceManager->setCurrentFrame(frameIndex);
 
     // Update auto-exposure (internal time tracking)
     autoExposure.updateExposure();
@@ -202,8 +202,7 @@ void ForwardRenderer::beginFrame(entt::registry& world, uint32_t frameIndex) {
             lightingSystem->update(world, activeCamera->getFrustum(), frameIndex);
             shadowSystem->update(world, *lightingSystem, activeCamera, frameIndex, getSceneBounds());
 
-            lightingSystem->uploadToGPU(frameIndex);
-            shadowSystem->uploadToGPU(frameIndex);
+            // Light and shadow data are uploaded directly in their update() methods
         }
     }
 }
@@ -354,14 +353,23 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
                     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
 
                     eastl::array<vk::DescriptorSet, 2> descriptorSets = {globalSet, bindlessSet};
+
+                    // Set 0 requires dynamic offsets (one per binding: camera, lights, shadows)
+                    violet::Log::debug("Renderer", "Skybox Rendering: frameIndex={}, globalResources.currentFrame={}",
+                                      frame, globalResources->getCurrentFrame());
+
+                    // Get per-binding dynamic offsets for Set 0
+                    auto dynamicOffsets = globalResources->getDynamicOffsetsForSet(0);
+                    violet::Log::debug("Renderer", "Skybox Dynamic offsets: {} for Set 0", dynamicOffsets.size());
+
                     cmd.bindDescriptorSets(
                         vk::PipelineBindPoint::eGraphics,
                         skyboxMaterial->getPipelineLayout(),
                         0,  // First set = 0
                         2,  // Bind 2 sets (Global + Bindless)
                         descriptorSets.data(),
-                        0,
-                        nullptr
+                        static_cast<uint32_t>(dynamicOffsets.size()),
+                        dynamicOffsets.data()
                     );
 
                     // Draw fullscreen triangle (no vertex buffer needed)
@@ -641,14 +649,29 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
         matMgr->getMaterialsBuffer()->getSet(2) : vk::DescriptorSet{};  // Set 2 for materials SSBO
 
     eastl::array<vk::DescriptorSet, 3> descriptorSets = {globalSet, bindlessSet, materialDataSet};
+
+    // Calculate dynamic offsets for all PerFrame descriptor sets
+    // Set 0: 3 dynamic offsets (one per binding: camera, lights, shadows)
+    // Set 1: 0 dynamic offsets (bindless, static)
+    // Set 2: 1 dynamic offset (materials SSBO, single binding)
+
+    // Get per-binding dynamic offsets for Set 0 (returns vector of offsets in binding order)
+    auto globalOffsets = globalResources->getDynamicOffsetsForSet(0);
+    auto materialsOffsets = matMgr->getMaterialsBuffer()->getDynamicOffsetsForSet(2);
+
+    // Combine all offsets: Set 0 bindings + Set 2 bindings
+    eastl::vector<uint32_t> dynamicOffsets;
+    dynamicOffsets.insert(dynamicOffsets.end(), globalOffsets.begin(), globalOffsets.end());
+    dynamicOffsets.insert(dynamicOffsets.end(), materialsOffsets.begin(), materialsOffsets.end());
+
     commandBuffer.bindDescriptorSets(
         vk::PipelineBindPoint::eGraphics,
         pbrBindlessMaterial->getPipelineLayout(),
         0,  // First set = 0
         3,  // Bind 3 sets
         descriptorSets.data(),
-        0,
-        nullptr
+        static_cast<uint32_t>(dynamicOffsets.size()),
+        dynamicOffsets.data()
     );
 
     Mesh* currentMesh = nullptr;

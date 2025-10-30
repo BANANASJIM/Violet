@@ -176,7 +176,7 @@ void TextureManager::createDefaultBlackTexture() {
 void TextureManager::createDefaultNormalTexture() {
     const uint8_t normal[] = {128, 128, 255, 255};  // R=0.5, G=0.5, B=1.0
     auto texture = eastl::make_unique<Texture>();
-    texture->loadFromMemory(context, normal, sizeof(normal), 1, 1, 4, false);
+texture->loadFromMemory(context, normal, sizeof(normal), 1, 1, 4, false);
     texture->setSampler(descriptorManager->getSamplerManager().getSampler(SamplerType::Default));
     defaultTextures.normal = addTexture(eastl::move(texture));
 }

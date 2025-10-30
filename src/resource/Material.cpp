@@ -9,6 +9,18 @@
 
 namespace violet {
 
+// Helper: Write material data to all frames (materials buffer is PerFrame but data is static)
+template<typename Func>
+static void writeToAllFrames(ShaderResources* materialsBuffer, Func&& writeFunc) {
+    if (!materialsBuffer) return;
+    uint32_t savedFrame = materialsBuffer->getCurrentFrame();
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+        materialsBuffer->setCurrentFrame(frame);
+        writeFunc();
+    }
+    materialsBuffer->setCurrentFrame(savedFrame);
+}
+
 // ===== Material Implementation =====
 
 Material::~Material() {
@@ -63,22 +75,24 @@ void PBRMaterialInstance::create(VulkanContext* ctx, Material* mat, MaterialMana
         return;
     }
 
-    // Initialize all fields in materials SSBO using reflection API
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColorFactor"] = data.baseColorFactor;
-    matBuf["materials"][materialID]["metallicFactor"] = data.metallicFactor;
-    matBuf["materials"][materialID]["roughnessFactor"] = data.roughnessFactor;
-    matBuf["materials"][materialID]["normalScale"] = data.normalScale;
-    matBuf["materials"][materialID]["occlusionStrength"] = data.occlusionStrength;
-    matBuf["materials"][materialID]["emissiveFactor"] = data.emissiveFactor;
-    matBuf["materials"][materialID]["alphaCutoff"] = data.alphaCutoff;
+    // Initialize all fields in materials SSBO using reflection API (write to all frames)
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColorFactor"] = data.baseColorFactor;
+        matBuf["materials"][materialID]["metallicFactor"] = data.metallicFactor;
+        matBuf["materials"][materialID]["roughnessFactor"] = data.roughnessFactor;
+        matBuf["materials"][materialID]["normalScale"] = data.normalScale;
+        matBuf["materials"][materialID]["occlusionStrength"] = data.occlusionStrength;
+        matBuf["materials"][materialID]["emissiveFactor"] = data.emissiveFactor;
+        matBuf["materials"][materialID]["alphaCutoff"] = data.alphaCutoff;
 
-    // Initialize texture indices to 0 (no texture)
-    matBuf["materials"][materialID]["baseColorTexIndex"] = 0u;
-    matBuf["materials"][materialID]["metallicRoughnessTexIndex"] = 0u;
-    matBuf["materials"][materialID]["normalTexIndex"] = 0u;
-    matBuf["materials"][materialID]["occlusionTexIndex"] = 0u;
-    matBuf["materials"][materialID]["emissiveTexIndex"] = 0u;
+        // Initialize texture indices to 0 (no texture)
+        matBuf["materials"][materialID]["baseColorTexIndex"] = 0u;
+        matBuf["materials"][materialID]["metallicRoughnessTexIndex"] = 0u;
+        matBuf["materials"][materialID]["normalTexIndex"] = 0u;
+        matBuf["materials"][materialID]["occlusionTexIndex"] = 0u;
+        matBuf["materials"][materialID]["emissiveTexIndex"] = 0u;
+    });
 
     violet::Log::debug("Material", "Created PBRMaterialInstance with materialID {}", materialID);
 }
@@ -136,15 +150,17 @@ void PBRMaterialInstance::setBaseColorTexture(Texture* texture) {
     // Update texture pointer
     baseColorTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         baseColorTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColorTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColorTexIndex"] = texIndex;
+    });
 }
 
 void PBRMaterialInstance::setMetallicRoughnessTexture(Texture* texture) {
@@ -166,15 +182,17 @@ void PBRMaterialInstance::setMetallicRoughnessTexture(Texture* texture) {
     // Update texture pointer
     metallicRoughnessTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         metallicRoughnessTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["metallicRoughnessTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["metallicRoughnessTexIndex"] = texIndex;
+    });
 }
 
 void PBRMaterialInstance::setNormalTexture(Texture* texture) {
@@ -196,15 +214,17 @@ void PBRMaterialInstance::setNormalTexture(Texture* texture) {
     // Update texture pointer
     normalTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         normalTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["normalTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["normalTexIndex"] = texIndex;
+    });
 }
 
 void PBRMaterialInstance::setOcclusionTexture(Texture* texture) {
@@ -226,15 +246,17 @@ void PBRMaterialInstance::setOcclusionTexture(Texture* texture) {
     // Update texture pointer
     occlusionTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         occlusionTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["occlusionTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["occlusionTexIndex"] = texIndex;
+    });
 }
 
 void PBRMaterialInstance::setEmissiveTexture(Texture* texture) {
@@ -256,15 +278,17 @@ void PBRMaterialInstance::setEmissiveTexture(Texture* texture) {
     // Update texture pointer
     emissiveTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         emissiveTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["emissiveTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["emissiveTexIndex"] = texIndex;
+    });
 }
 
 void PBRMaterialInstance::updateMaterialData() {
@@ -277,15 +301,17 @@ void PBRMaterialInstance::updateMaterialData() {
         return;
     }
 
-    // Update all material parameters (not texture indices) in SSBO
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColorFactor"] = data.baseColorFactor;
-    matBuf["materials"][materialID]["metallicFactor"] = data.metallicFactor;
-    matBuf["materials"][materialID]["roughnessFactor"] = data.roughnessFactor;
-    matBuf["materials"][materialID]["normalScale"] = data.normalScale;
-    matBuf["materials"][materialID]["occlusionStrength"] = data.occlusionStrength;
-    matBuf["materials"][materialID]["emissiveFactor"] = data.emissiveFactor;
-    matBuf["materials"][materialID]["alphaCutoff"] = data.alphaCutoff;
+    // Update all material parameters (not texture indices) in SSBO in all frames
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColorFactor"] = data.baseColorFactor;
+        matBuf["materials"][materialID]["metallicFactor"] = data.metallicFactor;
+        matBuf["materials"][materialID]["roughnessFactor"] = data.roughnessFactor;
+        matBuf["materials"][materialID]["normalScale"] = data.normalScale;
+        matBuf["materials"][materialID]["occlusionStrength"] = data.occlusionStrength;
+        matBuf["materials"][materialID]["emissiveFactor"] = data.emissiveFactor;
+        matBuf["materials"][materialID]["alphaCutoff"] = data.alphaCutoff;
+    });
 }
 
 // ===== UnlitMaterialInstance Implementation =====
@@ -317,10 +343,12 @@ void UnlitMaterialInstance::create(VulkanContext* ctx, Material* mat, MaterialMa
         return;
     }
 
-    // Initialize fields using reflection API
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColor"] = data.baseColor;
-    matBuf["materials"][materialID]["baseColorTexIndex"] = 0u;
+    // Initialize fields using reflection API (write to all frames)
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColor"] = data.baseColor;
+        matBuf["materials"][materialID]["baseColorTexIndex"] = 0u;
+    });
 
     violet::Log::debug("Material", "Created UnlitMaterialInstance with materialID {}", materialID);
 }
@@ -361,15 +389,17 @@ void UnlitMaterialInstance::setBaseColorTexture(Texture* texture) {
     // Update texture pointer
     baseColorTexture = texture;
 
-    // Allocate new bindless index and update SSBO
+    // Allocate new bindless index and update SSBO in all frames
     uint32_t texIndex = 0;
     if (texture) {
         texIndex = materialManager->allocateBindlessTexture(texture);
         baseColorTexIndex = texIndex;  // Track for cleanup
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColorTexIndex"] = texIndex;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColorTexIndex"] = texIndex;
+    });
 }
 
 void UnlitMaterialInstance::updateMaterialData() {
@@ -382,8 +412,10 @@ void UnlitMaterialInstance::updateMaterialData() {
         return;
     }
 
-    auto& matBuf = *materialsBuffer;
-    matBuf["materials"][materialID]["baseColor"] = data.baseColor;
+    writeToAllFrames(materialsBuffer, [&]() {
+        auto& matBuf = *materialsBuffer;
+        matBuf["materials"][materialID]["baseColor"] = data.baseColor;
+    });
 }
 
 } // namespace violet

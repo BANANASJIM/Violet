@@ -1,73 +1,47 @@
 #include "LightingSystem.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/camera/Camera.hpp"
-#include "renderer/vulkan/VulkanContext.hpp"
-#include "renderer/vulkan/DescriptorManager.hpp"
-#include "resource/gpu/ResourceFactory.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
 
-LightingSystem::~LightingSystem() {
-    cleanup();
-}
-
-void LightingSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32_t framesInFlight) {
-    context = ctx;
-    descriptorManager = descMgr;
-    maxFramesInFlight = framesInFlight;
-
-    cpuLightData.reserve(INITIAL_CAPACITY);
-
-    ensureBufferCapacity(INITIAL_CAPACITY);
-
-    // Register descriptor layout for lighting (single SSBO binding)
-    if (!descriptorManager->hasLayout("Lighting")) {
-        DescriptorLayoutDesc layoutDesc;
-        layoutDesc.name = "Lighting";
-        layoutDesc.frequency = UpdateFrequency::PerFrame;  // Will use dynamic offset
-
-        BindingDesc binding;
-        binding.binding = 0;
-        binding.type = vk::DescriptorType::eStorageBuffer;
-        binding.stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-        binding.count = 1;
-
-        layoutDesc.bindings.push_back(binding);
-        descriptorManager->registerLayout(layoutDesc);
-    }
-
-    // Allocate single descriptor set (will use dynamic offset for per-frame access)
-    auto sets = descriptorManager->allocateSets("Lighting", 1);
-    descriptorSet = sets[0];
-
-    // Bind the buffer to descriptor set (range = alignedFrameSize for dynamic offset)
-    descriptorManager->bindBuffer(descriptorSet, 0, lightBuffer,
-                                 vk::DescriptorType::eStorageBuffer, 0, alignedFrameSize);
-
-    violet::Log::info("LightingSystem", "Initialized (capacity: {}, aligned frame size: {} bytes)",
-                     INITIAL_CAPACITY, alignedFrameSize);
-}
-
-void LightingSystem::cleanup() {
-    if (!context) return;
-
-    if (lightBuffer.buffer) {
-        ResourceFactory::destroyBuffer(context, lightBuffer);
-    }
-
-    cpuLightData.clear();
-
-    context = nullptr;
-    descriptorManager = nullptr;
+void LightingSystem::init(eastl::shared_ptr<ShaderResources> globalRes) {
+    globalResources = globalRes;
+    cpuLightData.reserve(64);
+    violet::Log::info("LightingSystem", "Initialized with ShaderResources reflection API");
 }
 
 void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum, uint32_t frameIndex) {
     cpuLightData.clear();
     collectLights(world, cameraFrustum);
 
-    if (!cpuLightData.empty()) {
-        ensureBufferCapacity(static_cast<uint32_t>(cpuLightData.size()));
+    // Upload light data via ShaderResources reflection API
+    if (!globalResources) {
+        Log::error("LightingSystem", "globalResources is null");
+        return;
+    }
+
+    // Update light count in camera UBO
+    (*globalResources)["camera"]["numLights"] = static_cast<int>(cpuLightData.size());
+
+    violet::Log::debug("LightingSystem", "Uploading {} light(s) at frame {}, globalResources currentFrame={}",
+                      cpuLightData.size(), frameIndex, globalResources->getCurrentFrame());
+
+    // Upload each light's data
+    for (size_t i = 0; i < cpuLightData.size(); ++i) {
+        const auto& light = cpuLightData[i];
+        auto lightProxy = (*globalResources)["lights"][i];
+
+        lightProxy["positionAndType"] = light.positionAndType;
+        lightProxy["colorAndRadius"] = light.colorAndRadius;
+        lightProxy["shadowIndex"] = light.shadowIndex;
+
+        if (i == 0) {  // Log first light for debugging
+            violet::Log::debug("LightingSystem", "Light 0: type={}, color=({},{},{}), intensity={}",
+                             light.positionAndType.w, light.colorAndRadius.r,
+                             light.colorAndRadius.g, light.colorAndRadius.b, light.colorAndRadius.a);
+        }
     }
 }
 
@@ -111,82 +85,7 @@ void LightingSystem::collectLights(entt::registry& world, const Frustum& cameraF
     }
 }
 
-void LightingSystem::uploadToGPU(uint32_t frameIndex) {
-    if (frameIndex >= maxFramesInFlight) {
-        return;
-    }
-
-    if (!lightBuffer.mappedData) {
-        violet::Log::error("LightingSystem", "Buffer not mapped");
-        return;
-    }
-
-    struct LightDataHeader {
-        uint32_t count;
-        uint32_t padding[3];
-    };
-
-    LightDataHeader header;
-    header.count = static_cast<uint32_t>(cpuLightData.size());
-    header.padding[0] = 0;
-    header.padding[1] = 0;
-    header.padding[2] = 0;
-
-    // Write to the frame-specific section using dynamic offset
-    char* bufferPtr = static_cast<char*>(lightBuffer.mappedData) + (frameIndex * alignedFrameSize);
-    memcpy(bufferPtr, &header, sizeof(LightDataHeader));
-
-    if (!cpuLightData.empty()) {
-        size_t dataSize = cpuLightData.size() * sizeof(LightData);
-        memcpy(bufferPtr + sizeof(LightDataHeader), cpuLightData.data(), dataSize);
-    }
-}
-
-vk::DescriptorSet LightingSystem::getDescriptorSet(uint32_t frameIndex) const {
-    // Return the single descriptor set (caller must provide dynamic offset)
-    return descriptorSet;
-}
-
-void LightingSystem::ensureBufferCapacity(uint32_t lightCount) {
-    if (lightCount <= bufferCapacity) return;
-
-    uint32_t newCapacity = eastl::max(lightCount, bufferCapacity * 2);
-    newCapacity = eastl::min(newCapacity, MAX_LIGHTS);
-
-    // Calculate size for one frame's data (header + lights)
-    size_t frameDataSize = 16 + newCapacity * sizeof(LightData);
-
-    // Align to minStorageBufferOffsetAlignment for dynamic offset
-    vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
-    uint32_t minAlignment = static_cast<uint32_t>(props.limits.minStorageBufferOffsetAlignment);
-    alignedFrameSize = (frameDataSize + minAlignment - 1) & ~(minAlignment - 1);
-
-    // Total buffer size for all frames
-    size_t totalBufferSize = alignedFrameSize * maxFramesInFlight;
-
-    // Destroy old buffer if exists
-    if (lightBuffer.buffer) {
-        ResourceFactory::destroyBuffer(context, lightBuffer);
-    }
-
-    // Create single buffer for all frames
-    BufferInfo bufferInfo{
-        .size = totalBufferSize,
-        .usage = vk::BufferUsageFlagBits::eStorageBuffer,
-        .memoryUsage = MemoryUsage::CPU_TO_GPU,
-        .debugName = "LightDataBuffer_AllFrames"
-    };
-    lightBuffer = ResourceFactory::createBuffer(context, bufferInfo);
-
-    if (!lightBuffer.mappedData) {
-        violet::Log::error("LightingSystem", "Failed to map light buffer");
-        return;
-    }
-
-    bufferCapacity = newCapacity;
-
-    violet::Log::debug("LightingSystem", "Resized buffer: capacity={}, alignedFrameSize={}, totalSize={}",
-                      newCapacity, alignedFrameSize, totalBufferSize);
-}
+// Removed: uploadToGPU, getDescriptorSet, ensureBufferCapacity
+// All data upload is now handled directly in update() via ShaderResources API
 
 } // namespace violet

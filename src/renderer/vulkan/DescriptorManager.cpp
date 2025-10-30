@@ -695,7 +695,10 @@ void DescriptorManager::bindBuffer(vk::DescriptorSet set, uint32_t binding,
         return;
     }
 
-    if (type != vk::DescriptorType::eUniformBuffer && type != vk::DescriptorType::eStorageBuffer) {
+    if (type != vk::DescriptorType::eUniformBuffer &&
+        type != vk::DescriptorType::eStorageBuffer &&
+        type != vk::DescriptorType::eUniformBufferDynamic &&
+        type != vk::DescriptorType::eStorageBufferDynamic) {
         violet::Log::error("DescriptorManager", "Invalid descriptor type for buffer binding");
         return;
     }
@@ -863,15 +866,17 @@ void DescriptorManager::initBindless(uint32_t maxTextures, LayoutHandle bindless
     bindlessMaxTextures = maxTextures;
     bindlessTextureSlots.resize(maxTextures, nullptr);
 
-    // 预留前5个索引给默认纹理:
+    // 预留前10个索引给全局纹理:
     // Index 0: 保留为nullptr标记（shader中的"无纹理"检测）
     // Index 1: White texture
     // Index 2: Black texture
     // Index 3: Normal texture
     // Index 4: MetallicRoughness texture
-    // Index 5+: 动态分配
-    bindlessFreeIndices.reserve(maxTextures - 5);
-    for (uint32_t i = 5; i < maxTextures; ++i) {
+    // Index 5: Shadow atlas (全局固定)
+    // Index 6-9: 保留给未来的全局纹理 (IBL, lightmaps, etc.)
+    // Index 10+: 材质纹理动态分配
+    bindlessFreeIndices.reserve(maxTextures - 10);
+    for (uint32_t i = 10; i < maxTextures; ++i) {
         bindlessFreeIndices.push_back(i);
     }
 
@@ -1044,6 +1049,8 @@ void DescriptorManager::createPool(UpdateFrequency frequency) {
     const eastl::vector<vk::DescriptorType> commonTypes = {
         vk::DescriptorType::eUniformBuffer,
         vk::DescriptorType::eStorageBuffer,
+        vk::DescriptorType::eUniformBufferDynamic,  // For PerFrame triple-buffered resources
+        vk::DescriptorType::eStorageBufferDynamic,  // For PerFrame triple-buffered resources
         vk::DescriptorType::eSampledImage,         // For separate samplers (Slang default)
         vk::DescriptorType::eSampler,              // For separate samplers
         vk::DescriptorType::eStorageImage,         // For compute shaders
