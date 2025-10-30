@@ -1,6 +1,5 @@
 #include "Shader.hpp"
 #include "core/Log.hpp"
-#include "resource/shader/ReflectionHelper.hpp"
 #include "resource/shader/ShaderReflection.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 
@@ -19,11 +18,7 @@ Shader::Shader(const CreateInfo& info, const eastl::vector<uint32_t>& spirv)
 }
 
 Shader::~Shader() {
-    // Clean up shader reflection data
-    if (shaderReflection) {
-        delete shaderReflection;
-        shaderReflection = nullptr;
-    }
+    // extractedReflection (unique_ptr) is automatically cleaned up
 }
 
 void Shader::updateSPIRV(const eastl::vector<uint32_t>& spirv, size_t newHash) {
@@ -56,16 +51,19 @@ const char* Shader::stageToString(Stage stage) {
     return "Unknown";
 }
 
-void Shader::setReflection(slang::ProgramLayout* layout) {
-    reflection = layout;
-    if (reflection) {
-        Log::debug("Shader", "Reflection data set for shader '{}'", name.c_str());
-    }
+void Shader::setExtractedReflection(ShaderReflection&& reflection) {
+    extractedReflection = eastl::make_unique<ShaderReflection>(eastl::move(reflection));
+    Log::debug("Shader", "Extracted reflection data set for shader '{}'", name.c_str());
 }
 
+// Overload for backward compatibility - defaults to PerMaterial
 void Shader::registerDescriptorLayouts(DescriptorManager* manager) {
-    if (!reflection) {
-        Log::warn("Shader", "Shader '{}' has no reflection data, cannot register layouts", name.c_str());
+    registerDescriptorLayouts(manager, UpdateFrequency::PerMaterial);
+}
+
+void Shader::registerDescriptorLayouts(DescriptorManager* manager, UpdateFrequency baseFrequency) {
+    if (!extractedReflection) {
+        Log::warn("Shader", "Shader '{}' has no extracted reflection data, cannot register layouts", name.c_str());
         return;
     }
 
@@ -74,56 +72,97 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager) {
         return;
     }
 
-    // Use ReflectionHelper to extract layouts
-    ReflectionHelper helper(reflection);
-    auto layouts = helper.extractDescriptorLayouts(name);
-
-    if (layouts.empty()) {
-        Log::debug("Shader", "Shader '{}' has no descriptor layouts to register", name.c_str());
+    // Skip re-registration if already registered to avoid frequency conflicts
+    // Different systems (Global vs Materials) will use the layouts registered by the first caller
+    if (!descriptorLayoutHandles.empty()) {
+        Log::debug("Shader", "Shader '{}' layouts already registered, skipping re-registration", name.c_str());
         return;
     }
 
-    // Extract and store ShaderReflection (all resource metadata)
-    if (!this->shaderReflection) {
-        this->shaderReflection = new ShaderReflection();
+    // Build descriptor layouts from extracted reflection (inline conversion)
+    const auto& resourcesBySet = extractedReflection->getResourcesBySetMap();
+    const auto& pushRanges = extractedReflection->getPushConstantRanges();
+
+    // Early return only if BOTH descriptor layouts AND push constants are empty
+    if (resourcesBySet.empty() && pushRanges.empty()) {
+        Log::debug("Shader", "Shader '{}' has no descriptor layouts or push constants to register", name.c_str());
+        return;
     }
-    bool hasFieldReflection = extractReflection(reflection, *this->shaderReflection);
 
-    // Register each layout and store handles
-    // IMPORTANT: Preserve set index sparsity (e.g., [set0, empty, set2] → [handle0, 0, handle2])
-    descriptorLayoutHandles.clear();
-    descriptorLayoutHandles.resize(layouts.size(), 0);  // Initialize with 0 (no layout)
+    // Register descriptor layouts (if any)
+    if (!resourcesBySet.empty()) {
+        // Find maximum set index to determine vector size
+        uint32_t maxSetIndex = 0;
+        for (const auto& [setIndex, _] : resourcesBySet) {
+            if (setIndex > maxSetIndex) maxSetIndex = setIndex;
+        }
 
-    for (size_t setIndex = 0; setIndex < layouts.size(); ++setIndex) {
-        const auto& layout = layouts[setIndex];
-        if (!layout.bindings.empty()) {
-            LayoutHandle handle = manager->registerLayout(layout);
-            descriptorLayoutHandles[setIndex] = handle;
+        // Create layouts vector (sparse, may have empty sets)
+        eastl::vector<DescriptorLayoutDesc> layouts(maxSetIndex + 1);
 
-            // Store reflection data if available (for dynamic UBO updates)
-            if (hasFieldReflection) {
-                manager->setReflection(handle, *this->shaderReflection);
-                Log::debug("Shader", "Stored reflection data for set {} layout '{}' (handle={})",
-                          setIndex, layout.name.c_str(), handle);
+        // Build layout for each set
+        for (const auto& [setIndex, resourcesInSet] : resourcesBySet) {
+        DescriptorLayoutDesc& layout = layouts[setIndex];
+
+        // Set name
+        char buffer[16];
+        sprintf(buffer, "%u", setIndex);
+        layout.name = name + "_set" + buffer;
+
+        // Set frequency (caller can override default PerMaterial)
+        layout.frequency = baseFrequency;
+
+        // Convert resources to bindings
+        for (const auto& resource : resourcesInSet) {
+            BindingDesc binding;
+            binding.binding = resource.binding;
+            binding.type = resource.type;
+            binding.stages = resource.stages;
+            binding.count = resource.arraySize;
+
+            // Debug: Log binding details
+            Log::debug("Shader", "  Set {} Binding {}: '{}' -> type={} ({})",
+                      setIndex, resource.binding, resource.name.c_str(),
+                      static_cast<uint32_t>(resource.type), vk::to_string(resource.type).c_str());
+
+            // Bindless resources need special flags
+            if (resource.isBindless) {
+                binding.flags = vk::DescriptorBindingFlagBits::ePartiallyBound |
+                               vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+                layout.isBindless = true;
+                layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+            }
+
+            layout.bindings.push_back(binding);
+        }
+        }
+
+        // Register each layout and store handles
+        // IMPORTANT: Preserve set index sparsity (e.g., [set0, empty, set2] → [handle0, 0, handle2])
+        descriptorLayoutHandles.clear();
+        descriptorLayoutHandles.resize(layouts.size(), 0);  // Initialize with 0 (no layout)
+
+        for (size_t setIndex = 0; setIndex < layouts.size(); ++setIndex) {
+            const auto& layout = layouts[setIndex];
+            if (!layout.bindings.empty()) {
+                LayoutHandle handle = manager->registerLayout(layout);
+                descriptorLayoutHandles[setIndex] = handle;
             }
         }
+
+        Log::info("Shader", "Registered {} descriptor layouts for shader '{}'",
+                 descriptorLayoutHandles.size(), name.c_str());
     }
 
-    Log::info("Shader", "Registered {} descriptor layouts for shader '{}' (reflection: {})",
-             descriptorLayoutHandles.size(), name.c_str(), hasFieldReflection ? "yes" : "no");
-
-    // Register push constants
-    auto pushConstants = helper.extractPushConstants();
-    if (!pushConstants.empty()) {
-        PushConstantDesc desc;
-        for (const auto& pc : pushConstants) {
-            desc.ranges.push_back(vk::PushConstantRange{pc.stageFlags, pc.offset, pc.size});
-        }
-        pushConstantHandle = manager->registerPushConstants(desc);
-        Log::info("Shader", "Registered push constants for shader '{}' (handle={})",
-                 name.c_str(), pushConstantHandle);
+    // Register push constants from reflection (even if no descriptor layouts)
+    if (!pushRanges.empty()) {
+        PushConstantDesc pcDesc;
+        pcDesc.ranges = pushRanges;
+        pushConstantHandle = manager->registerPushConstants(pcDesc);
+        Log::info("Shader", "Registered {} push constant range(s) for shader '{}'",
+                 pushRanges.size(), name.c_str());
     } else {
-        pushConstantHandle = 0;  // No push constants
+        pushConstantHandle = 0;
     }
 }
 

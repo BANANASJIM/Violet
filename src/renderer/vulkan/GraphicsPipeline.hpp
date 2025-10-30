@@ -93,6 +93,10 @@ public:
     vk::PipelineLayout getPipelineLayout() const override { return *pipelineLayout; }
     vk::Pipeline getPipeline() const { return *graphicsPipeline; }
 
+    // Shader access (for ShaderResourceBinding)
+    eastl::weak_ptr<Shader> getVertexShader() const { return vertShader; }
+    eastl::weak_ptr<Shader> getFragmentShader() const { return fragShader; }
+
 private:
     /**
      * @brief Build Vulkan pipeline from current shader references

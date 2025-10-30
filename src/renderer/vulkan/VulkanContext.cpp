@@ -215,6 +215,7 @@ void VulkanContext::createLogicalDevice() {
     // Vulkan 1.1 features for memory aliasing
     vk::PhysicalDeviceVulkan11Features features11;
     features11.pNext = &features13;
+    features11.shaderDrawParameters = VK_TRUE;  // Required for Slang SPIRV DrawParameters capability
 
     // Note: VK_KHR_dynamic_rendering_local_read is not supported on MoltenVK
     // If needed in the future, check for extension support before enabling
@@ -223,12 +224,17 @@ void VulkanContext::createLogicalDevice() {
     features12.pNext = &features11;
     features12.timelineSemaphore = VK_TRUE;
 
+    // Buffer device address (required for VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
+    features12.bufferDeviceAddress = VK_TRUE;
+
     // Bindless descriptor indexing features (part of Vulkan 1.2 core)
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.runtimeDescriptorArray = VK_TRUE;
     features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;  // For compute shaders
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;  // For compute shaders
 
     vk::DeviceCreateInfo createInfo;
     createInfo.pNext = &features12;
@@ -400,11 +406,15 @@ void VulkanContext::createAllocator() {
     allocatorInfo.instance = *instance;
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
 
+    // Enable advanced VMA features
+    allocatorInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT |
+                         VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+
     if (vmaCreateAllocator(&allocatorInfo, &allocator) != VK_SUCCESS) {
         throw RuntimeError("Failed to create VMA allocator");
     }
 
-    violet::Log::info("Renderer", "VMA allocator created");
+    violet::Log::info("Renderer", "VMA allocator created with budget tracking");
 }
 
 }

@@ -1,7 +1,6 @@
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include "resource/shader/SlangCompiler.hpp"
-#include "resource/shader/ReflectionHelper.hpp"
 #include "resource/shader/ShaderReflection.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
@@ -56,68 +55,247 @@ int main() {
     // Initialize compiler
     SlangCompiler compiler;
 
-    // Skip Test 1 and 2 (require non-existent test files)
-    Log::info("Test", "Skipping Test 1-2 (test files not available)");
+    // Skip Test 1-3 (test files not available or using deprecated ReflectionHelper)
+    Log::info("Test", "Skipping Test 1-3 (deprecated or unavailable)");
 
-    // Test 3: Simple Vertex Shader (no imports)
+    // Test 4: PBR Bindless Shader (with module imports)
     Log::info("Test", "");
-    Log::info("Test", "=== Test 3: Simple Vertex Shader (no imports) ===");
-    Shader::CreateInfo pbrVertInfo;
-    pbrVertInfo.name = "test_simple_vertex";
-    pbrVertInfo.filePath = "shaders/slang/test_simple.slang";
-    pbrVertInfo.entryPoint = "vertexMain";
-    pbrVertInfo.stage = Shader::Stage::Vertex;
-    pbrVertInfo.language = Shader::Language::Slang;
-    pbrVertInfo.includePaths.push_back("shaders/slang");
+    Log::info("Test", "=== Test 4: PBR Bindless Shader ===");
+    Shader::CreateInfo pbrBindlessVertInfo;
+    pbrBindlessVertInfo.name = "pbr_bindless_vertex";
+    pbrBindlessVertInfo.filePath = "shaders/slang/pbr_bindless.slang";
+    pbrBindlessVertInfo.entryPoint = "vertexMain";
+    pbrBindlessVertInfo.stage = Shader::Stage::Vertex;
+    pbrBindlessVertInfo.language = Shader::Language::Slang;
+    pbrBindlessVertInfo.includePaths.push_back("shaders/slang");
+    pbrBindlessVertInfo.includePaths.push_back("shaders");
 
-    auto result = compiler.compile(pbrVertInfo);
+    auto pbrBindlessResult = compiler.compile(pbrBindlessVertInfo);
 
-    if (!result.success) {
-        Log::error("Test", "PBR vertex compilation failed: {}", result.errorMessage.c_str());
+    if (!pbrBindlessResult.shader) {
+        Log::error("Test", "PBR bindless vertex compilation failed: {}", pbrBindlessResult.errorMessage.c_str());
         return 1;
     }
 
-    Log::info("Test", "PBR vertex compiled! SPIRV size: {} bytes", result.spirv.size() * 4);
+    Log::info("Test", "PBR bindless vertex compiled! SPIRV size: {} bytes",
+             pbrBindlessResult.shader->getSPIRV().size() * 4);
 
-    // Test reflection for PBR vertex
-    auto pbrReflection = compiler.getReflection();
-    if (pbrReflection) {
-        ReflectionHelper helper(pbrReflection);
-        auto descriptorLayouts = helper.extractDescriptorLayouts("pbr_vertex");
-        Log::info("Test", "PBR Vertex - Found {} descriptor set layouts", descriptorLayouts.size());
+    // Test reflection extraction from Shader object
+    const ShaderReflection* reflectionPtr = pbrBindlessResult.shader->getShaderReflection();
+    if (reflectionPtr) {
+        Log::info("Test", "Got reflection from shader");
 
-        for (size_t i = 0; i < descriptorLayouts.size(); ++i) {
-            const auto& layout = descriptorLayouts[i];
-            if (layout.bindings.empty()) continue;
+        const ShaderReflection& reflection = *reflectionPtr;
 
-            Log::info("Test", "  Set {}: name='{}', frequency={}, {} bindings",
-                i,
-                layout.name.c_str(),
-                static_cast<int>(layout.frequency),
-                layout.bindings.size());
+        Log::info("Test", "Reflection available!");
 
-            for (const auto& binding : layout.bindings) {
-                Log::info("Test", "    Binding {}: type={}, count={}, stages={}",
-                    binding.binding,
-                    static_cast<int>(binding.type),
-                    binding.count,
-                    static_cast<uint32_t>(binding.stages));
+        uint32_t totalResources = 0;
+        for (const auto& [set, resources] : reflection.getResourcesBySetMap()) {
+            totalResources += resources.size();
+        }
+
+        // Count buffers (resources with bufferLayoutIndex)
+        uint32_t bufferCount = 0;
+        for (const auto& res : reflection.getAllResources()) {
+            if (res.bufferLayoutIndex != ~0u) bufferCount++;
+        }
+
+        Log::info("Test", "Found {} total resources across all sets", totalResources);
+        Log::info("Test", "Found {} buffers", bufferCount);
+
+        for (const auto& [set, resources] : reflection.getResourcesBySetMap()) {
+            Log::info("Test", "  Set {}:", set);
+            for (const auto& res : resources) {
+                Log::info("Test", "    Resource '{}': binding={}, type={}",
+                         res.name.c_str(), res.binding, static_cast<int>(res.type));
             }
         }
 
-        auto pushConstants = helper.extractPushConstants();
-        Log::info("Test", "PBR Vertex - Found {} push constant ranges", pushConstants.size());
-        for (const auto& pc : pushConstants) {
-            Log::info("Test", "  Offset: {}, Size: {} bytes", pc.offset, pc.size);
+        // Print buffer field details
+        Log::info("Test", "");
+        Log::info("Test", "Buffer Field Details:");
+        for (const auto& res : reflection.getAllResources()) {
+            if (res.bufferLayoutIndex != ~0u) {
+                const auto* bufferPtr = reflection.getBufferLayout(res.bufferLayoutIndex);
+                if (bufferPtr) {
+                    const auto& buffer = *bufferPtr;
+                    Log::info("Test", "  Buffer '{}' (set={}, binding={}, size={}B):",
+                             buffer.name.c_str(), buffer.set, buffer.binding, buffer.totalSize);
+                    for (const auto& field : buffer.fields) {
+                        Log::info("Test", "    Field '{}': offset={}, size={}B, type={}",
+                                 field.name.c_str(), field.offset, field.size, static_cast<int>(field.type));
+                    }
+                }
+            }
         }
     }
 
+    // Test 5: PBR Bindless Fragment Shader
     Log::info("Test", "");
-    Log::info("Test", "Skipping Test 4-5 (require pbr_bindless.slang with module imports)");
+    Log::info("Test", "=== Test 5: PBR Bindless Fragment Shader ===");
+    Shader::CreateInfo pbrBindlessFragInfo;
+    pbrBindlessFragInfo.name = "pbr_bindless_fragment";
+    pbrBindlessFragInfo.filePath = "shaders/slang/pbr_bindless.slang";
+    pbrBindlessFragInfo.entryPoint = "fragmentMain";
+    pbrBindlessFragInfo.stage = Shader::Stage::Fragment;
+    pbrBindlessFragInfo.language = Shader::Language::Slang;
+    pbrBindlessFragInfo.includePaths.push_back("shaders/slang");
+    pbrBindlessFragInfo.includePaths.push_back("shaders");
+
+    auto pbrBindlessFragResult = compiler.compile(pbrBindlessFragInfo);
+
+    if (!pbrBindlessFragResult.shader) {
+        Log::error("Test", "PBR bindless fragment compilation failed: {}", pbrBindlessFragResult.errorMessage.c_str());
+        return 1;
+    }
+
+    Log::info("Test", "PBR bindless fragment compiled! SPIRV size: {} bytes",
+             pbrBindlessFragResult.shader->getSPIRV().size() * 4);
+
+    // Test reflection extraction from Shader object
+    const ShaderReflection* fragReflectionPtr = pbrBindlessFragResult.shader->getShaderReflection();
+    if (fragReflectionPtr) {
+        Log::info("Test", "Got reflection from shader");
+
+        const ShaderReflection& fragReflection = *fragReflectionPtr;
+
+        Log::info("Test", "Reflection available!");
+
+        uint32_t totalResources = 0;
+        for (const auto& [set, resources] : fragReflection.getResourcesBySetMap()) {
+            totalResources += resources.size();
+        }
+
+        // Count buffers (resources with bufferLayoutIndex)
+        uint32_t bufferCount = 0;
+        for (const auto& res : fragReflection.getAllResources()) {
+            if (res.bufferLayoutIndex != ~0u) bufferCount++;
+        }
+
+        Log::info("Test", "Found {} total resources across all sets", totalResources);
+        Log::info("Test", "Found {} buffers", bufferCount);
+
+        for (const auto& [set, resources] : fragReflection.getResourcesBySetMap()) {
+            Log::info("Test", "  Set {}:", set);
+            for (const auto& res : resources) {
+                Log::info("Test", "    Resource '{}': binding={}, type={}",
+                         res.name.c_str(), res.binding, static_cast<int>(res.type));
+            }
+        }
+
+        // Print buffer field details
+        Log::info("Test", "");
+        Log::info("Test", "Buffer Field Details:");
+        for (const auto& res : fragReflection.getAllResources()) {
+            if (res.bufferLayoutIndex != ~0u) {
+                const auto* bufferPtr = fragReflection.getBufferLayout(res.bufferLayoutIndex);
+                if (bufferPtr) {
+                    const auto& buffer = *bufferPtr;
+                    Log::info("Test", "  Buffer '{}' (set={}, binding={}, size={}B):",
+                             buffer.name.c_str(), buffer.set, buffer.binding, buffer.totalSize);
+                    for (const auto& field : buffer.fields) {
+                        Log::info("Test", "    Field '{}': offset={}, size={}B, type={}",
+                                 field.name.c_str(), field.offset, field.size, static_cast<int>(field.type));
+                    }
+                }
+            }
+        }
+    }
+
+    // Test 6: Pointer Invalidation Bug Test
+    Log::info("Test", "");
+    Log::info("Test", "=== Test 6: Pointer Invalidation Bug Test ===");
+
+    // Simulate the bug: Add multiple resources to trigger vector reallocation
+    ShaderReflection testReflection;
+
+    // Add first resource (e.g., sampler)
+    ReflectedResource sampler;
+    sampler.name = "texSampler";
+    sampler.type = vk::DescriptorType::eSampler;
+    sampler.set = 0;
+    sampler.binding = 2;
+    sampler.stages = vk::ShaderStageFlagBits::eCompute;
+    testReflection.addResource(sampler);
+
+    // Check initial lookup
+    const auto* found1 = testReflection.findResource("texSampler");
+    if (found1) {
+        Log::info("Test", "Initial lookup: '{}' -> type={} (expected={})",
+                 found1->name.c_str(), static_cast<uint32_t>(found1->type),
+                 static_cast<uint32_t>(vk::DescriptorType::eSampler));
+    }
+
+    // Add second resource (e.g., texture)
+    ReflectedResource texture;
+    texture.name = "equirectangularMap";
+    texture.type = vk::DescriptorType::eSampledImage;
+    texture.set = 0;
+    texture.binding = 0;
+    texture.stages = vk::ShaderStageFlagBits::eCompute;
+    testReflection.addResource(texture);
+
+    // Add third resource to trigger potential reallocation
+    ReflectedResource storageImage;
+    storageImage.name = "outputCubemap";
+    storageImage.type = vk::DescriptorType::eStorageImage;
+    storageImage.set = 0;
+    storageImage.binding = 1;
+    storageImage.stages = vk::ShaderStageFlagBits::eCompute;
+    testReflection.addResource(storageImage);
+
+    // Now lookup all resources again
+    Log::info("Test", "After adding 3 resources:");
+    const auto* foundSampler = testReflection.findResource("texSampler");
+    const auto* foundTexture = testReflection.findResource("equirectangularMap");
+    const auto* foundStorage = testReflection.findResource("outputCubemap");
+
+    bool testPassed = true;
+
+    if (foundSampler) {
+        bool correct = foundSampler->type == vk::DescriptorType::eSampler;
+        Log::info("Test", "  texSampler: type={} (expected={}) {}",
+                 static_cast<uint32_t>(foundSampler->type),
+                 static_cast<uint32_t>(vk::DescriptorType::eSampler),
+                 correct ? "✓" : "✗ WRONG!");
+        testPassed &= correct;
+    } else {
+        Log::error("Test", "  texSampler: NOT FOUND ✗");
+        testPassed = false;
+    }
+
+    if (foundTexture) {
+        bool correct = foundTexture->type == vk::DescriptorType::eSampledImage;
+        Log::info("Test", "  equirectangularMap: type={} (expected={}) {}",
+                 static_cast<uint32_t>(foundTexture->type),
+                 static_cast<uint32_t>(vk::DescriptorType::eSampledImage),
+                 correct ? "✓" : "✗ WRONG!");
+        testPassed &= correct;
+    } else {
+        Log::error("Test", "  equirectangularMap: NOT FOUND ✗");
+        testPassed = false;
+    }
+
+    if (foundStorage) {
+        bool correct = foundStorage->type == vk::DescriptorType::eStorageImage;
+        Log::info("Test", "  outputCubemap: type={} (expected={}) {}",
+                 static_cast<uint32_t>(foundStorage->type),
+                 static_cast<uint32_t>(vk::DescriptorType::eStorageImage),
+                 correct ? "✓" : "✗ WRONG!");
+        testPassed &= correct;
+    } else {
+        Log::error("Test", "  outputCubemap: NOT FOUND ✗");
+        testPassed = false;
+    }
+
+    if (!testPassed) {
+        Log::error("Test", "Test 6 FAILED: Pointer invalidation bug detected!");
+        return 1;
+    }
+
+    Log::info("Test", "Test 6 PASSED: All resources found correctly");
 
     Log::info("Test", "");
-    Log::info("Test", "NOTE: Descriptor auto-registration will be tested in main application");
-    Log::info("Test", "NOTE: Reflection-based descriptor update API will be tested in main application");
     Log::info("Test", "All Slang shader tests completed successfully!");
     return 0;
 }

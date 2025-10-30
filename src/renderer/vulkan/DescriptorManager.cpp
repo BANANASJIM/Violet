@@ -1,53 +1,16 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
-#include "renderer/vulkan/ShaderResources.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "resource/Texture.hpp"
-#include "resource/gpu/ResourceFactory.hpp"
-#include "resource/shader/Shader.hpp"
 #include "core/Log.hpp"
 #include <functional>
 #include <EASTL/algorithm.h>
 
 namespace violet {
 
-// ===== SamplerConfig Implementation =====
-
-size_t SamplerConfig::hash() const {
-    size_t h = 0;
-    h ^= std::hash<int>{}(static_cast<int>(magFilter)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(minFilter)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(addressModeU)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(addressModeV)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(addressModeW)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(mipmapMode)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<float>{}(minLod) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<float>{}(maxLod) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<bool>{}(anisotropyEnable) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<float>{}(maxAnisotropy) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(borderColor)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<bool>{}(compareEnable) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    h ^= std::hash<int>{}(static_cast<int>(compareOp)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-    return h;
-}
-
-bool SamplerConfig::operator==(const SamplerConfig& other) const {
-    return magFilter == other.magFilter &&
-           minFilter == other.minFilter &&
-           addressModeU == other.addressModeU &&
-           addressModeV == other.addressModeV &&
-           addressModeW == other.addressModeW &&
-           mipmapMode == other.mipmapMode &&
-           minLod == other.minLod &&
-           maxLod == other.maxLod &&
-           mipLodBias == other.mipLodBias &&
-           anisotropyEnable == other.anisotropyEnable &&
-           maxAnisotropy == other.maxAnisotropy &&
-           borderColor == other.borderColor &&
-           compareEnable == other.compareEnable &&
-           compareOp == other.compareOp;
-}
-
-// ===== DescriptorLayoutDesc Implementation =====
+// Pool size multipliers
+constexpr uint32_t POOL_SIZE_TRANSIENT = 200;
+constexpr uint32_t POOL_SIZE_STATIC = 10;
 
 LayoutHandle DescriptorLayoutDesc::hash() const {
     uint32_t h = 0;
@@ -57,11 +20,11 @@ LayoutHandle DescriptorLayoutDesc::hash() const {
     h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(flags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
     h ^= std::hash<bool>{}(isBindless) + 0x9e3779b9 + (h << 6) + (h >> 2);
 
-    // Hash each binding (包括per-binding flags)
+    // Hash each binding (excluding stages to allow merging for vertex+fragment shaders)
     for (const auto& binding : bindings) {
         h ^= std::hash<uint32_t>{}(binding.binding) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(static_cast<int>(binding.type)) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(binding.stages)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        // NOTE: stages excluded from hash to allow stage merging for graphics pipelines
         h ^= std::hash<uint32_t>{}(binding.count) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(binding.flags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
@@ -72,135 +35,68 @@ LayoutHandle DescriptorLayoutDesc::hash() const {
 PushConstantHandle PushConstantDesc::hash() const {
     uint32_t h = 0;
 
-    // Hash each push constant range
+    // Hash each push constant range (excluding stageFlags to allow merging for vertex+fragment shaders)
     for (const auto& range : ranges) {
         h ^= std::hash<uint32_t>{}(range.offset) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<uint32_t>{}(range.size) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint32_t>{}(static_cast<uint32_t>(range.stageFlags)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        // NOTE: stageFlags excluded from hash to allow stage merging for graphics pipelines
     }
 
-    return h != 0 ? h : 1;  // Ensure we never return 0 (reserved for "no push constants")
+    return h != 0 ? h : 1;
 }
 
-SamplerConfig SamplerConfig::getDefault(float maxAnisotropy) {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eLinear;
-    config.minFilter = vk::Filter::eLinear;
-    config.addressModeU = vk::SamplerAddressMode::eRepeat;
-    config.addressModeV = vk::SamplerAddressMode::eRepeat;
-    config.addressModeW = vk::SamplerAddressMode::eRepeat;
-    config.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    config.anisotropyEnable = true;
-    config.maxAnisotropy = maxAnisotropy;
-    return config;
+// ===== DescriptorResourceHandle Factory Methods =====
+
+DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(vk::Buffer buf, vk::DeviceSize offset, vk::DeviceSize range) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::Buffer;
+    handle.bufferData.buffer = buf;
+    handle.bufferData.offset = offset;
+    handle.bufferData.range = range;
+    return handle;
 }
 
-SamplerConfig SamplerConfig::getClampToEdge() {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eLinear;
-    config.minFilter = vk::Filter::eLinear;
-    config.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    config.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    config.anisotropyEnable = false;
-    config.maxAnisotropy = 1.0f;
-    return config;
+DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(const BufferResource& buf) {
+    return fromBuffer(buf.buffer, 0, VK_WHOLE_SIZE);
 }
 
-SamplerConfig SamplerConfig::getNearest() {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eNearest;
-    config.minFilter = vk::Filter::eNearest;
-    config.addressModeU = vk::SamplerAddressMode::eRepeat;
-    config.addressModeV = vk::SamplerAddressMode::eRepeat;
-    config.addressModeW = vk::SamplerAddressMode::eRepeat;
-    config.mipmapMode = vk::SamplerMipmapMode::eNearest;
-    config.anisotropyEnable = false;
-    config.maxAnisotropy = 1.0f;
-    return config;
+DescriptorResourceHandle DescriptorResourceHandle::fromTexture(Texture* tex) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::Texture;
+    handle.texture = tex;
+    return handle;
 }
 
-SamplerConfig SamplerConfig::getShadow() {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eLinear;
-    config.minFilter = vk::Filter::eLinear;
-    config.addressModeU = vk::SamplerAddressMode::eClampToBorder;
-    config.addressModeV = vk::SamplerAddressMode::eClampToBorder;
-    config.addressModeW = vk::SamplerAddressMode::eClampToBorder;
-    config.borderColor = vk::BorderColor::eFloatOpaqueWhite;
-    config.compareEnable = true;
-    config.compareOp = vk::CompareOp::eLessOrEqual;
-    config.anisotropyEnable = false;
-    config.maxAnisotropy = 1.0f;
-    return config;
+DescriptorResourceHandle DescriptorResourceHandle::fromSampledImage(vk::ImageView view, vk::ImageLayout layout) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::SampledImage;
+    handle.imageView = view;
+    handle.imageLayout = layout;
+    return handle;
 }
 
-SamplerConfig SamplerConfig::getCubemap() {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eLinear;
-    config.minFilter = vk::Filter::eLinear;
-    config.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    config.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    config.anisotropyEnable = false;
-    config.maxAnisotropy = 1.0f;
-    return config;
+DescriptorResourceHandle DescriptorResourceHandle::fromStorageImage(vk::ImageView view) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::ImageView;
+    handle.imageView = view;
+    handle.imageLayout = vk::ImageLayout::eGeneral;  // Storage images use General layout
+    return handle;
 }
 
-SamplerConfig SamplerConfig::getNearestClamp() {
-    SamplerConfig config;
-    config.magFilter = vk::Filter::eNearest;
-    config.minFilter = vk::Filter::eNearest;
-    config.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    config.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    config.mipmapMode = vk::SamplerMipmapMode::eNearest;
-    config.anisotropyEnable = false;
-    config.maxAnisotropy = 1.0f;
-    return config;
+DescriptorResourceHandle DescriptorResourceHandle::fromSampler(vk::Sampler samp) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::Sampler;
+    handle.sampler = samp;
+    return handle;
 }
 
-// Helper constructors for ResourceBindingDesc
-ResourceBindingDesc ResourceBindingDesc::storageBuffer(uint32_t binding, vk::Buffer buffer, vk::DeviceSize offset, vk::DeviceSize range) {
-    ResourceBindingDesc desc;
-    desc.binding = binding;
-    desc.type = vk::DescriptorType::eStorageBuffer;
-    desc.storageBufferInfo.buffer = buffer;
-    desc.storageBufferInfo.offset = offset;
-    desc.storageBufferInfo.range = range;
-    return desc;
-}
-
-ResourceBindingDesc ResourceBindingDesc::texture(uint32_t binding, Texture* texture) {
-    ResourceBindingDesc desc;
-    desc.binding = binding;
-    desc.type = vk::DescriptorType::eCombinedImageSampler;
-    desc.usesRawImageView = false;  // Using Texture*
-    desc.texturePtr = texture;
-    desc.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    return desc;
-}
-
-ResourceBindingDesc ResourceBindingDesc::storageImage(uint32_t binding, vk::ImageView imageView) {
-    ResourceBindingDesc desc;
-    desc.binding = binding;
-    desc.type = vk::DescriptorType::eStorageImage;
-    desc.storageImageView = imageView;
-    desc.imageLayout = vk::ImageLayout::eGeneral;
-    return desc;
-}
-
-ResourceBindingDesc ResourceBindingDesc::sampledImage(uint32_t binding, vk::ImageView imageView, vk::Sampler sampler) {
-    ResourceBindingDesc desc;
-    desc.binding = binding;
-    desc.type = vk::DescriptorType::eCombinedImageSampler;
-    desc.usesRawImageView = true;  // Using raw ImageView/Sampler
-    desc.imageInfo.imageView = imageView;
-    desc.imageInfo.sampler = sampler;
-    desc.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    return desc;
+DescriptorResourceHandle DescriptorResourceHandle::fromCombinedImageSampler(vk::ImageView view, vk::Sampler samp, vk::ImageLayout layout) {
+    DescriptorResourceHandle handle;
+    handle.type = Type::CombinedImageSampler;
+    handle.combinedData.imageView = view;
+    handle.combinedData.sampler = samp;
+    handle.imageLayout = layout;
+    return handle;
 }
 
 // DescriptorManager implementation
@@ -208,37 +104,25 @@ void DescriptorManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
     context = ctx;
     maxFrames = maxFramesInFlight;
 
+    samplerManager.init(context);
+
     violet::Log::info("Renderer", "DescriptorManager initialized with {} frames", maxFrames);
 }
 
 void DescriptorManager::cleanup() {
     auto device = context->getDevice();
 
-    for (auto& [hash, sampler] : samplerCache) {
-        device.destroySampler(sampler);
-    }
-    samplerCache.clear();
-    predefinedSamplers.clear();
-
-    if (materialDataEnabled && materialDataBuffer.buffer) {
-        ResourceFactory::destroyBuffer(context, materialDataBuffer);
-        materialDataEnabled = false;
-        materialDataMapped = nullptr;
-    }
+    samplerManager.cleanup();
 
     for (auto& [frequency, pools] : poolsByFrequency) {
         for (auto& poolInfo : pools) {
-            if (poolInfo.pool) {
-                device.destroyDescriptorPool(poolInfo.pool);
-            }
+            device.destroyDescriptorPool(poolInfo.pool);
         }
     }
     poolsByFrequency.clear();
 
     for (auto& [handle, layoutInfo] : layouts) {
-        if (layoutInfo.layout) {
-            device.destroyDescriptorSetLayout(layoutInfo.layout);
-        }
+        device.destroyDescriptorSetLayout(layoutInfo.layout);
     }
     layouts.clear();
     nameToHandle.clear();
@@ -249,12 +133,80 @@ void DescriptorManager::cleanup() {
 LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc) {
     LayoutHandle handle = desc.hash();
 
-    if (layouts.find(handle) != layouts.end()) {
-        violet::Log::debug("Renderer", "Descriptor layout '{}' (hash={}) already registered, reusing",
-                          desc.name.c_str(), handle);
+    auto existingIt = layouts.find(handle);
+    if (existingIt != layouts.end()) {
+        // Layout exists, check if we need to merge stage flags
+        LayoutInfo& existingInfo = existingIt->second;
+        bool needsUpdate = false;
+
+        // Merge stage flags for each binding
+        for (const auto& newBinding : desc.bindings) {
+            for (auto& existingBinding : existingInfo.bindings) {
+                if (existingBinding.binding == newBinding.binding) {
+                    vk::ShaderStageFlags oldStages = existingBinding.stages;
+                    existingBinding.stages |= newBinding.stages;  // Merge stages
+                    if (oldStages != existingBinding.stages) {
+                        needsUpdate = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (needsUpdate) {
+            // Destroy old layout and create new one with merged stages
+            context->getDevice().destroyDescriptorSetLayout(existingInfo.layout);
+
+            // Create new Vulkan layout with merged stages
+            eastl::vector<vk::DescriptorSetLayoutBinding> vkBindings;
+            for (const auto& binding : existingInfo.bindings) {
+                vk::DescriptorSetLayoutBinding vkBinding;
+                vkBinding.binding = binding.binding;
+                vkBinding.descriptorType = binding.type;
+                vkBinding.descriptorCount = binding.count;
+                vkBinding.stageFlags = binding.stages;  // Use merged stages
+                vkBinding.pImmutableSamplers = nullptr;
+                vkBindings.push_back(vkBinding);
+            }
+
+            // Collect per-binding flags
+            eastl::vector<vk::DescriptorBindingFlags> bindingFlagsArray;
+            bindingFlagsArray.reserve(existingInfo.bindings.size());
+            for (const auto& binding : existingInfo.bindings) {
+                bindingFlagsArray.push_back(binding.flags);
+            }
+
+            // Create layout with per-binding flags
+            vk::DescriptorSetLayoutCreateInfo layoutInfo;
+            layoutInfo.flags = existingInfo.createFlags;
+            layoutInfo.bindingCount = static_cast<uint32_t>(vkBindings.size());
+            layoutInfo.pBindings = vkBindings.data();
+
+            // Chain binding flags if any bindless bindings exist
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo;
+            if (desc.isBindless && !bindingFlagsArray.empty()) {
+                bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlagsArray.size());
+                bindingFlagsInfo.pBindingFlags = bindingFlagsArray.data();
+                layoutInfo.pNext = &bindingFlagsInfo;
+            }
+
+            existingInfo.layout = context->getDevice().createDescriptorSetLayout(layoutInfo);
+
+            violet::Log::info("Renderer", "Merged stage flags for descriptor layout '{}' (hash={})", desc.name.c_str(), handle);
+        } else {
+            violet::Log::debug("Renderer", "Descriptor layout '{}' (hash={}) already registered with same stages, reusing",
+                              desc.name.c_str(), handle);
+        }
+
+        // Store name->handle mapping even when reusing (for legacy API)
+        if (!desc.name.empty()) {
+            nameToHandle[desc.name] = handle;
+        }
+
         return handle;
     }
 
+    // New layout - create from scratch
     eastl::vector<vk::DescriptorSetLayoutBinding> vkBindings;
     eastl::vector<vk::DescriptorPoolSize> poolSizes;
 
@@ -304,12 +256,13 @@ LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc)
 
     vk::DescriptorSetLayout layout = context->getDevice().createDescriptorSetLayout(layoutInfo);
 
-    // Store layout info
+    // Store layout info including original bindings for future merging
     LayoutInfo info;
     info.layout = layout;
     info.frequency = desc.frequency;
     info.poolSizes = poolSizes;
     info.createFlags = desc.flags;
+    info.bindings = desc.bindings;  // Store bindings for stage merging
     layouts[handle] = info;
 
     // Store name->handle mapping for legacy API
@@ -322,7 +275,106 @@ LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc)
     return handle;
 }
 
-vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle, uint32_t frameIndex) {
+// ===== Set Group Management (frequency-based allocation) =====
+
+SetGroupHandle DescriptorManager::allocateSetGroup(LayoutHandle layoutHandle) {
+    auto it = layouts.find(layoutHandle);
+    if (it == layouts.end()) {
+        violet::Log::error("DescriptorManager", "Layout handle {} not found", layoutHandle);
+        return 0;
+    }
+
+    const LayoutInfo& layoutInfo = it->second;
+    UpdateFrequency frequency = layoutInfo.frequency;
+
+    // Determine how many sets to allocate based on frequency
+    uint32_t setCount = (frequency == UpdateFrequency::PerFrame) ? maxFrames : 1;
+
+    // Get pool for this frequency
+    vk::DescriptorPool pool = getOrCreatePool(frequency);
+
+    // Allocate all sets in a single batch from the pool
+    eastl::vector<vk::DescriptorSetLayout> layouts(setCount, layoutInfo.layout);
+    vk::DescriptorSetAllocateInfo allocInfo;
+    allocInfo.descriptorPool = pool;
+    allocInfo.descriptorSetCount = setCount;
+    allocInfo.pSetLayouts = layouts.data();
+
+    eastl::vector<vk::DescriptorSet> sets;
+    try {
+        auto stdSets = context->getDevice().allocateDescriptorSets(allocInfo);
+        // Manually copy std::vector to eastl::vector (iterator tags incompatible)
+        sets.reserve(stdSets.size());
+        for (const auto& set : stdSets) {
+            sets.push_back(set);
+        }
+    } catch (const vk::SystemError& e) {
+        violet::Log::error("DescriptorManager", "Failed to allocate {} descriptor sets: {}", setCount, e.what());
+        return 0;
+    }
+
+    // Update pool remaining sets count
+    auto& pools = poolsByFrequency[frequency];
+    for (auto& poolInfo : pools) {
+        if (poolInfo.pool == pool) {
+            poolInfo.remainingSets -= setCount;
+            break;
+        }
+    }
+
+    // Create set group and store it
+    DescriptorSetGroup group;
+    group.sets = eastl::move(sets);
+    group.layoutHandle = layoutHandle;
+    group.frequency = frequency;
+
+    SetGroupHandle handle = nextSetGroupHandle++;
+    setGroups[handle] = eastl::move(group);
+
+    violet::Log::debug("DescriptorManager", "Allocated set group {} with {} set(s) from pool (frequency: {})",
+                      handle, setCount, static_cast<int>(frequency));
+
+    return handle;
+}
+
+vk::DescriptorSet DescriptorManager::getSet(SetGroupHandle handle, uint32_t frameIndex) const {
+    auto it = setGroups.find(handle);
+    if (it == setGroups.end()) {
+        violet::Log::error("DescriptorManager", "Set group handle {} not found", handle);
+        return nullptr;
+    }
+
+    const DescriptorSetGroup& group = it->second;
+
+    // For PerFrame, return the set for the specified frame
+    if (group.frequency == UpdateFrequency::PerFrame) {
+        if (frameIndex >= group.sets.size()) {
+            violet::Log::error("DescriptorManager", "Frame index {} out of range for set group {} (size: {})",
+                              frameIndex, handle, group.sets.size());
+            return nullptr;
+        }
+        return group.sets[frameIndex];
+    }
+
+    // For other frequencies, always return the single set
+    return group.sets[0];
+}
+
+void DescriptorManager::freeSetGroup(SetGroupHandle handle) {
+    auto it = setGroups.find(handle);
+    if (it == setGroups.end()) {
+        violet::Log::warn("DescriptorManager", "Attempted to free non-existent set group {}", handle);
+        return;
+    }
+
+    // Note: Descriptor sets are pool-allocated and will be freed when pool is destroyed
+    // We just remove the group from our tracking map
+    setGroups.erase(it);
+
+    violet::Log::debug("DescriptorManager", "Freed set group {}", handle);
+}
+
+vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle) {
     auto it = layouts.find(handle);
     if (it == layouts.end()) {
         violet::Log::error("Renderer", "Descriptor layout handle {} not found", handle);
@@ -332,7 +384,8 @@ vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle, uint32_t f
     const LayoutInfo& layoutInfo = it->second;
     vk::DescriptorPool pool = getOrCreatePool(layoutInfo.frequency);
 
-    // Allocate descriptor set
+    // Allocate single descriptor set
+    // Note: For PerFrame resources, ShaderResources manages dynamic offsets at bind time
     vk::DescriptorSetLayout layoutArray[] = {layoutInfo.layout};
     vk::DescriptorSetAllocateInfo allocInfo;
     allocInfo.descriptorPool = pool;
@@ -353,10 +406,85 @@ vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle, uint32_t f
     return sets[0];
 }
 
+// ===== High-Level Automatic Binding Interface =====
 
-void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<ResourceBindingDesc>& bindings) {
+void DescriptorManager::bindResources(vk::CommandBuffer cmd, ShaderResourceBinding& binding, uint32_t frameIndex) {
+    // 1. Validate binding
+    if (!binding.isInitialized()) {
+        violet::Log::error("DescriptorManager", "Cannot bind uninitialized ShaderResourceBinding");
+        return;
+    }
+
+    LayoutHandle layoutHandle = binding.getLayoutHandle();
+    if (layoutHandle == 0) {
+        violet::Log::error("DescriptorManager", "ShaderResourceBinding has invalid layout handle");
+        return;
+    }
+
+    // 2. Allocate set group if not already allocated
+    SetGroupHandle setGroupHandle = binding.getSetGroupHandle();
+    if (setGroupHandle == 0) {
+        setGroupHandle = allocateSetGroup(layoutHandle);
+        binding.setSetGroupHandle(setGroupHandle);
+        violet::Log::debug("DescriptorManager", "Allocated set group {} for binding (layout {})",
+                          setGroupHandle, layoutHandle);
+    }
+
+    // 3. Update descriptor set if dirty
+    if (binding.isDirty()) {
+        const ShaderReflection* reflection = binding.getShaderReflection();
+        if (!reflection) {
+            violet::Log::error("DescriptorManager", "Cannot update binding: shader reflection not available");
+            return;
+        }
+
+        updateSetFromBinding(setGroupHandle, binding, *reflection, frameIndex);
+        binding.clearDirty();
+    }
+
+    // 4. Bind descriptor set to command buffer
+    vk::DescriptorSet set = getSet(setGroupHandle, frameIndex);
+    vk::PipelineLayout pipelineLayout = binding.getPipelineLayout();
+    uint32_t setIndex = binding.getSetIndex();
+
+    // Auto-detect compute vs graphics
+    vk::PipelineBindPoint bindPoint = binding.getComputePipeline() ?
+        vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
+
+    cmd.bindDescriptorSets(
+        bindPoint,
+        pipelineLayout,
+        setIndex,
+        1,
+        &set,
+        0, nullptr
+    );
+
+    violet::Log::debug("DescriptorManager", "Bound descriptor set for binding at set index {} ({})",
+                      setIndex, bindPoint == vk::PipelineBindPoint::eCompute ? "compute" : "graphics");
+}
+
+// ===== Reflection-Driven Resource Binding =====
+
+void DescriptorManager::updateSetFromBinding(SetGroupHandle handle, const ShaderResourceBinding& binding,
+                                              const ShaderReflection& reflection, uint32_t frameIndex) {
+    // Get the descriptor set for this frame from the set group
+    vk::DescriptorSet set = getSet(handle, frameIndex);
     if (!set) {
-        violet::Log::error("Renderer", "Cannot update null descriptor set");
+        violet::Log::error("DescriptorManager", "Failed to get descriptor set from group {} for frame {}",
+                          handle, frameIndex);
+        return;
+    }
+
+    // Delegate to existing updateSet implementation
+    updateSet(set, reflection, binding.getResources());
+}
+
+void DescriptorManager::updateSet(vk::DescriptorSet set,
+                                   const ShaderReflection& reflection,
+                                   const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot update null descriptor set");
         return;
     }
 
@@ -365,72 +493,308 @@ void DescriptorManager::updateSet(vk::DescriptorSet set, const eastl::vector<Res
     eastl::vector<vk::DescriptorImageInfo> imageInfos;
 
     // Reserve space to avoid reallocation
-    bufferInfos.reserve(bindings.size());
-    imageInfos.reserve(bindings.size());
-    writes.reserve(bindings.size());
+    writes.reserve(resources.size());
+    bufferInfos.reserve(resources.size());
+    imageInfos.reserve(resources.size());
 
-    for (const auto& binding : bindings) {
+    for (const auto& [name, resource] : resources) {
+        // 1. Look up reflection info by name
+        const auto* reflectedRes = reflection.findResource(name);
+        if (!reflectedRes) {
+            violet::Log::warn("DescriptorManager", "Resource '{}' not found in shader reflection", name.c_str());
+            continue;
+        }
+
+        // Debug: Log reflected resource details
+        violet::Log::debug("DescriptorManager", "Found reflected resource '{}': binding={}, type={} ({})",
+                          name.c_str(), reflectedRes->binding, static_cast<uint32_t>(reflectedRes->type),
+                          vk::to_string(reflectedRes->type).c_str());
+
+        // 2. Verify resource type matches reflection
+        vk::DescriptorType expectedType = reflectedRes->type;
+        vk::DescriptorType actualType = expectedType;
+
+        // Map DescriptorResourceHandle type to DescriptorType
+        switch (resource.type) {
+            case DescriptorResourceHandle::Type::Buffer:
+                // expectedType already set from reflection (eUniformBuffer or eStorageBuffer)
+                break;
+            case DescriptorResourceHandle::Type::Texture:
+                actualType = vk::DescriptorType::eCombinedImageSampler;
+                break;
+            case DescriptorResourceHandle::Type::SampledImage:
+                actualType = vk::DescriptorType::eSampledImage;
+                break;
+            case DescriptorResourceHandle::Type::ImageView:
+                actualType = vk::DescriptorType::eStorageImage;
+                break;
+            case DescriptorResourceHandle::Type::Sampler:
+                actualType = vk::DescriptorType::eSampler;
+                break;
+            case DescriptorResourceHandle::Type::CombinedImageSampler:
+                actualType = vk::DescriptorType::eCombinedImageSampler;
+                break;
+        }
+
+        // For buffers, we don't know the exact type from DescriptorResourceHandle alone, trust reflection
+        if (resource.type != DescriptorResourceHandle::Type::Buffer && actualType != expectedType) {
+            violet::Log::error("DescriptorManager", "Resource '{}' type mismatch: expected {}, got {}",
+                              name.c_str(), vk::to_string(expectedType).c_str(), vk::to_string(actualType).c_str());
+            continue;
+        }
+
+        // 3. Create WriteDescriptorSet
         vk::WriteDescriptorSet write;
         write.dstSet = set;
-        write.dstBinding = binding.binding;
+        write.dstBinding = reflectedRes->binding;
         write.dstArrayElement = 0;
         write.descriptorCount = 1;
-        write.descriptorType = binding.type;
+        write.descriptorType = expectedType;
 
-        switch (binding.type) {
-            case vk::DescriptorType::eUniformBuffer: {
-                // UniformBuffer class removed - use ShaderResources API instead
-                violet::Log::error("DescriptorManager",
-                    "eUniformBuffer type no longer supported in ResourceBindingDesc. Use ShaderResources API.");
+        // 4. Fill descriptor info based on resource type
+        switch (resource.type) {
+            case DescriptorResourceHandle::Type::Buffer: {
+                vk::DescriptorBufferInfo bufferInfo;
+                bufferInfo.buffer = resource.bufferData.buffer;
+                bufferInfo.offset = resource.bufferData.offset;
+                bufferInfo.range = resource.bufferData.range;
+                bufferInfos.push_back(bufferInfo);
+                write.pBufferInfo = &bufferInfos.back();
                 break;
             }
-            case vk::DescriptorType::eCombinedImageSampler: {
-                vk::DescriptorImageInfo imageInfo;
-                // Check usesRawImageView flag to distinguish between Texture* and raw ImageView/Sampler
-                if (!binding.usesRawImageView && binding.texturePtr) {
-                    // Use Texture*
-                    imageInfo.imageLayout = binding.imageLayout;
-                    imageInfo.imageView = binding.texturePtr->getImageView();
-                    imageInfo.sampler = binding.texturePtr->getSampler();
-                } else {
-                    // Use raw ImageView/Sampler
-                    imageInfo.imageLayout = binding.imageLayout;
-                    imageInfo.imageView = binding.imageInfo.imageView;
-                    imageInfo.sampler = binding.imageInfo.sampler;
+
+            case DescriptorResourceHandle::Type::Texture: {
+                if (!resource.texture) {
+                    violet::Log::error("DescriptorManager", "Resource '{}' has null texture", name.c_str());
+                    continue;
                 }
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.texture->getImageView();
+                imageInfo.sampler = resource.texture->getSampler();
                 imageInfos.push_back(imageInfo);
                 write.pImageInfo = &imageInfos.back();
                 break;
             }
-            case vk::DescriptorType::eStorageImage: {
+
+            case DescriptorResourceHandle::Type::SampledImage: {
                 vk::DescriptorImageInfo imageInfo;
-                imageInfo.imageLayout = binding.imageLayout;
-                imageInfo.imageView = binding.storageImageView;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.imageView;
+                imageInfo.sampler = nullptr;  // Separate sampler binding
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::ImageView: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.imageView;
                 imageInfo.sampler = nullptr;
                 imageInfos.push_back(imageInfo);
                 write.pImageInfo = &imageInfos.back();
                 break;
             }
-            case vk::DescriptorType::eStorageBuffer: {
-                vk::DescriptorBufferInfo bufferInfo;
-                bufferInfo.buffer = binding.storageBufferInfo.buffer;
-                bufferInfo.offset = binding.storageBufferInfo.offset;
-                bufferInfo.range = binding.storageBufferInfo.range;
-                bufferInfos.push_back(bufferInfo);
-                write.pBufferInfo = &bufferInfos.back();
+
+            case DescriptorResourceHandle::Type::Sampler: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = vk::ImageLayout::eUndefined;
+                imageInfo.imageView = nullptr;
+                imageInfo.sampler = resource.sampler;
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
                 break;
             }
+
+            case DescriptorResourceHandle::Type::CombinedImageSampler: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.combinedData.imageView;
+                imageInfo.sampler = resource.combinedData.sampler;
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
             default:
-                violet::Log::warn("Renderer", "Unsupported descriptor type in updateSet");
+                violet::Log::warn("DescriptorManager", "Unsupported resource handle type for '{}'", name.c_str());
                 continue;
         }
 
         writes.push_back(write);
     }
 
+    // 5. Batch update all resources in one Vulkan call
     if (!writes.empty()) {
-        context->getDevice().updateDescriptorSets(static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        context->getDevice().updateDescriptorSets(writes, {});
+        violet::Log::debug("DescriptorManager", "Batched update of {} descriptor(s)", writes.size());
     }
+}
+
+void DescriptorManager::bindBuffer(vk::DescriptorSet set, const eastl::string& resourceName,
+                                   const BufferResource& buffer, const ShaderReflection& reflection) {
+    const auto* resource = reflection.findResource(resourceName);
+    if (!resource) {
+        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
+        return;
+    }
+
+    if (resource->type != vk::DescriptorType::eUniformBuffer &&
+        resource->type != vk::DescriptorType::eStorageBuffer) {
+        violet::Log::error("DescriptorManager", "Resource '{}' is not a buffer (type={})",
+                          resourceName.c_str(), vk::to_string(resource->type).c_str());
+        return;
+    }
+
+    bindBuffer(set, resource->binding, buffer, resource->type);
+}
+
+void DescriptorManager::bindTexture(vk::DescriptorSet set, const eastl::string& resourceName,
+                                   Texture* texture, const ShaderReflection& reflection) {
+    const auto* resource = reflection.findResource(resourceName);
+    if (!resource) {
+        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
+        return;
+    }
+
+    if (resource->type != vk::DescriptorType::eCombinedImageSampler &&
+        resource->type != vk::DescriptorType::eSampledImage) {
+        violet::Log::error("DescriptorManager", "Resource '{}' is not a texture (type={})",
+                          resourceName.c_str(), vk::to_string(resource->type).c_str());
+        return;
+    }
+
+    bindTexture(set, resource->binding, texture);
+}
+
+void DescriptorManager::bindStorageImage(vk::DescriptorSet set, const eastl::string& resourceName,
+                                         vk::ImageView imageView, const ShaderReflection& reflection) {
+    const auto* resource = reflection.findResource(resourceName);
+    if (!resource) {
+        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
+        return;
+    }
+
+    if (resource->type != vk::DescriptorType::eStorageImage) {
+        violet::Log::error("DescriptorManager", "Resource '{}' is not a storage image (type={})",
+                          resourceName.c_str(), vk::to_string(resource->type).c_str());
+        return;
+    }
+
+    bindStorageImage(set, resource->binding, imageView);
+}
+
+// ===== Direct Resource Binding =====
+
+void DescriptorManager::bindBuffer(vk::DescriptorSet set, uint32_t binding,
+                                   const BufferResource& buffer, vk::DescriptorType type,
+                                   vk::DeviceSize offset, vk::DeviceSize range) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot bind buffer to null descriptor set");
+        return;
+    }
+
+    if (type != vk::DescriptorType::eUniformBuffer && type != vk::DescriptorType::eStorageBuffer) {
+        violet::Log::error("DescriptorManager", "Invalid descriptor type for buffer binding");
+        return;
+    }
+
+    vk::DescriptorBufferInfo bufferInfo;
+    bufferInfo.buffer = buffer.buffer;
+    bufferInfo.offset = offset;
+    bufferInfo.range = range;
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = type;
+    write.pBufferInfo = &bufferInfo;
+
+    context->getDevice().updateDescriptorSets({write}, {});
+}
+
+void DescriptorManager::bindTexture(vk::DescriptorSet set, uint32_t binding, Texture* texture) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot bind texture to null descriptor set");
+        return;
+    }
+
+    if (!texture) {
+        violet::Log::error("DescriptorManager", "Cannot bind null texture");
+        return;
+    }
+
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    imageInfo.imageView = texture->getImageView();
+    imageInfo.sampler = texture->getSampler();
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
+
+    context->getDevice().updateDescriptorSets({write}, {});
+}
+
+void DescriptorManager::bindStorageImage(vk::DescriptorSet set, uint32_t binding, vk::ImageView imageView) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot bind storage image to null descriptor set");
+        return;
+    }
+
+    if (!imageView) {
+        violet::Log::error("DescriptorManager", "Cannot bind null image view");
+        return;
+    }
+
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eGeneral;
+    imageInfo.imageView = imageView;
+    imageInfo.sampler = nullptr;
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eStorageImage;
+    write.pImageInfo = &imageInfo;
+
+    context->getDevice().updateDescriptorSets({write}, {});
+}
+
+void DescriptorManager::bindSampler(vk::DescriptorSet set, uint32_t binding, vk::Sampler sampler) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot bind sampler to null descriptor set");
+        return;
+    }
+
+    if (!sampler) {
+        violet::Log::error("DescriptorManager", "Cannot bind null sampler");
+        return;
+    }
+
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eUndefined;
+    imageInfo.imageView = nullptr;
+    imageInfo.sampler = sampler;
+
+    vk::WriteDescriptorSet write;
+    write.dstSet = set;
+    write.dstBinding = binding;
+    write.dstArrayElement = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eSampler;
+    write.pImageInfo = &imageInfo;
+
+    context->getDevice().updateDescriptorSets({write}, {});
 }
 
 vk::DescriptorSetLayout DescriptorManager::getLayout(LayoutHandle handle) const {
@@ -470,7 +834,7 @@ eastl::vector<vk::DescriptorSet> DescriptorManager::allocateSets(const eastl::st
     sets.reserve(count);
 
     for (uint32_t i = 0; i < count; ++i) {
-        sets.push_back(allocateSet(handle, i % maxFrames));
+        sets.push_back(allocateSet(handle));
     }
 
     return sets;
@@ -490,9 +854,9 @@ bool DescriptorManager::hasLayout(const eastl::string& layoutName) const {
     return nameToHandle.find(layoutName) != nameToHandle.end();
 }
 
-void DescriptorManager::initBindless(uint32_t maxTextures) {
-    if (!hasLayout("Bindless")) {
-        violet::Log::error("Renderer", "Bindless layout not registered - call registerLayout() first");
+void DescriptorManager::initBindless(uint32_t maxTextures, LayoutHandle bindlessLayoutHandle) {
+    if (!hasLayout(bindlessLayoutHandle)) {
+        violet::Log::error("Renderer", "Bindless layout handle {} not registered", bindlessLayoutHandle);
         return;
     }
 
@@ -518,16 +882,34 @@ void DescriptorManager::initBindless(uint32_t maxTextures) {
         bindlessCubemapFreeIndices.push_back(i);
     }
 
-    // Allocate bindless descriptor set (using legacy API)
-    auto it = nameToHandle.find("Bindless");
-    if (it != nameToHandle.end()) {
-        bindlessSet = allocateSet(it->second, 0);
-        bindlessEnabled = true;
-    } else {
-        violet::Log::error("Renderer", "Bindless layout not found in nameToHandle mapping");
-    }
+    // Allocate bindless descriptor set using the provided layout handle
+    bindlessSet = allocateSet(bindlessLayoutHandle);
+    bindlessEnabled = true;
 
     violet::Log::info("Renderer", "DescriptorManager bindless initialized with {} max 2D textures and {} max cubemaps", maxTextures, bindlessMaxCubemaps);
+}
+
+void DescriptorManager::initBindlessSamplers() {
+    if (!bindlessEnabled) {
+        violet::Log::error("Renderer", "Bindless not enabled - call initBindless() first");
+        return;
+    }
+
+    // Bind global samplers to bindless set (Set 1)
+    // Based on pbr_bindless.slang bindings:
+    // - Binding 2: linearSampler
+    // - Binding 3: nearestSampler
+    // - Binding 4: shadowSampler
+
+    vk::Sampler linearSampler = samplerManager.getSampler(SamplerType::Default);
+    vk::Sampler nearestSampler = samplerManager.getSampler(SamplerType::Nearest);
+    vk::Sampler shadowSampler = samplerManager.getSampler(SamplerType::Shadow);
+
+    bindSampler(bindlessSet, 2, linearSampler);
+    bindSampler(bindlessSet, 3, nearestSampler);
+    bindSampler(bindlessSet, 4, shadowSampler);
+
+    violet::Log::info("Renderer", "Initialized bindless global samplers (linear, nearest, shadow)");
 }
 
 uint32_t DescriptorManager::allocateBindlessTexture(Texture* texture) {
@@ -546,23 +928,7 @@ uint32_t DescriptorManager::allocateBindlessTexture(Texture* texture) {
     bindlessFreeIndices.pop_back();
 
     bindlessTextureSlots[index] = texture;
-
-    // Update descriptor set
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    imageInfo.imageView = texture->getImageView();
-    imageInfo.sampler = texture->getSampler();
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = bindlessSet;
-    write.dstBinding = 0;
-    write.dstArrayElement = index;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-
-    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
+    updateBindlessDescriptor(texture, 0, index);
     return index;
 }
 
@@ -589,22 +955,7 @@ uint32_t DescriptorManager::allocateBindlessTextureAt(Texture* texture, uint32_t
         bindlessFreeIndices.erase(it);
     }
 
-    // 更新descriptor set
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    imageInfo.imageView = texture->getImageView();
-    imageInfo.sampler = texture->getSampler();
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = bindlessSet;
-    write.dstBinding = 0;
-    write.dstArrayElement = index;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-
-    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
+    updateBindlessDescriptor(texture, 0, index);
     return index;
 }
 
@@ -639,23 +990,7 @@ uint32_t DescriptorManager::allocateBindlessCubemap(Texture* cubemapTexture) {
     bindlessCubemapFreeIndices.pop_back();
 
     bindlessCubemapSlots[index] = cubemapTexture;
-
-    // Update descriptor set (binding 1 for cubemaps)
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    imageInfo.imageView = cubemapTexture->getImageView();
-    imageInfo.sampler = cubemapTexture->getSampler();
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = bindlessSet;
-    write.dstBinding = 1;  // Cubemaps use binding 1
-    write.dstArrayElement = index;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-
-    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
+    updateBindlessDescriptor(cubemapTexture, 1, index);
     return index;
 }
 
@@ -679,15 +1014,10 @@ vk::DescriptorSet DescriptorManager::getBindlessSet() const {
 }
 
 void DescriptorManager::createPool(UpdateFrequency frequency) {
-    // Determine pool size based on frequency
-    uint32_t poolSizeMultiplier;
-    switch (frequency) {
-        case UpdateFrequency::PerFrame:   poolSizeMultiplier = POOL_SIZE_PER_FRAME; break;
-        case UpdateFrequency::PerPass:    poolSizeMultiplier = POOL_SIZE_PER_PASS; break;
-        case UpdateFrequency::PerMaterial: poolSizeMultiplier = POOL_SIZE_PER_MATERIAL; break;
-        case UpdateFrequency::Static:     poolSizeMultiplier = POOL_SIZE_STATIC; break;
-        default:                          poolSizeMultiplier = POOL_SIZE_PER_MATERIAL; break;
-    }
+    // Two pool size categories: transient (frequently updated) and static (rarely updated)
+    uint32_t poolSizeMultiplier = (frequency == UpdateFrequency::Static)
+        ? POOL_SIZE_STATIC
+        : POOL_SIZE_TRANSIENT;
 
     // Collect pool sizes from all layouts with this frequency
     eastl::vector<vk::DescriptorPoolSize> poolSizes;
@@ -706,6 +1036,34 @@ void DescriptorManager::createPool(UpdateFrequency frequency) {
                     poolSizes.push_back({size.type, size.descriptorCount * poolSizeMultiplier * maxFrames});
                 }
             }
+        }
+    }
+
+    // Pre-allocate common descriptor types to handle late shader registration
+    // This ensures pools can accommodate compute shaders that register during pipeline init
+    const eastl::vector<vk::DescriptorType> commonTypes = {
+        vk::DescriptorType::eUniformBuffer,
+        vk::DescriptorType::eStorageBuffer,
+        vk::DescriptorType::eSampledImage,         // For separate samplers (Slang default)
+        vk::DescriptorType::eSampler,              // For separate samplers
+        vk::DescriptorType::eStorageImage,         // For compute shaders
+        vk::DescriptorType::eCombinedImageSampler  // For legacy/transition period
+    };
+
+    // Add common types if not already present, with conservative allocation
+    uint32_t commonTypeCount = poolSizeMultiplier * maxFrames * 4;  // 4 descriptors per type as baseline
+    for (auto commonType : commonTypes) {
+        bool found = false;
+        for (const auto& poolSize : poolSizes) {
+            if (poolSize.type == commonType) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            poolSizes.push_back({commonType, commonTypeCount});
+            violet::Log::debug("DescriptorManager", "Pre-allocated {} descriptors of type {} for frequency {}",
+                              commonTypeCount, static_cast<int>(commonType), static_cast<int>(frequency));
         }
     }
 
@@ -768,252 +1126,24 @@ vk::DescriptorPool DescriptorManager::getOrCreatePool(UpdateFrequency frequency)
     return poolsByFrequency[frequency].back().pool;
 }
 
-// Material data SSBO management
-bool DescriptorManager::initMaterialDataBuffer(uint32_t maxMaterials) {
-    if (!hasLayout("MaterialData")) {
-        violet::Log::error("Renderer", "MaterialData layout not registered - call registerLayout() first");
-        return false;
-    }
-
-    maxMaterialData = maxMaterials;
-    materialDataSlots.resize(maxMaterials);
-    materialDataFreeIndices.reserve(maxMaterials);
-    for (uint32_t i = 0; i < maxMaterials; ++i) {
-        materialDataFreeIndices.push_back(i);
-    }
-
-    // Create SSBO using ResourceFactory
-    BufferInfo bufferInfo{
-        .size = sizeof(MaterialData) * maxMaterials,
-        .usage = vk::BufferUsageFlagBits::eStorageBuffer,
-        .memoryUsage = MemoryUsage::CPU_TO_GPU,
-        .debugName = "MaterialDataSSBO"
-    };
-    materialDataBuffer = ResourceFactory::createBuffer(context, bufferInfo);
-
-    // Get persistent mapped pointer from VMA
-    materialDataMapped = materialDataBuffer.mappedData;
-    if (!materialDataMapped) {
-        violet::Log::error("Renderer", "Failed to get mapped pointer for MaterialDataSSBO");
-        return false;
-    }
-
-    // Allocate descriptor set (using legacy API)
-    auto it = nameToHandle.find("MaterialData");
-    if (it == nameToHandle.end()) {
-        violet::Log::error("Renderer", "MaterialData layout not found in nameToHandle mapping");
-        return false;
-    }
-    materialDataSet = allocateSet(it->second, 0);
-    if (!materialDataSet) {
-        violet::Log::error("Renderer", "Failed to allocate MaterialData descriptor set");
-        return false;
-    }
-
-    // Update descriptor set with SSBO
-    vk::DescriptorBufferInfo bufferDescInfo;
-    bufferDescInfo.buffer = materialDataBuffer.buffer;
-    bufferDescInfo.offset = 0;
-    bufferDescInfo.range = sizeof(MaterialData) * maxMaterials;
+// Helper: Update bindless descriptor array element
+void DescriptorManager::updateBindlessDescriptor(Texture* texture, uint32_t binding, uint32_t arrayIndex) {
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    imageInfo.imageView = texture->getImageView();
+    imageInfo.sampler = texture->getSampler();
 
     vk::WriteDescriptorSet write;
-    write.dstSet = materialDataSet;
-    write.dstBinding = 0;
-    write.dstArrayElement = 0;
+    write.dstSet = bindlessSet;
+    write.dstBinding = binding;
+    write.dstArrayElement = arrayIndex;
     write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eStorageBuffer;
-    write.pBufferInfo = &bufferDescInfo;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
 
     context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
-
-    materialDataEnabled = true;
-    violet::Log::info("Renderer", "MaterialDataBuffer initialized with {} max materials", maxMaterials);
-    return true;
 }
 
-uint32_t DescriptorManager::allocateMaterialData(const MaterialData& data) {
-    if (!materialDataEnabled) {
-        violet::Log::error("Renderer", "Material data buffer not enabled - call initMaterialDataBuffer() first");
-        return 0;
-    }
-
-    if (materialDataFreeIndices.empty()) {
-        violet::Log::error("Renderer", "Material data buffer is full (max: {})", maxMaterialData);
-        return 0;
-    }
-
-    // Get a free index (start from 1, 0 is reserved for error)
-    uint32_t index = materialDataFreeIndices.back();
-    materialDataFreeIndices.pop_back();
-
-    // Store data in CPU cache
-    materialDataSlots[index] = data;
-
-    // Write to GPU mapped memory
-    MaterialData* gpuData = static_cast<MaterialData*>(materialDataMapped);
-    gpuData[index] = data;
-
-    return index;
-}
-
-bool DescriptorManager::updateMaterialData(uint32_t index, const MaterialData& data) {
-    if (index >= maxMaterialData) {
-        violet::Log::error("Renderer", "Invalid material data index: {}", index);
-        return false;
-    }
-
-    if (!materialDataEnabled || !materialDataMapped) {
-        violet::Log::error("Renderer", "Material data buffer not initialized");
-        return false;
-    }
-
-    // Update CPU cache
-    materialDataSlots[index] = data;
-
-    // Write to GPU mapped memory
-    MaterialData* gpuData = static_cast<MaterialData*>(materialDataMapped);
-    gpuData[index] = data;
-
-    return true;
-}
-
-bool DescriptorManager::freeMaterialData(uint32_t index) {
-    if (index >= maxMaterialData) {
-        violet::Log::error("Renderer", "Invalid material data index: {}", index);
-        return false;
-    }
-
-    // Reset to default
-    materialDataSlots[index] = MaterialData{};
-    materialDataFreeIndices.push_back(index);
-
-    return true;
-}
-
-const DescriptorManager::MaterialData* DescriptorManager::getMaterialData(uint32_t index) const {
-    if (index >= maxMaterialData) {
-        return nullptr;
-    }
-    return &materialDataSlots[index];
-}
-
-// ===== Sampler Management =====
-
-vk::Sampler DescriptorManager::createSampler(const SamplerConfig& config) {
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = config.magFilter;
-    samplerInfo.minFilter = config.minFilter;
-    samplerInfo.addressModeU = config.addressModeU;
-    samplerInfo.addressModeV = config.addressModeV;
-    samplerInfo.addressModeW = config.addressModeW;
-    samplerInfo.mipmapMode = config.mipmapMode;
-    samplerInfo.minLod = config.minLod;
-    samplerInfo.maxLod = config.maxLod;
-    samplerInfo.mipLodBias = config.mipLodBias;
-    samplerInfo.anisotropyEnable = config.anisotropyEnable;
-    samplerInfo.maxAnisotropy = config.maxAnisotropy;
-    samplerInfo.borderColor = config.borderColor;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = config.compareEnable;
-    samplerInfo.compareOp = config.compareOp;
-
-    return context->getDevice().createSampler(samplerInfo);
-}
-
-vk::Sampler DescriptorManager::getOrCreateSampler(const SamplerConfig& config) {
-    size_t configHash = config.hash();
-
-    // Check cache first
-    auto it = samplerCache.find(configHash);
-    if (it != samplerCache.end()) {
-        return it->second;
-    }
-
-    // Create new sampler and cache it
-    vk::Sampler sampler = createSampler(config);
-    samplerCache[configHash] = sampler;
-
-    violet::Log::debug("Renderer", "Created and cached new sampler (hash: {}, total: {})",
-                      configHash, samplerCache.size());
-
-    return sampler;
-}
-
-vk::Sampler DescriptorManager::getSampler(SamplerType type) {
-    // Check if predefined sampler already exists
-    auto it = predefinedSamplers.find(type);
-    if (it != predefinedSamplers.end()) {
-        return it->second;
-    }
-
-    // Create sampler based on type
-    SamplerConfig config;
-    vk::PhysicalDeviceProperties properties = context->getPhysicalDevice().getProperties();
-
-    switch (type) {
-        case SamplerType::Default:
-            config = SamplerConfig::getDefault(properties.limits.maxSamplerAnisotropy);
-            break;
-        case SamplerType::ClampToEdge:
-            config = SamplerConfig::getClampToEdge();
-            break;
-        case SamplerType::Nearest:
-            config = SamplerConfig::getNearest();
-            break;
-        case SamplerType::Shadow:
-            config = SamplerConfig::getShadow();
-            break;
-        case SamplerType::Cubemap:
-            config = SamplerConfig::getCubemap();
-            break;
-        case SamplerType::NearestClamp:
-            config = SamplerConfig::getNearestClamp();
-            break;
-        default:
-            violet::Log::warn("Renderer", "Unknown sampler type, using default");
-            config = SamplerConfig::getDefault(properties.limits.maxSamplerAnisotropy);
-            break;
-    }
-
-    vk::Sampler sampler = getOrCreateSampler(config);
-    predefinedSamplers[type] = sampler;
-
-    violet::Log::info("Renderer", "Created predefined sampler type {}", static_cast<int>(type));
-
-    return sampler;
-}
-
-void DescriptorManager::setReflection(LayoutHandle handle, const ShaderReflection& reflection) {
-    auto it = layouts.find(handle);
-    if (it != layouts.end()) {
-        it->second.reflection = reflection;
-    }
-}
-
-const ShaderReflection* DescriptorManager::getReflection(LayoutHandle handle) const {
-    auto it = layouts.find(handle);
-    if (it != layouts.end()) {
-        return &it->second.reflection;
-    }
-    return nullptr;
-}
-
-bool DescriptorManager::hasReflection(LayoutHandle handle) const {
-    auto it = layouts.find(handle);
-    if (it != layouts.end()) {
-        return !it->second.reflection.getBuffers().empty();
-    }
-    return false;
-}
-
-// ===== Reflection-Based Uniform Management Implementation =====
-
-// Helper function to align value up to alignment
-static inline uint32_t alignUp(uint32_t value, uint32_t alignment) {
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
-// DescriptorManager implementation
 void DescriptorManager::setCurrentFrame(uint32_t frameIndex) {
     if (frameIndex >= maxFrames) {
         violet::Log::warn("DescriptorManager", "Frame index {} exceeds maxFrames {}", frameIndex, maxFrames);
@@ -1031,9 +1161,33 @@ PushConstantHandle DescriptorManager::registerPushConstants(const PushConstantDe
 
     PushConstantHandle handle = desc.hash();
 
-    // Check if already registered (deduplication)
-    if (pushConstants.find(handle) != pushConstants.end()) {
-        Log::debug("DescriptorManager", "Push constants (handle={}) already registered, reusing", handle);
+    auto existingIt = pushConstants.find(handle);
+    if (existingIt != pushConstants.end()) {
+        // Push constants exist, check if we need to merge stage flags
+        auto& existingRanges = existingIt->second;
+        bool needsUpdate = false;
+
+        // Merge stage flags for each range
+        for (const auto& newRange : desc.ranges) {
+            for (auto& existingRange : existingRanges) {
+                // Match by offset and size
+                if (existingRange.offset == newRange.offset && existingRange.size == newRange.size) {
+                    vk::ShaderStageFlags oldStages = existingRange.stageFlags;
+                    existingRange.stageFlags |= newRange.stageFlags;  // Merge stages
+                    if (oldStages != existingRange.stageFlags) {
+                        needsUpdate = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (needsUpdate) {
+            Log::info("DescriptorManager", "Merged stage flags for push constants (handle={})", handle);
+        } else {
+            Log::debug("DescriptorManager", "Push constants (handle={}) already registered with same stages, reusing", handle);
+        }
+
         return handle;
     }
 
@@ -1063,381 +1217,6 @@ const eastl::vector<vk::PushConstantRange>& DescriptorManager::getPushConstants(
 
 bool DescriptorManager::hasPushConstants(PushConstantHandle handle) const {
     return handle != 0 && pushConstants.find(handle) != pushConstants.end();
-}
-
-// ===== PipelineLayout Cache & Named Binding Implementation =====
-
-PipelineLayoutCacheHandle DescriptorManager::getOrCreatePipelineLayoutCache(
-    eastl::shared_ptr<Shader> vertShader,
-    eastl::shared_ptr<Shader> fragShader) {
-
-    if (!vertShader) {
-        Log::error("DescriptorManager", "Vertex shader is required for pipeline layout cache");
-        return 0;
-    }
-
-    // 1. Compute hash from shader layout handles (layout combination hash)
-    const auto& vertHandles = vertShader->getDescriptorLayoutHandles();
-    const auto* fragHandles = fragShader ? &fragShader->getDescriptorLayoutHandles() : nullptr;
-
-    // Determine max set index
-    size_t maxSetIndex = vertHandles.size();
-    if (fragHandles && fragHandles->size() > maxSetIndex) {
-        maxSetIndex = fragHandles->size();
-    }
-
-    // Compute layout combination hash
-    uint32_t hash = 0;
-    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
-        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
-        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
-
-        // Prefer non-zero handle (they should be identical if both non-zero due to deduplication)
-        LayoutHandle handle = (vertHandle != 0) ? vertHandle : fragHandle;
-
-        // Hash the layout handle into the combination hash
-        hash ^= std::hash<uint32_t>{}(handle) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-    }
-
-    // Include push constant handles in the hash
-    PushConstantHandle vertPC = vertShader->getPushConstantHandle();
-    PushConstantHandle fragPC = fragShader ? fragShader->getPushConstantHandle() : 0;
-    hash ^= std::hash<uint32_t>{}(vertPC) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-    hash ^= std::hash<uint32_t>{}(fragPC) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-
-    // Ensure we never return 0 (reserved for error)
-    if (hash == 0) hash = 1;
-
-    // 2. Check if cache already exists (cache hit)
-    if (pipelineLayoutCache.find(hash) != pipelineLayoutCache.end()) {
-        Log::debug("DescriptorManager", "PipelineLayoutCache hit for hash {}", hash);
-        return hash;
-    }
-
-    // 3. Create new cache
-    PipelineLayoutCache cache;
-
-    // Store layout handles (preserving sparsity)
-    cache.layoutHandles.resize(maxSetIndex, 0);
-    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
-        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
-        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
-        cache.layoutHandles[setIndex] = (vertHandle != 0) ? vertHandle : fragHandle;
-    }
-
-    // Store push constant handle (prefer non-zero)
-    cache.pushConstantHandle = (vertPC != 0) ? vertPC : fragPC;
-
-    // Extract resource names and bindless sets from shader reflection
-    auto extractFromShader = [&](eastl::shared_ptr<Shader> shader) {
-        if (!shader || !shader->hasReflection()) return;
-
-        const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-
-        // 遍历每个set
-        for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
-            LayoutHandle handle = layoutHandles[setIndex];
-            if (handle == 0) continue;  // 跳过空set
-
-            // Get layout info
-            auto it = layouts.find(handle);
-            if (it != layouts.end()) {
-                const ShaderReflection& reflection = it->second.reflection;
-
-                // 从reflection提取buffer名称映射
-                for (const auto& buffer : reflection.getBuffers()) {
-                    cache.resourceNameToSet[buffer.name] = buffer.set;
-                }
-
-                // 检查是否为bindless (从descriptor flags推断)
-                if (it->second.createFlags & vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool) {
-                    cache.bindlessSets.insert(static_cast<uint32_t>(setIndex));
-                }
-            }
-        }
-    };
-
-    extractFromShader(vertShader);
-    extractFromShader(fragShader);
-
-    // 4. Store and return
-    pipelineLayoutCache[hash] = cache;
-
-    Log::info("DescriptorManager", "Created PipelineLayoutCache (hash={}, {} resources, {} bindless sets)",
-              hash, cache.resourceNameToSet.size(), cache.bindlessSets.size());
-
-    return hash;
-}
-
-void DescriptorManager::bindDescriptors(
-    vk::CommandBuffer cmd,
-    PipelineLayoutCacheHandle cacheHandle,
-    vk::PipelineLayout pipelineLayout,
-    vk::PipelineBindPoint bindPoint,
-    const eastl::vector<NamedDescriptor>& descriptors) {
-
-    // 查找pipeline layout cache
-    auto cacheIt = pipelineLayoutCache.find(cacheHandle);
-    if (cacheIt == pipelineLayoutCache.end()) {
-        Log::warn("DescriptorManager", "PipelineLayoutCache handle {} not found - call getOrCreatePipelineLayoutCache first", cacheHandle);
-        return;
-    }
-
-    const PipelineLayoutCache& cache = cacheIt->second;
-
-    for (const auto& desc : descriptors) {
-        // 从cache查找set index
-        auto setIt = cache.resourceNameToSet.find(desc.name);
-        if (setIt == cache.resourceNameToSet.end()) {
-            Log::warn("DescriptorManager", "Resource '{}' not found in pipeline layout cache", desc.name);
-            continue;
-        }
-
-        uint32_t setIndex = setIt->second;
-        bool isBindless = cache.bindlessSets.find(setIndex) != cache.bindlessSets.end();
-
-        // Bindless特殊处理
-        if (isBindless) {
-            if (desc.descriptorSet) {
-                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
-                    1, &desc.descriptorSet, 0, nullptr);
-                Log::debug("DescriptorManager", "Bound bindless set '{}' at index {}", desc.name, setIndex);
-            }
-        } else {
-            // 普通descriptor：必须存在
-            if (!desc.descriptorSet) {
-                Log::error("DescriptorManager", "Descriptor '{}' is required but not provided", desc.name);
-                continue;
-            }
-
-            if (desc.dynamicOffset > 0) {
-                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
-                    1, &desc.descriptorSet, 1, &desc.dynamicOffset);
-            } else {
-                cmd.bindDescriptorSets(bindPoint, pipelineLayout, setIndex,
-                    1, &desc.descriptorSet, 0, nullptr);
-            }
-        }
-    }
-}
-
-// ===== Shader Resources Factory Implementation (Centralized Management) =====
-
-ShaderResourcesHandle DescriptorManager::createShaderResources(
-    eastl::shared_ptr<Shader> shader,
-    const eastl::string& instanceName) {
-
-    if (!shader) {
-        Log::error("DescriptorManager", "Cannot create ShaderResources: shader is null");
-        return 0;
-    }
-
-    if (!shader->hasReflection()) {
-        Log::error("DescriptorManager", "Cannot create ShaderResources: shader '{}' has no reflection data",
-                   shader->getName().c_str());
-        return 0;
-    }
-
-    // Generate instance name if not provided
-    eastl::string finalName = instanceName.empty()
-        ? shader->getName() + "_instance"
-        : instanceName;
-
-    // Allocate new handle
-    ShaderResourcesHandle handle = nextShaderResourcesHandle++;
-
-    // Create managed resources structure
-    ManagedShaderResources managedRes;
-    managedRes.shader = shader;
-    managedRes.instanceName = finalName;
-    managedRes.reflection = shader->getShaderReflection();
-
-    if (!managedRes.reflection) {
-        Log::error("DescriptorManager", "Shader '{}' has no extracted reflection data",
-                   shader->getName().c_str());
-        return 0;
-    }
-
-    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-    if (layoutHandles.empty()) {
-        Log::warn("DescriptorManager", "Shader '{}' has no descriptor layouts",
-                  shader->getName().c_str());
-        // Still valid - shader might not use descriptors
-    }
-
-    // Get resources grouped by set
-    const auto& resourcesBySet = managedRes.reflection->getResourcesBySetMap();
-
-    // Create descriptor sets for each set index
-    for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
-        LayoutHandle layoutHandle = layoutHandles[setIndex];
-        if (layoutHandle == 0) {
-            continue; // No layout for this set index (sparse)
-        }
-
-        // Get resources for this set
-        auto setResIt = resourcesBySet.find(static_cast<uint32_t>(setIndex));
-        if (setResIt == resourcesBySet.end() || setResIt->second.empty()) {
-            continue;
-        }
-
-        const auto& setResources = setResIt->second;
-
-        // Check if this is a bindless set
-        bool isBindless = false;
-        for (const auto& res : setResources) {
-            if (res.isBindless) {
-                isBindless = true;
-                break;
-            }
-        }
-
-        // Get layout info to determine frequency
-        auto layoutIt = layouts.find(layoutHandle);
-        if (layoutIt == layouts.end()) {
-            Log::error("DescriptorManager", "Layout handle {} not registered", layoutHandle);
-            continue;
-        }
-        UpdateFrequency frequency = layoutIt->second.frequency;
-
-        ManagedShaderResources::SetData setData;
-        setData.layoutHandle = layoutHandle;
-        setData.setIndex = static_cast<uint32_t>(setIndex);
-        setData.isBindless = isBindless;
-        setData.frequency = frequency;
-        setData.hasBuffer = false;
-        setData.alignedSize = 0;
-        setData.mappedData = nullptr;
-
-        if (isBindless) {
-            // Use global bindless set
-            setData.descriptorSet = getBindlessSet();
-            Log::debug("DescriptorManager", "Instance '{}' using global bindless set for set {}",
-                      finalName.c_str(), setIndex);
-        } else {
-            // Allocate descriptor set
-            setData.descriptorSet = allocateSet(layoutHandle, 0);
-
-            if (!setData.descriptorSet) {
-                Log::error("DescriptorManager", "Failed to allocate descriptor set for set {}",
-                          setIndex);
-                continue;
-            }
-
-            // Check if this set contains buffers (UBO/SSBO) that need memory allocation
-            uint32_t totalBufferSize = 0;
-            for (const auto& res : setResources) {
-                if (res.type == vk::DescriptorType::eUniformBuffer ||
-                    res.type == vk::DescriptorType::eStorageBuffer) {
-                    setData.hasBuffer = true;
-                    if (res.bufferLayout) {
-                        totalBufferSize += res.bufferLayout->totalSize;
-                    }
-                }
-            }
-
-            // Allocate buffer if needed
-            if (setData.hasBuffer && totalBufferSize > 0) {
-                // Determine buffer size based on frequency
-                uint32_t bufferSize = totalBufferSize;
-                setData.alignedSize = totalBufferSize;
-
-                if (frequency == UpdateFrequency::PerFrame) {
-                    // For PerFrame: align and multiply by frame count
-                    vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
-                    uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
-                    setData.alignedSize = (totalBufferSize + minAlignment - 1) & ~(minAlignment - 1);
-                    bufferSize = setData.alignedSize * maxFrames;
-                }
-
-                eastl::string debugName = finalName;
-                debugName += "_set";
-                char setIndexStr[16];
-                snprintf(setIndexStr, sizeof(setIndexStr), "%u", static_cast<uint32_t>(setIndex));
-                debugName += setIndexStr;
-
-                BufferInfo bufferInfo{
-                    .size = bufferSize,
-                    .usage = vk::BufferUsageFlagBits::eUniformBuffer |
-                             vk::BufferUsageFlagBits::eStorageBuffer,
-                    .memoryUsage = MemoryUsage::CPU_TO_GPU,
-                    .debugName = debugName
-                };
-
-                setData.buffer = ResourceFactory::createBuffer(context, bufferInfo);
-                setData.mappedData = setData.buffer.mappedData;
-
-                // Bind buffer to descriptor set
-                for (const auto& res : setResources) {
-                    if (res.type == vk::DescriptorType::eUniformBuffer) {
-                        vk::DescriptorBufferInfo bufferDescInfo;
-                        bufferDescInfo.buffer = setData.buffer.buffer;
-                        bufferDescInfo.offset = 0;
-                        bufferDescInfo.range = frequency == UpdateFrequency::PerFrame ?
-                                               setData.alignedSize : totalBufferSize;
-
-                        vk::WriteDescriptorSet write;
-                        write.dstSet = setData.descriptorSet;
-                        write.dstBinding = res.binding;
-                        write.descriptorType = vk::DescriptorType::eUniformBuffer;
-                        write.descriptorCount = 1;
-                        write.pBufferInfo = &bufferDescInfo;
-
-                        context->getDevice().updateDescriptorSets({write}, {});
-                    }
-                }
-
-                Log::debug("DescriptorManager", "Allocated buffer ({}B total, {}B per frame) for set {} in instance '{}'",
-                          bufferSize, setData.alignedSize, setIndex, finalName.c_str());
-            }
-        }
-
-        managedRes.sets[static_cast<uint32_t>(setIndex)] = setData;
-    }
-
-    // Store managed resources
-    managedShaderResources[handle] = eastl::move(managedRes);
-
-    Log::info("DescriptorManager", "Created ShaderResources handle {} (instance '{}') for shader '{}' ({} sets)",
-              handle, finalName.c_str(), shader->getName().c_str(), managedRes.sets.size());
-
-    return handle;
-}
-
-void DescriptorManager::destroyShaderResources(ShaderResourcesHandle handle) {
-    auto it = managedShaderResources.find(handle);
-    if (it == managedShaderResources.end()) {
-        Log::warn("DescriptorManager", "Attempted to destroy invalid ShaderResources handle {}", handle);
-        return;
-    }
-
-    // Cleanup all buffers
-    for (auto& [setIndex, setData] : it->second.sets) {
-        if (setData.hasBuffer && setData.buffer.buffer) {
-            ResourceFactory::destroyBuffer(context, setData.buffer);
-        }
-    }
-
-    Log::debug("DescriptorManager", "Destroyed ShaderResources handle {} (instance '{}')",
-              handle, it->second.instanceName.c_str());
-
-    managedShaderResources.erase(it);
-}
-
-const ManagedShaderResources* DescriptorManager::getShaderResourcesData(ShaderResourcesHandle handle) const {
-    auto it = managedShaderResources.find(handle);
-    if (it == managedShaderResources.end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-ManagedShaderResources* DescriptorManager::getShaderResourcesData(ShaderResourcesHandle handle) {
-    auto it = managedShaderResources.find(handle);
-    if (it == managedShaderResources.end()) {
-        return nullptr;
-    }
-    return &it->second;
 }
 
 } // namespace violet

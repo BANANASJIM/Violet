@@ -43,56 +43,55 @@ struct ReflectedResource {
     vk::ShaderStageFlags stages;     // Shader stage flags
     bool isBindless;                 // Is bindless resource (large/unbounded array)
 
-    // Buffer layout (only valid for UBO/SSBO, nullptr for textures/images/samplers)
-    const ReflectedBuffer* bufferLayout;
+    // Buffer layout index (only valid for UBO/SSBO, ~0u for textures/images/samplers)
+    size_t bufferLayoutIndex;
 
     ReflectedResource()
         : type(vk::DescriptorType::eUniformBuffer), set(0), binding(0),
-          arraySize(1), stages(), isBindless(false), bufferLayout(nullptr) {}
+          arraySize(1), stages(), isBindless(false), bufferLayoutIndex(~0u) {}
 };
 
 // Shader reflection container
 class ShaderReflection {
 public:
-    // === Legacy Buffer API (UBO/SSBO field access) ===
-    void addBuffer(const ReflectedBuffer& buffer) {
-        buffers.push_back(buffer);
-    }
-
-    const ReflectedBuffer* findBuffer(const eastl::string& name) const {
-        for (const auto& buf : buffers) {
-            if (buf.name == name) return &buf;
-        }
-        return nullptr;
-    }
-
-    const ReflectedField* findField(const eastl::string& bufferName, const eastl::string& fieldName) const {
-        const ReflectedBuffer* buf = findBuffer(bufferName);
-        if (!buf) return nullptr;
-
-        for (const auto& field : buf->fields) {
-            if (field.name == fieldName) return &field;
-        }
-        return nullptr;
-    }
-
-    const eastl::vector<ReflectedBuffer>& getBuffers() const { return buffers; }
-
     // === Unified Resource API (all descriptor types) ===
 
     void addResource(const ReflectedResource& resource) {
+        // Check for duplicates by (set, binding) pair
+        auto& setResources = resourcesBySet[resource.set];
+        for (size_t i = 0; i < setResources.size(); ++i) {
+            if (setResources[i].binding == resource.binding) {
+                // Duplicate found - update stages in both vectors
+                // This happens when Slang exposes same resource from multiple scopes
+
+                // Find the index in main resources vector
+                for (size_t j = 0; j < resources.size(); ++j) {
+                    if (resources[j].set == resource.set && resources[j].binding == resource.binding) {
+                        resources[j].stages |= resource.stages;
+                        setResources[i].stages |= resource.stages;
+                        return;
+                    }
+                }
+                return;
+            }
+        }
+
+        // No duplicate - add new resource and store index
+        size_t newIndex = resources.size();
         resources.push_back(resource);
-
-        // Also add to set-grouped map
         resourcesBySet[resource.set].push_back(resource);
-
-        // Build name index
-        resourceByName[resource.name] = &resources.back();
+        resourceByName[resource.name] = newIndex;
     }
 
     const ReflectedResource* findResource(const eastl::string& name) const {
         auto it = resourceByName.find(name);
-        return (it != resourceByName.end()) ? it->second : nullptr;
+        if (it != resourceByName.end()) {
+            size_t index = it->second;
+            if (index < resources.size()) {
+                return &resources[index];
+            }
+        }
+        return nullptr;
     }
 
     const eastl::vector<ReflectedResource>& getResourcesBySet(uint32_t set) const {
@@ -109,21 +108,54 @@ public:
         return resourcesBySet;
     }
 
+    // Get buffer layout by index (nullptr if invalid)
+    const ReflectedBuffer* getBufferLayout(size_t index) const {
+        if (index < bufferStorage.size()) {
+            return &bufferStorage[index];
+        }
+        return nullptr;
+    }
+
+    // === Push Constants API ===
+
+    void addPushConstantRange(const vk::PushConstantRange& range) {
+        pushConstantRanges.push_back(range);
+    }
+
+    const eastl::vector<vk::PushConstantRange>& getPushConstantRanges() const {
+        return pushConstantRanges;
+    }
+
+    bool hasPushConstants() const {
+        return !pushConstantRanges.empty();
+    }
+
     void clear() {
-        buffers.clear();
         resources.clear();
         resourcesBySet.clear();
         resourceByName.clear();
+        bufferStorage.clear();
+        pushConstantRanges.clear();
+    }
+
+    // Internal: Store buffer and return index (for extractReflection)
+    size_t storeBuffer(const ReflectedBuffer& buffer) {
+        size_t index = bufferStorage.size();
+        bufferStorage.push_back(buffer);
+        return index;
     }
 
 private:
-    // Legacy: Detailed buffer layouts (UBO/SSBO)
-    eastl::vector<ReflectedBuffer> buffers;
-
-    // Unified: All resources (including buffers, textures, images, samplers)
+    // All resources (UBO, SSBO, textures, images, samplers)
     eastl::vector<ReflectedResource> resources;
     eastl::unordered_map<uint32_t, eastl::vector<ReflectedResource>> resourcesBySet;
-    eastl::unordered_map<eastl::string, const ReflectedResource*> resourceByName;
+    eastl::unordered_map<eastl::string, size_t> resourceByName;  // Maps name -> index in resources vector
+
+    // Buffer storage (owned by ShaderReflection, pointed to by ReflectedResource::bufferLayout)
+    eastl::vector<ReflectedBuffer> bufferStorage;
+
+    // Push constant ranges
+    eastl::vector<vk::PushConstantRange> pushConstantRanges;
 };
 
 // Extract reflection from Slang (opaque pointer to avoid slang.h dependency)

@@ -1,4 +1,5 @@
 #include "SlangCompiler.hpp"
+#include "ShaderReflection.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include <sys/stat.h>
@@ -16,6 +17,7 @@ SlangCompiler::SlangCompiler() {
 }
 
 SlangCompiler::~SlangCompiler() {
+    cachedSession = nullptr;
     globalSession = nullptr;
 }
 
@@ -23,71 +25,22 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     CompileResult result;
 
     if (!globalSession) {
-        result.success = false;
         result.errorMessage = "Slang global session not initialized";
         return result;
     }
 
-    // Create session description
-    slang::SessionDesc sessionDesc = {};
-    slang::TargetDesc targetDesc = {};
-    targetDesc.format = SLANG_SPIRV;
-    targetDesc.profile = globalSession->findProfile("spirv_1_5");
-    targetDesc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
-
-    sessionDesc.targets = &targetDesc;
-    sessionDesc.targetCount = 1;
-
-    // Add search paths
-    eastl::vector<const char*> searchPaths;
-    for (const auto& path : info.includePaths) {
-        searchPaths.push_back(path.c_str());
-    }
-    sessionDesc.searchPaths = searchPaths.data();
-    sessionDesc.searchPathCount = searchPaths.size();
-
-    // Add preprocessor defines
-    eastl::vector<slang::PreprocessorMacroDesc> macros;
-    for (const auto& define : info.defines) {
-        slang::PreprocessorMacroDesc macro = {};
-        macro.name = define.c_str();
-        macro.value = "1";
-        macros.push_back(macro);
-    }
-    sessionDesc.preprocessorMacros = macros.data();
-    sessionDesc.preprocessorMacroCount = macros.size();
-
-    // Create session
-    Slang::ComPtr<slang::ISession> session;
-    if (SLANG_FAILED(globalSession->createSession(sessionDesc, session.writeRef()))) {
-        result.success = false;
-        result.errorMessage = "Failed to create Slang session";
+    // Get or create cached session (reuses session if settings match)
+    slang::ISession* session = getOrCreateSession(info.includePaths, info.defines);
+    if (!session) {
+        result.errorMessage = "Failed to create/get Slang session";
         return result;
     }
 
-    // Pre-load common modules that might be imported by shaders
-    const char* commonModules[] = {
-        "shaders/slang/Common.slang",
-        "shaders/slang/PBR.slang",
-        "shaders/slang/Sampling.slang",
-        "shaders/slang/Utilities.slang"
-    };
-
-    for (const char* modulePath : commonModules) {
-        Slang::ComPtr<slang::IBlob> moduleDiag;
-        slang::IModule* commonModule = session->loadModule(modulePath, moduleDiag.writeRef());
-        if (!commonModule) {
-            // It's okay if module doesn't exist or fails to load - not all shaders need all modules
-            Log::debug("SlangCompiler", "Could not preload module '{}' (this is normal if not needed)", modulePath);
-        }
-    }
-
-    // Load module
+    // Load module (Slang will auto-load imported modules like Common, PBR, Sampling)
     Slang::ComPtr<slang::IBlob> diagnostics;
     slang::IModule* module = session->loadModule(info.filePath.c_str(), diagnostics.writeRef());
 
     if (!module) {
-        result.success = false;
         checkDiagnostics(diagnostics, result);
         return result;
     }
@@ -95,7 +48,6 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     // Find entry point
     Slang::ComPtr<slang::IEntryPoint> entryPoint;
     if (SLANG_FAILED(module->findEntryPointByName(info.entryPoint.c_str(), entryPoint.writeRef()))) {
-        result.success = false;
         result.errorMessage = "Entry point '" + info.entryPoint + "' not found";
         return result;
     }
@@ -105,7 +57,6 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     Slang::ComPtr<slang::IComponentType> program;
     if (SLANG_FAILED(session->createCompositeComponentType(
             components, 2, program.writeRef(), diagnostics.writeRef()))) {
-        result.success = false;
         checkDiagnostics(diagnostics, result);
         return result;
     }
@@ -113,7 +64,6 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     // Link program
     Slang::ComPtr<slang::IComponentType> linkedProgram;
     if (SLANG_FAILED(program->link(linkedProgram.writeRef(), diagnostics.writeRef()))) {
-        result.success = false;
         checkDiagnostics(diagnostics, result);
         return result;
     }
@@ -122,26 +72,49 @@ ShaderCompiler::CompileResult SlangCompiler::compile(const Shader::CreateInfo& i
     Slang::ComPtr<slang::IBlob> spirvCode;
     if (SLANG_FAILED(linkedProgram->getEntryPointCode(
             0, 0, spirvCode.writeRef(), diagnostics.writeRef()))) {
-        result.success = false;
         checkDiagnostics(diagnostics, result);
         return result;
     }
 
-    // Copy SPIRV to result
+    // Copy SPIRV
     const uint32_t* spirvData = reinterpret_cast<const uint32_t*>(spirvCode->getBufferPointer());
     size_t spirvSize = spirvCode->getBufferSize() / sizeof(uint32_t);
-    result.spirv.resize(spirvSize);
-    memcpy(result.spirv.data(), spirvData, spirvCode->getBufferSize());
+    eastl::vector<uint32_t> spirv(spirvSize);
+    memcpy(spirv.data(), spirvData, spirvCode->getBufferSize());
 
-    // Cache reflection data
-    lastLinkedProgram = linkedProgram;
-    lastReflection = linkedProgram->getLayout();
+    // CRITICAL: Extract reflection data IMMEDIATELY before linkedProgram goes out of scope!
+    slang::ProgramLayout* programLayout = linkedProgram->getLayout();
+    if (!programLayout) {
+        result.errorMessage = "Failed to get program layout for reflection";
+        return result;
+    }
 
-    result.success = true;
-    result.sourceHash = computeSourceHash(info.filePath);
+    ShaderReflection reflection;
+    if (!extractReflection(static_cast<void*>(programLayout), reflection)) {
+        result.errorMessage = "Failed to extract reflection data";
+        return result;
+    }
 
-    Log::debug("SlangCompiler", "Compiled {} bytes of SPIRV from {}, reflection available: {}",
-               result.spirv.size() * 4, info.filePath.c_str(), lastReflection != nullptr);
+    // Count buffers for logging
+    uint32_t bufferCount = 0;
+    for (const auto& res : reflection.getAllResources()) {
+        if (res.bufferLayoutIndex != ~0u) bufferCount++;
+    }
+
+    Log::debug("SlangCompiler", "Extracted reflection: {} buffers, {} resources total",
+              bufferCount, reflection.getAllResources().size());
+
+    // Create complete Shader object with SPIRV + Reflection
+    auto shader = eastl::make_shared<Shader>(info, spirv);
+    size_t sourceHash = computeSourceHash(info.filePath);
+    shader->updateSPIRV(spirv, sourceHash);
+    shader->setExtractedReflection(eastl::move(reflection));
+
+    result.shader = shader;
+    result.errorMessage = "";  // Success
+
+    Log::debug("SlangCompiler", "Successfully compiled Shader '{}' ({} bytes SPIRV)",
+               info.name.c_str(), spirv.size() * 4);
 
     return result;
 }
@@ -198,28 +171,11 @@ eastl::vector<SlangCompiler::EntryPointInfo> SlangCompiler::getModuleEntryPoints
         return entryPoints;
     }
 
-    // Create session description
-    slang::SessionDesc sessionDesc = {};
-    slang::TargetDesc targetDesc = {};
-    targetDesc.format = SLANG_SPIRV;
-    targetDesc.profile = globalSession->findProfile("spirv_1_5");
-    targetDesc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
-
-    sessionDesc.targets = &targetDesc;
-    sessionDesc.targetCount = 1;
-
-    // Add search paths
-    eastl::vector<const char*> searchPaths;
-    for (const auto& path : includePaths) {
-        searchPaths.push_back(path.c_str());
-    }
-    sessionDesc.searchPaths = searchPaths.data();
-    sessionDesc.searchPathCount = searchPaths.size();
-
-    // Create session
-    Slang::ComPtr<slang::ISession> session;
-    if (SLANG_FAILED(globalSession->createSession(sessionDesc, session.writeRef()))) {
-        Log::error("SlangCompiler", "Failed to create Slang session for reflection");
+    // Get or create cached session (no defines for entry point enumeration)
+    eastl::vector<eastl::string> emptyDefines;
+    slang::ISession* session = getOrCreateSession(includePaths, emptyDefines);
+    if (!session) {
+        Log::error("SlangCompiler", "Failed to create/get Slang session for entry point enumeration");
         return entryPoints;
     }
 
@@ -270,6 +226,65 @@ eastl::vector<SlangCompiler::EntryPointInfo> SlangCompiler::getModuleEntryPoints
     }
 
     return entryPoints;
+}
+
+slang::ISession* SlangCompiler::getOrCreateSession(
+    const eastl::vector<eastl::string>& includePaths,
+    const eastl::vector<eastl::string>& defines) {
+
+    // Check if we can reuse cached session
+    bool canReuseSession = cachedSession != nullptr &&
+                          cachedIncludePaths == includePaths &&
+                          cachedDefines == defines;
+
+    if (canReuseSession) {
+        return cachedSession.get();
+    }
+
+    // Need to create new session
+    Log::debug("SlangCompiler", "Creating new session (includePaths changed: {}, defines changed: {})",
+              cachedIncludePaths != includePaths, cachedDefines != defines);
+
+    slang::SessionDesc sessionDesc = {};
+    slang::TargetDesc targetDesc = {};
+    targetDesc.format = SLANG_SPIRV;
+    targetDesc.profile = globalSession->findProfile("spirv_1_5");
+    targetDesc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
+
+    sessionDesc.targets = &targetDesc;
+    sessionDesc.targetCount = 1;
+
+    // Add search paths
+    eastl::vector<const char*> searchPaths;
+    for (const auto& path : includePaths) {
+        searchPaths.push_back(path.c_str());
+    }
+    sessionDesc.searchPaths = searchPaths.data();
+    sessionDesc.searchPathCount = searchPaths.size();
+
+    // Add preprocessor defines
+    eastl::vector<slang::PreprocessorMacroDesc> macros;
+    for (const auto& define : defines) {
+        slang::PreprocessorMacroDesc macro = {};
+        macro.name = define.c_str();
+        macro.value = "1";
+        macros.push_back(macro);
+    }
+    sessionDesc.preprocessorMacros = macros.data();
+    sessionDesc.preprocessorMacroCount = macros.size();
+
+    // Create new session
+    cachedSession = nullptr;  // Release old session first
+    if (SLANG_FAILED(globalSession->createSession(sessionDesc, cachedSession.writeRef()))) {
+        Log::error("SlangCompiler", "Failed to create Slang session");
+        return nullptr;
+    }
+
+    // Cache settings
+    cachedIncludePaths = includePaths;
+    cachedDefines = defines;
+
+    return cachedSession.get();
 }
 
 bool SlangCompiler::checkDiagnostics(slang::IBlob* diagnostics, CompileResult& result) {

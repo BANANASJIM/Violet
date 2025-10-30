@@ -128,9 +128,8 @@ void Swapchain::createImageViews() {
 
 uint32_t Swapchain::acquireNextImage(vk::Semaphore semaphore) {
     try {
-        // vk::raii::SwapchainKHR::acquireNextImage returns std::pair<vk::Result, uint32_t>
         auto result = swapchain.acquireNextImage(UINT64_MAX, semaphore);
-        return result.second;  // Extract image index from pair
+        return result.value;  // Extract image index from ResultValue
     } catch (const vk::OutOfDateKHRError&) {
         // Swapchain is out of date, caller should handle recreation
         throw;

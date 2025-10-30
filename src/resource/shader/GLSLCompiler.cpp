@@ -19,18 +19,10 @@ GLSLCompiler::GLSLCompiler() {
 
 ShaderCompiler::CompileResult GLSLCompiler::compile(const Shader::CreateInfo& info) {
     CompileResult result;
+    result.shader = nullptr;
+    result.errorMessage = "GLSL support is deprecated. Please use Slang shaders (.slang files) instead.";
 
-    // Try to load pre-compiled SPIRV first (from CMake build)
-    if (loadPrecompiledSPIRV(info.filePath, result)) {
-        result.sourceHash = computeSourceHash(info.filePath);
-        return result;
-    }
-
-    // Runtime compilation not yet implemented
-    // TODO: Implement runtime glslc invocation for hot reload
-    result.success = false;
-    result.errorMessage = "Runtime GLSL compilation not yet implemented. Use pre-compiled shaders.";
-    Log::warn("GLSLCompiler", "Runtime compilation requested but not yet implemented");
+    Log::error("GLSLCompiler", "GLSL compilation attempted but GLSL is deprecated. Use Slang shaders instead.");
 
     return result;
 }
@@ -84,47 +76,10 @@ eastl::string GLSLCompiler::findGlslc() const {
 }
 
 bool GLSLCompiler::loadPrecompiledSPIRV(const eastl::string& filePath, CompileResult& result) {
-    // Convert source path to SPIRV path
-    // filePath is the GLSL source file path (e.g., "/absolute/path/to/shaders/pbr.vert")
-    // We need to find the pre-compiled .spv in build/shaders/
-
-    // Extract just the filename from the full path
-    size_t lastSlash = filePath.find_last_of('/');
-    eastl::string filename = (lastSlash != eastl::string::npos) ?
-                             filePath.substr(lastSlash + 1) : filePath;
-
-    // Construct build path: build/shaders/filename.spv
-    // CRITICAL: Use FileSystem::resolveRelativePath() to handle different working directories
-    eastl::string buildPath = FileSystem::resolveRelativePath(
-        eastl::string("build/shaders/") + filename + ".spv"
-    );
-    auto spirvData = FileSystem::readBinary(buildPath);
-
-    if (spirvData.empty()) {
-        // Try direct path with .spv extension as fallback
-        spirvData = FileSystem::readBinary(filePath + ".spv");
-    }
-
-    if (spirvData.empty()) {
-        result.success = false;
-        result.errorMessage = "Pre-compiled SPIRV not found at: " + buildPath;
-        return false;
-    }
-
-    // Convert bytes to uint32_t
-    if (spirvData.size() % 4 != 0) {
-        result.success = false;
-        result.errorMessage = "Invalid SPIRV file size (not multiple of 4 bytes)";
-        return false;
-    }
-
-    result.spirv.resize(spirvData.size() / 4);
-    memcpy(result.spirv.data(), spirvData.data(), spirvData.size());
-
-    result.success = true;
-    Log::debug("GLSLCompiler", "Loaded pre-compiled SPIRV from: {}", buildPath.c_str());
-
-    return true;
+    // GLSL is deprecated - this function is no longer used
+    result.shader = nullptr;
+    result.errorMessage = "GLSL support is deprecated. Cannot load pre-compiled SPIRV.";
+    return false;
 }
 
 } // namespace violet

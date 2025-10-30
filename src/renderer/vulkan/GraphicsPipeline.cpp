@@ -4,7 +4,6 @@
 #include "resource/Material.hpp"
 #include "resource/Vertex.hpp"
 #include "resource/shader/Shader.hpp"
-#include "resource/shader/ReflectionHelper.hpp"
 #include "core/Log.hpp"
 #include <EASTL/sort.h>
 #include <glm/glm.hpp>
@@ -62,6 +61,12 @@ void GraphicsPipeline::buildPipeline() {
         return;
     }
 
+    // Register descriptor layouts from shader reflection (idempotent - safe to call multiple times)
+    vert->registerDescriptorLayouts(descriptorManager);
+    if (frag) {
+        frag->registerDescriptorLayouts(descriptorManager);
+    }
+
     // Create shader modules from SPIRV
     vertShaderModule = createShaderModuleFromSPIRV(vert->getSPIRV());
 
@@ -69,7 +74,8 @@ void GraphicsPipeline::buildPipeline() {
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
     vertShaderStageInfo.stage = Shader::stageToVkFlag(vert->getStage());
     vertShaderStageInfo.module = *vertShaderModule;
-    vertShaderStageInfo.pName = vert->getEntryPoint().c_str();
+    // Slang compiles all entry points to "main" in SPIR-V
+    vertShaderStageInfo.pName = (vert->getLanguage() == Shader::Language::Slang) ? "main" : vert->getEntryPoint().c_str();
 
     eastl::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
     shaderStages.push_back(vertShaderStageInfo);
@@ -81,7 +87,8 @@ void GraphicsPipeline::buildPipeline() {
         vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
         fragShaderStageInfo.stage = Shader::stageToVkFlag(frag->getStage());
         fragShaderStageInfo.module = *fragShaderModule;
-        fragShaderStageInfo.pName = frag->getEntryPoint().c_str();
+        // Slang compiles all entry points to "main" in SPIR-V
+        fragShaderStageInfo.pName = (frag->getLanguage() == Shader::Language::Slang) ? "main" : frag->getEntryPoint().c_str();
 
         shaderStages.push_back(fragShaderStageInfo);
     }
@@ -260,6 +267,12 @@ GraphicsPipeline::MergedShaderResources GraphicsPipeline::mergeShaderResources(
         }
         // else: both are 0, leave nullptr in result.setLayouts[setIndex]
     }
+
+    // Remove nullptr entries to ensure contiguous layout array (Vulkan requirement)
+    result.setLayouts.erase(
+        eastl::remove(result.setLayouts.begin(), result.setLayouts.end(), nullptr),
+        result.setLayouts.end()
+    );
 
     // Merge push constants from cached handles
     PushConstantHandle vertPC = vert->getPushConstantHandle();

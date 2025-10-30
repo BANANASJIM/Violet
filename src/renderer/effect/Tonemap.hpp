@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 
 namespace violet {
 
@@ -43,7 +44,8 @@ public:
     void init(VulkanContext* context, MaterialManager* materialManager,
               DescriptorManager* descriptorManager,
               RenderGraph* renderGraph,
-              const eastl::string& hdrImageName, const eastl::string& swapchainImageName);
+              const eastl::string& hdrImageName, const eastl::string& swapchainImageName,
+              ShaderLibrary* shaderLibrary);
     void cleanup();
 
     // RenderGraph integration - execution only (pass declaration in ForwardRenderer)
@@ -67,7 +69,7 @@ private:
     RenderGraph* renderGraph = nullptr;
 
     Material* postProcessMaterial = nullptr;  // Reference from MaterialManager, not owned
-    eastl::vector<vk::DescriptorSet> descriptorSets;  // One per frame in flight (triple buffering)
+    ShaderResourceBinding binding;  // Automatic descriptor set management
 
     TonemapParams params;
 

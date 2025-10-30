@@ -1,33 +1,32 @@
 #pragma once
 
 #include "Shader.hpp"
+#include "ShaderReflection.hpp"
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
+#include <EASTL/optional.h>
+#include <EASTL/shared_ptr.h>
 
 namespace violet {
 
 /**
- * @brief Base class for shader compilers (GLSL, Slang, etc.)
+ * @brief Base class for shader compilers (Slang-based)
  *
- * Implementations:
- * - GLSLCompiler: Uses glslc to compile GLSL to SPIRV
- * - SlangCompiler: Uses Slang API to compile Slang to SPIRV
+ * Compile shader source to a complete Shader object with SPIRV and reflection.
  */
 class ShaderCompiler {
 public:
     struct CompileResult {
-        bool success = false;
-        eastl::vector<uint32_t> spirv;
-        eastl::string errorMessage;
-        size_t sourceHash = 0;
+        eastl::shared_ptr<Shader> shader;  // Complete Shader object (or nullptr on failure)
+        eastl::string errorMessage;        // Error details if compilation failed
     };
 
     virtual ~ShaderCompiler() = default;
 
     /**
-     * @brief Compile shader source to SPIRV
+     * @brief Compile shader source to complete Shader object
      * @param info Shader creation info with source path and options
-     * @return Compilation result with SPIRV code or error message
+     * @return Complete Shader with SPIRV + Reflection, or nullptr on failure
      */
     virtual CompileResult compile(const Shader::CreateInfo& info) = 0;
 

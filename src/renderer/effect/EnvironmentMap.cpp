@@ -1,12 +1,15 @@
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
+#include "resource/ResourceManager.hpp"
 #include "resource/MaterialManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 #include "renderer/graph/RenderPass.hpp"
@@ -24,9 +27,8 @@ EnvironmentMap::~EnvironmentMap() {
 
 EnvironmentMap::EnvironmentMap(EnvironmentMap&& other) noexcept
     : context(other.context)
-    , materialManager(other.materialManager)
-    , descriptorManager(other.descriptorManager)
-    , textureManager(other.textureManager)
+    , resourceManager(other.resourceManager)
+    , renderGraph(other.renderGraph)
     , environmentTextureHandle(other.environmentTextureHandle)
     , irradianceMapHandle(other.irradianceMapHandle)
     , prefilteredMapHandle(other.prefilteredMapHandle)
@@ -38,9 +40,8 @@ EnvironmentMap::EnvironmentMap(EnvironmentMap&& other) noexcept
     , params(other.params)
     , currentType(other.currentType) {
     other.context = nullptr;
-    other.materialManager = nullptr;
-    other.descriptorManager = nullptr;
-    other.textureManager = nullptr;
+    other.resourceManager = nullptr;
+    other.renderGraph = nullptr;
     other.environmentTextureHandle = {};
     other.irradianceMapHandle = {};
     other.prefilteredMapHandle = {};
@@ -57,9 +58,8 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     if (this != &other) {
         cleanup();
         context = other.context;
-        materialManager = other.materialManager;
-        descriptorManager = other.descriptorManager;
-        textureManager = other.textureManager;
+        resourceManager = other.resourceManager;
+        renderGraph = other.renderGraph;
         environmentTextureHandle = other.environmentTextureHandle;
         irradianceMapHandle = other.irradianceMapHandle;
         prefilteredMapHandle = other.prefilteredMapHandle;
@@ -72,9 +72,8 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
         currentType = other.currentType;
 
         other.context = nullptr;
-        other.materialManager = nullptr;
-        other.descriptorManager = nullptr;
-        other.textureManager = nullptr;
+        other.resourceManager = nullptr;
+        other.renderGraph = nullptr;
         other.environmentTextureHandle = {};
         other.irradianceMapHandle = {};
         other.prefilteredMapHandle = {};
@@ -89,15 +88,12 @@ EnvironmentMap& EnvironmentMap::operator=(EnvironmentMap&& other) noexcept {
     return *this;
 }
 
-void EnvironmentMap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, RenderGraph* graph) {
+void EnvironmentMap::init(VulkanContext* ctx, ResourceManager* resMgr, RenderGraph* graph) {
     context = ctx;
-    materialManager = matMgr;
-    descriptorManager = descMgr;
-    textureManager = texMgr;
-    shaderLibrary = shaderLib;
+    resourceManager = resMgr;
     renderGraph = graph;
 
-    violet::Log::info("Renderer", "EnvironmentMap initialized (resources managed by TextureManager, MaterialManager, DescriptorManager)");
+    violet::Log::info("Renderer", "EnvironmentMap initialized (resources managed by ResourceManager)");
 }
 
 void EnvironmentMap::cleanup() {
@@ -107,27 +103,29 @@ void EnvironmentMap::cleanup() {
     tempComputeTextures.clear();
 
     // Free bindless indices if allocated
-    if (descriptorManager) {
+    if (resourceManager) {
+        auto& descriptorManager = resourceManager->getDescriptorManager();
         if (environmentMapIndex != 0) {
-            descriptorManager->freeBindlessTexture(environmentMapIndex);
+            descriptorManager.freeBindlessTexture(environmentMapIndex);
             environmentMapIndex = 0;
         }
         if (irradianceMapIndex != 0) {
-            descriptorManager->freeBindlessTexture(irradianceMapIndex);
+            descriptorManager.freeBindlessTexture(irradianceMapIndex);
             irradianceMapIndex = 0;
         }
         if (prefilteredMapIndex != 0) {
-            descriptorManager->freeBindlessTexture(prefilteredMapIndex);
+            descriptorManager.freeBindlessTexture(prefilteredMapIndex);
             prefilteredMapIndex = 0;
         }
         if (brdfLUTIndex != 0) {
-            descriptorManager->freeBindlessTexture(brdfLUTIndex);
+            descriptorManager.freeBindlessTexture(brdfLUTIndex);
             brdfLUTIndex = 0;
         }
     }
 
     // Release texture handles (TextureManager owns the actual textures)
-    if (textureManager) {
+    if (resourceManager) {
+        auto* textureManager = resourceManager->getTextureManager();
         if (environmentTextureHandle.isValid()) {
             textureManager->removeTexture(environmentTextureHandle);
             environmentTextureHandle = {};
@@ -147,13 +145,11 @@ void EnvironmentMap::cleanup() {
     }
 
     context = nullptr;
-    materialManager = nullptr;
-    descriptorManager = nullptr;
-    textureManager = nullptr;
+    resourceManager = nullptr;
 }
 
 void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
-    if (!context || !descriptorManager || !textureManager) {
+    if (!context || !resourceManager) {
         violet::Log::error("Renderer", "EnvironmentMap not initialized");
         return;
     }
@@ -171,13 +167,15 @@ void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
     }
 
     // Get texture and register to bindless system
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
     Texture* envTexture = textureManager->getTexture(environmentTextureHandle);
     if (!envTexture) {
         violet::Log::error("Renderer", "Failed to retrieve environment texture from TextureManager");
         return;
     }
 
-    environmentMapIndex = descriptorManager->allocateBindlessCubemap(envTexture);
+    environmentMapIndex = descriptorManager.allocateBindlessCubemap(envTexture);
     if (environmentMapIndex == 0) {
         violet::Log::error("Renderer", "Failed to allocate bindless cubemap index for environment map");
         return;
@@ -190,7 +188,9 @@ void EnvironmentMap::loadHDR(const eastl::string& hdrPath) {
 }
 
 void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths) {
-    if (!context || !descriptorManager || !textureManager) {
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    if (!context || !resourceManager) {
         violet::Log::error("Renderer", "EnvironmentMap not initialized");
         return;
     }
@@ -202,7 +202,7 @@ void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths
     }
 
     // Set sampler before adding to TextureManager
-    cubemapTexture->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+    cubemapTexture->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap));
 
     // Add to TextureManager
     environmentTextureHandle = textureManager->addTexture(eastl::move(cubemapTexture));
@@ -213,7 +213,7 @@ void EnvironmentMap::loadCubemap(const eastl::array<eastl::string, 6>& facePaths
 
     // Register to bindless system
     Texture* envTexture = textureManager->getTexture(environmentTextureHandle);
-    environmentMapIndex = descriptorManager->allocateBindlessCubemap(envTexture);
+    environmentMapIndex = descriptorManager.allocateBindlessCubemap(envTexture);
     if (environmentMapIndex == 0) {
         violet::Log::error("Renderer", "Failed to allocate bindless cubemap index for cubemap");
         return;
@@ -244,24 +244,27 @@ void EnvironmentMap::generateIBLMaps() {
 
 // Texture access methods
 Texture* EnvironmentMap::getEnvironmentTexture() const {
-    return textureManager ? textureManager->getTexture(environmentTextureHandle) : nullptr;
+    return resourceManager ? resourceManager->getTextureManager()->getTexture(environmentTextureHandle) : nullptr;
 }
 
 Texture* EnvironmentMap::getIrradianceMap() const {
-    return textureManager ? textureManager->getTexture(irradianceMapHandle) : nullptr;
+    return resourceManager ? resourceManager->getTextureManager()->getTexture(irradianceMapHandle) : nullptr;
 }
 
 Texture* EnvironmentMap::getPrefilteredMap() const {
-    return textureManager ? textureManager->getTexture(prefilteredMapHandle) : nullptr;
+    return resourceManager ? resourceManager->getTextureManager()->getTexture(prefilteredMapHandle) : nullptr;
 }
 
 Texture* EnvironmentMap::getBRDFLUT() const {
-    return textureManager ? textureManager->getTexture(brdfLUTHandle) : nullptr;
+    return resourceManager ? resourceManager->getTextureManager()->getTexture(brdfLUTHandle) : nullptr;
 }
 
 // ===== Private Helper Methods =====
 
 void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, uint32_t cubemapSize) {
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    auto* shaderLibrary = resourceManager->getShaderLibrary();
     violet::Log::info("Renderer", "Generating cubemap from equirectangular HDR (size: {})", cubemapSize);
 
     // Step 1: Load equirect HDR texture (temporary, 2D)
@@ -275,7 +278,7 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
     }
 
     // Set sampler for the equirect texture (needed for compute shader sampling)
-    equirectTexture->setSampler(descriptorManager->getSampler(SamplerType::Default));
+    equirectTexture->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::Default));
 
     Texture* equirectTexturePtr = equirectTexture.get();  // Get raw pointer before moving
     tempComputeTextures.push_back(eastl::move(equirectTexture));  // Keep alive
@@ -291,10 +294,22 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
 
     Texture* cubemapPtr = cubemap.get();  // Get raw pointer before using
 
-    // Step 3: Create compute pipeline
+    // Step 3: Get shader first to access reflection data
+    auto shader = shaderLibrary->get("equirect_to_cubemap_comp").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get equirect_to_cubemap_comp shader");
+        return;
+    }
+
+    // Create compute pipeline using shader reflection
     ComputePipeline pipeline;
     ComputePipelineConfig config;
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("EquirectToCubemap"));
+
+    // Get descriptor layout from shader reflection
+    const auto& layoutHandlesForPipeline = shader->getDescriptorLayoutHandles();
+    if (!layoutHandlesForPipeline.empty()) {
+        config.descriptorSetLayouts.push_back(descriptorManager.getLayout(layoutHandlesForPipeline[0]));
+    }
 
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -302,27 +317,30 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
     pushConstant.size = sizeof(uint32_t) * 2; // cubemapSize + currentFace
     config.pushConstantRanges.push_back(pushConstant);
 
-auto shader = shaderLibrary->get("equirect_to_cubemap").lock();
-    if (!shader) {
-        violet::Log::error("Renderer", "Failed to get equirect_to_cubemap shader");
-        return;
-    }
-    pipeline.init(context, shader, config);
+    pipeline.init(context, &descriptorManager, shader, config);
 
-    // Step 4: Allocate descriptor set using reflection-based API
-    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-    if (layoutHandles.empty()) {
-        violet::Log::error("Renderer", "No descriptor layouts found in equirect_to_cubemap shader");
-        return;
-    }
+    // Step 4: Create ShaderResourceBinding for this compute task
+    ShaderResourceBinding binding;
+    binding.init(&pipeline, 0);  // Use set 0
 
-    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
+    // Create 2D array image view for compute shader (shader uses RWTexture2DArray)
+    // Cubemap images can be accessed as 2D arrays with 6 layers for compute shaders
+    vk::ImageViewCreateInfo arrayViewInfo;
+    arrayViewInfo.image = cubemapPtr->getImage();
+    arrayViewInfo.viewType = vk::ImageViewType::e2DArray;  // 2D array, not cube
+    arrayViewInfo.format = cubemapPtr->getFormat();
+    arrayViewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    arrayViewInfo.subresourceRange.baseMipLevel = 0;
+    arrayViewInfo.subresourceRange.levelCount = 1;
+    arrayViewInfo.subresourceRange.baseArrayLayer = 0;
+    arrayViewInfo.subresourceRange.layerCount = 6;  // 6 faces
+    vk::raii::ImageView cubemap2DArrayView(context->getDeviceRAII(), arrayViewInfo);
 
-    // Update descriptor set
-    eastl::vector<ResourceBindingDesc> bindings;
-    bindings.push_back(ResourceBindingDesc::texture(0, equirectTexturePtr));  // Binding 0: input
-    bindings.push_back(ResourceBindingDesc::storageImage(1, cubemapPtr->getImageView()));  // Binding 1: output
-    descriptorManager->updateSet(descSet, bindings);
+    // Bind resources to ShaderResourceBinding (separate sampler/texture bindings)
+    vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Default);
+    binding.bindSampledImage("equirectangularMap", equirectTexturePtr->getImageView());
+    binding.bindStorageImage("outputCubemap", *cubemap2DArrayView);
+    binding.bindSampler("texSampler", sampler);
 
     // Step 5: Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
@@ -347,13 +365,9 @@ auto shader = shaderLibrary->get("equirect_to_cubemap").lock();
             {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
-        // Bind pipeline and descriptor set
+        // Bind pipeline and resources
         pipeline.bind(cmd);
-        cmd.bindDescriptorSets(
-            vk::PipelineBindPoint::eCompute,
-            pipeline.getPipelineLayout(),
-            0, descSet, {}
-        );
+        descriptorManager.bindResources(cmd, binding, 0);  // Frame 0 for single-time commands
 
         // Single dispatch for all 6 faces using Z dimension (ultimate optimization)
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -391,7 +405,7 @@ auto shader = shaderLibrary->get("equirect_to_cubemap").lock();
     });
 
     // Step 6: Set sampler before adding to TextureManager
-    cubemapPtr->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+    cubemapPtr->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap));
 
     // Step 7: Add to TextureManager
     environmentTextureHandle = textureManager->addTexture(eastl::move(cubemap));
@@ -400,6 +414,9 @@ auto shader = shaderLibrary->get("equirect_to_cubemap").lock();
 }
 
 void EnvironmentMap::generateIrradianceMap() {
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    auto* shaderLibrary = resourceManager->getShaderLibrary();
     if (!environmentTextureHandle.isValid()) {
         violet::Log::error("Renderer", "Cannot generate irradiance map: no environment texture");
         return;
@@ -417,10 +434,22 @@ void EnvironmentMap::generateIrradianceMap() {
         vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
     );
 
-    // Create compute pipeline
+    // Get shader first to access reflection data
+    auto shader = shaderLibrary->get("irradiance_convolution_comp").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get irradiance_convolution_comp shader");
+        return;
+    }
+
+    // Create compute pipeline using shader reflection
     ComputePipeline pipeline;
     ComputePipelineConfig config;
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("IrradianceConvolution"));
+
+    // Get descriptor layout from shader reflection
+    const auto& layoutHandlesForPipeline = shader->getDescriptorLayoutHandles();
+    if (!layoutHandlesForPipeline.empty()) {
+        config.descriptorSetLayouts.push_back(descriptorManager.getLayout(layoutHandlesForPipeline[0]));
+    }
 
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -428,27 +457,30 @@ void EnvironmentMap::generateIrradianceMap() {
     pushConstant.size = sizeof(uint32_t);
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("irradiance_convolution").lock();
-    if (!shader) {
-        violet::Log::error("Renderer", "Failed to get irradiance_convolution shader");
-        return;
-    }
-    pipeline.init(context, shader, config);
+    pipeline.init(context, &descriptorManager, shader, config);
 
-    // Allocate and update descriptor set using reflection-based API
-    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-    if (layoutHandles.empty()) {
-        violet::Log::error("Renderer", "No descriptor layouts found in irradiance_convolution shader");
-        return;
-    }
+    // Create ShaderResourceBinding for this compute task
+    ShaderResourceBinding binding;
+    binding.init(&pipeline, 0);  // Use set 0
 
-    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
+    // Create 2D array image view for compute shader (shader uses RWTexture2DArray)
+    vk::ImageViewCreateInfo irradianceArrayViewInfo;
+    irradianceArrayViewInfo.image = irradiance->getImage();
+    irradianceArrayViewInfo.viewType = vk::ImageViewType::e2DArray;
+    irradianceArrayViewInfo.format = irradiance->getFormat();
+    irradianceArrayViewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    irradianceArrayViewInfo.subresourceRange.baseMipLevel = 0;
+    irradianceArrayViewInfo.subresourceRange.levelCount = 1;
+    irradianceArrayViewInfo.subresourceRange.baseArrayLayer = 0;
+    irradianceArrayViewInfo.subresourceRange.layerCount = 6;
+    vk::raii::ImageView irradiance2DArrayView(context->getDeviceRAII(), irradianceArrayViewInfo);
 
+    // Bind resources to ShaderResourceBinding
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
-    eastl::vector<ResourceBindingDesc> bindings;
-    bindings.push_back(ResourceBindingDesc::texture(0, envTex));
-    bindings.push_back(ResourceBindingDesc::storageImage(1, irradiance->getImageView()));
-    descriptorManager->updateSet(descSet, bindings);
+    vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap);
+    binding.bindSampledImage("environmentMap", envTex->getImageView());  // Separate sampler binding
+    binding.bindStorageImage("irradianceMap", *irradiance2DArrayView);
+    binding.bindSampler("texSampler", sampler);
 
     // Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
@@ -474,7 +506,7 @@ void EnvironmentMap::generateIrradianceMap() {
         );
 
         pipeline.bind(cmd);
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, descSet, {});
+        descriptorManager.bindResources(cmd, binding, 0);  // Frame 0 for single-time commands
 
         // Single dispatch for all 6 faces using Z dimension
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -500,15 +532,18 @@ void EnvironmentMap::generateIrradianceMap() {
     });
 
     // Set sampler before adding to TextureManager
-    irradiance->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+    irradiance->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap));
 
     irradianceMapHandle = textureManager->addTexture(eastl::move(irradiance));
-    irradianceMapIndex = descriptorManager->allocateBindlessCubemap(textureManager->getTexture(irradianceMapHandle));
+    irradianceMapIndex = descriptorManager.allocateBindlessCubemap(textureManager->getTexture(irradianceMapHandle));
 
     violet::Log::info("Renderer", "Irradiance map generated (bindless cubemap index: {})", irradianceMapIndex);
 }
 
 void EnvironmentMap::generatePrefilteredMap() {
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    auto* shaderLibrary = resourceManager->getShaderLibrary();
     if (!environmentTextureHandle.isValid()) {
         violet::Log::error("Renderer", "Cannot generate prefiltered map: no environment texture");
         return;
@@ -528,10 +563,22 @@ void EnvironmentMap::generatePrefilteredMap() {
         mipLevels
     );
 
-    // Create compute pipeline
+    // Get shader first to access reflection data
+    auto shader = shaderLibrary->get("prefilter_environment_comp").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get prefilter_environment_comp shader");
+        return;
+    }
+
+    // Create compute pipeline using shader reflection
     ComputePipeline pipeline;
     ComputePipelineConfig config;
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("PrefilterEnvironment"));
+
+    // Get descriptor layout from shader reflection
+    const auto& layoutHandlesForPipeline = shader->getDescriptorLayoutHandles();
+    if (!layoutHandlesForPipeline.empty()) {
+        config.descriptorSetLayouts.push_back(descriptorManager.getLayout(layoutHandlesForPipeline[0]));
+    }
 
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -539,12 +586,7 @@ void EnvironmentMap::generatePrefilteredMap() {
     pushConstant.size = sizeof(uint32_t) * 4;
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("prefilter_environment").lock();
-    if (!shader) {
-        violet::Log::error("Renderer", "Failed to get prefilter_environment shader");
-        return;
-    }
-    pipeline.init(context, shader, config);
+    pipeline.init(context, &descriptorManager, shader, config);
 
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
 
@@ -577,28 +619,33 @@ void EnvironmentMap::generatePrefilteredMap() {
             pc.size = mipSize;
             pc.roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
 
-            // Get layout handle from shader
-            const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-            if (layoutHandles.empty()) {
-                violet::Log::error("Renderer", "No descriptor layouts found in prefilter_environment shader");
-                return;
-            }
+            // Create ShaderResourceBinding for this mip level
+            ShaderResourceBinding mipBinding;
+            mipBinding.init(&pipeline, 0);  // Use set 0
 
-            vk::DescriptorSet mipDescSet = descriptorManager->allocateSet(layoutHandles[0], 0);
+            // Create per-mip 2D array image view for compute shader (shader uses RWTexture2DArray)
+            vk::ImageViewCreateInfo mipArrayViewInfo;
+            mipArrayViewInfo.image = prefiltered->getImage();
+            mipArrayViewInfo.viewType = vk::ImageViewType::e2DArray;  // 2D array, not cube
+            mipArrayViewInfo.format = prefiltered->getFormat();
+            mipArrayViewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+            mipArrayViewInfo.subresourceRange.baseMipLevel = mip;
+            mipArrayViewInfo.subresourceRange.levelCount = 1;
+            mipArrayViewInfo.subresourceRange.baseArrayLayer = 0;
+            mipArrayViewInfo.subresourceRange.layerCount = 6;
+            vk::raii::ImageView mipView(context->getDeviceRAII(), mipArrayViewInfo);
 
-            // Create per-mip image view for storage
-            vk::raii::ImageView mipView = prefiltered->createMipImageView(context, mip);
-
-            // Update descriptor set for this mip level
-            eastl::vector<ResourceBindingDesc> bindings;
-            bindings.push_back(ResourceBindingDesc::texture(0, envTex));
-            bindings.push_back(ResourceBindingDesc::storageImage(1, *mipView));
-            descriptorManager->updateSet(mipDescSet, bindings);
+            // Bind resources to ShaderResourceBinding
+            vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap);
+            mipBinding.bindSampledImage("environmentMap", envTex->getImageView());  // Separate sampler binding
+            mipBinding.bindStorageImage("prefilteredMap", *mipView);
+            mipBinding.bindSampler("texSampler", sampler);
 
             // Keep image view alive to prevent validation errors
             tempImageViews.push_back(eastl::move(mipView));
 
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, mipDescSet, {});
+            // Bind resources
+            descriptorManager.bindResources(cmd, mipBinding, 0);  // Frame 0 for single-time commands
 
             uint32_t workgroups = (mipSize + 15) / 16;
 
@@ -630,15 +677,18 @@ void EnvironmentMap::generatePrefilteredMap() {
     });
 
     // Set sampler before adding to TextureManager
-    prefiltered->setSampler(descriptorManager->getSampler(SamplerType::Cubemap));
+    prefiltered->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap));
 
     prefilteredMapHandle = textureManager->addTexture(eastl::move(prefiltered));
-    prefilteredMapIndex = descriptorManager->allocateBindlessCubemap(textureManager->getTexture(prefilteredMapHandle));
+    prefilteredMapIndex = descriptorManager.allocateBindlessCubemap(textureManager->getTexture(prefilteredMapHandle));
 
     violet::Log::info("Renderer", "Prefiltered map generated with {} mip levels (bindless cubemap index: {})", mipLevels, prefilteredMapIndex);
 }
 
 void EnvironmentMap::generateBRDFLUT() {
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    auto* shaderLibrary = resourceManager->getShaderLibrary();
     violet::Log::info("Renderer", "Generating BRDF lookup table...");
 
     const uint32_t lutSize = 512;
@@ -651,10 +701,22 @@ void EnvironmentMap::generateBRDFLUT() {
         vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
     );
 
-    // Create compute pipeline
+    // Get shader first to access reflection data
+    auto shader = shaderLibrary->get("brdf_lut_comp").lock();
+    if (!shader) {
+        violet::Log::error("Renderer", "Failed to get brdf_lut_comp shader");
+        return;
+    }
+
+    // Create compute pipeline using shader reflection
     ComputePipeline pipeline;
     ComputePipelineConfig config;
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout("BRDFLUT"));
+
+    // Get descriptor layout from shader reflection
+    const auto& layoutHandlesForPipeline = shader->getDescriptorLayoutHandles();
+    if (!layoutHandlesForPipeline.empty()) {
+        config.descriptorSetLayouts.push_back(descriptorManager.getLayout(layoutHandlesForPipeline[0]));
+    }
 
     vk::PushConstantRange pushConstant;
     pushConstant.stageFlags = vk::ShaderStageFlagBits::eCompute;
@@ -662,12 +724,7 @@ void EnvironmentMap::generateBRDFLUT() {
     pushConstant.size = sizeof(uint32_t);  // LUT size
     config.pushConstantRanges.push_back(pushConstant);
 
-    auto shader = shaderLibrary->get("brdf_lut").lock();
-    if (!shader) {
-        violet::Log::error("Renderer", "Failed to get brdf_lut shader");
-        return;
-    }
-    pipeline.init(context, shader, config);
+    pipeline.init(context, &descriptorManager, shader, config);
 
     // Allocate and update descriptor set using reflection-based API
     const auto& layoutHandles = shader->getDescriptorLayoutHandles();
@@ -676,15 +733,21 @@ void EnvironmentMap::generateBRDFLUT() {
         return;
     }
 
-    vk::DescriptorSet descSet = descriptorManager->allocateSet(layoutHandles[0], 0);
+    vk::DescriptorSet descSet = descriptorManager.allocateSet(layoutHandles[0]);
 
     // Create image view for storage
     vk::raii::ImageView lutView = brdfLUT->createMipImageView(context, 0);
 
-    // Update descriptor set
-    eastl::vector<ResourceBindingDesc> bindings;
-    bindings.push_back(ResourceBindingDesc::storageImage(0, *lutView));
-    descriptorManager->updateSet(descSet, bindings);
+    // Update descriptor set using reflection to get actual binding number
+    auto* reflection = shader->getShaderReflection();
+    auto* brdfLUTRes = reflection->findResource("brdfLUT");
+
+    if (!brdfLUTRes) {
+        violet::Log::error("Renderer", "Failed to find brdfLUT resource via reflection");
+        return;
+    }
+
+    descriptorManager.bindStorageImage(descSet, brdfLUTRes->binding, *lutView);
 
     // Keep image view alive to prevent validation errors
     tempImageViews.push_back(eastl::move(lutView));
@@ -736,15 +799,16 @@ void EnvironmentMap::generateBRDFLUT() {
     });
 
     // Set sampler before adding to TextureManager
-    brdfLUT->setSampler(descriptorManager->getSampler(SamplerType::ClampToEdge));
+    brdfLUT->setSampler(descriptorManager.getSamplerManager().getSampler(SamplerType::ClampToEdge));
 
     brdfLUTHandle = textureManager->addTexture(eastl::move(brdfLUT));
-    brdfLUTIndex = descriptorManager->allocateBindlessTexture(textureManager->getTexture(brdfLUTHandle));
+    brdfLUTIndex = descriptorManager.allocateBindlessTexture(textureManager->getTexture(brdfLUTHandle));
 
     violet::Log::info("Renderer", "BRDF LUT generated (bindless index: {})", brdfLUTIndex);
 }
 
 void EnvironmentMap::addToRenderGraph() {
+    auto* materialManager = resourceManager->getMaterialManager();
     if (!renderGraph || !params.enabled || !materialManager) {
         return;
     }

@@ -9,6 +9,8 @@
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/graph/RenderPass.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
+#include "resource/ResourceManager.hpp"
+#include "resource/shader/Shader.hpp"
 
 #include <EASTL/algorithm.h>
 
@@ -119,8 +121,8 @@ Material* MaterialManager::getMaterialByName(const eastl::string& name) const {
 
 Material* MaterialManager::createPBRBindlessMaterial() {
     // Get shaders from ShaderLibrary
-    auto vertShader = shaderLibrary->get("pbr_vert");
-    auto fragShader = shaderLibrary->get("pbr_frag");
+    auto vertShader = shaderLibrary->get("pbr_bindless_vertex");
+    auto fragShader = shaderLibrary->get("pbr_bindless_frag");
 
     if (vertShader.expired() || fragShader.expired()) {
         violet::Log::error("MaterialManager", "Failed to get PBR shaders from ShaderLibrary");
@@ -159,12 +161,23 @@ Material* MaterialManager::createPBRBindlessMaterial() {
 
 Material* MaterialManager::createPostProcessMaterial() {
     // Get shaders from ShaderLibrary
-    auto vertShader = shaderLibrary->get("postprocess_vert");
+    auto vertShader = shaderLibrary->get("postprocess_vertex");
     auto fragShader = shaderLibrary->get("postprocess_frag");
 
     if (vertShader.expired() || fragShader.expired()) {
         violet::Log::error("MaterialManager", "Failed to get PostProcess shaders from ShaderLibrary");
         return nullptr;
+    }
+
+    // IMPORTANT: Pre-register descriptor layouts with PerFrame frequency for effects
+    // This ensures triple buffering (3 descriptor sets) to avoid updating in-use sets
+    auto vert = vertShader.lock();
+    auto frag = fragShader.lock();
+    if (vert) {
+        vert->registerDescriptorLayouts(descriptorManager, UpdateFrequency::PerFrame);
+    }
+    if (frag) {
+        frag->registerDescriptorLayouts(descriptorManager, UpdateFrequency::PerFrame);
     }
 
     // Get format information for PostProcess material type
@@ -189,12 +202,16 @@ Material* MaterialManager::createPostProcessMaterial() {
     desc.type = MaterialType::PostProcess;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
-    return createMaterial(desc);
+    Material* material = createMaterial(desc);
+    if (material) {
+        violet::Log::info("MaterialManager", "PostProcess material created successfully");
+    }
+    return material;
 }
 
 Material* MaterialManager::createSkyboxMaterial() {
     // Get shaders from ShaderLibrary
-    auto vertShader = shaderLibrary->get("skybox_vert");
+    auto vertShader = shaderLibrary->get("skybox_vertex");
     auto fragShader = shaderLibrary->get("skybox_frag");
 
     if (vertShader.expired() || fragShader.expired()) {
@@ -225,7 +242,11 @@ Material* MaterialManager::createSkyboxMaterial() {
     desc.type = MaterialType::Skybox;
     desc.renderPass = nullptr;  // Dynamic rendering - no RenderPass needed
 
-    return createMaterial(desc);
+    Material* material = createMaterial(desc);
+    if (material) {
+        violet::Log::info("MaterialManager", "Skybox material created successfully");
+    }
+    return material;
 }
 
 // === MaterialInstance Management ===
@@ -259,7 +280,7 @@ uint32_t MaterialManager::createMaterialInstance(const MaterialInstanceDesc& des
     }
 
     // Initialize instance
-    instance->create(context, desc.material, descriptorManager);
+    instance->create(context, desc.material, this);
 
     // Store in slot
     uint32_t index = getInstanceIndex(instanceId);
@@ -379,6 +400,24 @@ Texture* MaterialManager::getDefaultTexture(DefaultTextureType type) const {
         return nullptr;
     }
     return textureManager->getDefaultTexture(type);
+}
+
+// === Bindless Texture Management (delegated to DescriptorManager) ===
+
+uint32_t MaterialManager::allocateBindlessTexture(Texture* texture) {
+    if (!descriptorManager) {
+        violet::Log::error("MaterialManager", "DescriptorManager not initialized");
+        return 0;
+    }
+    return descriptorManager->allocateBindlessTexture(texture);
+}
+
+void MaterialManager::freeBindlessTexture(uint32_t index) {
+    if (!descriptorManager) {
+        violet::Log::error("MaterialManager", "DescriptorManager not initialized");
+        return;
+    }
+    descriptorManager->freeBindlessTexture(index);
 }
 
 // === Statistics ===
@@ -508,6 +547,84 @@ MaterialManager::PipelineRenderingFormats MaterialManager::getFormatsForMaterial
     }
 
     return formats;
+}
+
+// === MaterialData SSBO Management ===
+
+void MaterialManager::initMaterialsBuffer(ResourceManager* resMgr) {
+    if (!resMgr) {
+        violet::Log::error("MaterialManager", "Cannot initialize materials buffer: ResourceManager is null");
+        return;
+    }
+
+    // Get shader to access reflection data
+    auto shaderWeakPtr = resMgr->getShaderLibrary()->get("pbr_bindless_vertex");
+    auto shader = shaderWeakPtr.lock();
+    if (!shader || !shader->hasReflection()) {
+        violet::Log::error("MaterialManager", "Cannot get pbr_bindless_vertex shader reflection");
+        return;
+    }
+
+    const ShaderReflection* reflection = shader->getShaderReflection();
+
+    // Find the materials resource in Set 2 to get MaterialData element size
+    const ReflectedResource* materialsRes = reflection->findResource("materials");
+    if (!materialsRes || materialsRes->bufferLayoutIndex == ~0u) {
+        violet::Log::error("MaterialManager", "Cannot find 'materials' buffer in shader reflection");
+        return;
+    }
+
+    const ReflectedBuffer* materialDataLayout = reflection->getBufferLayout(materialsRes->bufferLayoutIndex);
+    if (!materialDataLayout) {
+        violet::Log::error("MaterialManager", "Cannot get MaterialData buffer layout from reflection");
+        return;
+    }
+
+    // MaterialData element size from shader reflection
+    uint32_t materialDataSize = materialDataLayout->totalSize;
+
+    // IMPORTANT: Materials is an unbounded StructuredBuffer<MaterialData>, so reflection
+    // only reports single element size. We need to override the buffer size
+    // to accommodate maxMaterialSlots (1024) materials.
+    eastl::unordered_map<uint32_t, uint32_t> bufferSizeOverrides;
+    bufferSizeOverrides[2] = maxMaterialSlots * materialDataSize;  // Set 2: materials SSBO
+
+    materialsBuffer = resMgr->createShaderResources("GlobalMaterials", "pbr_bindless_vertex",
+                                                    UpdateFrequency::Static, bufferSizeOverrides);
+
+    if (!materialsBuffer) {
+        violet::Log::error("MaterialManager", "Failed to create materials buffer from shader reflection");
+        return;
+    }
+
+    // Reserve free slots
+    freeMaterialSlots.reserve(maxMaterialSlots);
+
+    violet::Log::info("MaterialManager", "Initialized materials buffer (max {} materials, {} bytes per material, {} bytes total)",
+                     maxMaterialSlots, materialDataSize, maxMaterialSlots * materialDataSize);
+}
+
+uint32_t MaterialManager::allocateMaterialSlot() {
+    if (!freeMaterialSlots.empty()) {
+        uint32_t slot = freeMaterialSlots.back();
+        freeMaterialSlots.pop_back();
+        return slot;
+    }
+
+    if (nextMaterialSlot >= maxMaterialSlots) {
+        violet::Log::error("MaterialManager", "Material slot pool exhausted (max: {})", maxMaterialSlots);
+        return 0;
+    }
+
+    return nextMaterialSlot++;
+}
+
+void MaterialManager::freeMaterialSlot(uint32_t materialID) {
+    if (materialID == 0 || materialID >= maxMaterialSlots) {
+        return;
+    }
+
+    freeMaterialSlots.push_back(materialID);
 }
 
 } // namespace violet

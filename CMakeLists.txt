@@ -279,8 +279,11 @@ endif()
 add_executable(SlangReflectionTest
     tests/test_slang_reflection.cpp
     src/resource/shader/SlangCompiler.cpp
-    src/resource/shader/ReflectionHelper.cpp
     src/resource/shader/ShaderReflection.cpp
+    src/resource/shader/Shader.cpp
+    src/renderer/vulkan/DescriptorManager.cpp
+    src/renderer/vulkan/SamplerManager.cpp
+    src/renderer/vulkan/ShaderResourceBinding.cpp
     src/core/Log.cpp
     src/core/FileSystem.cpp
 )
@@ -295,6 +298,7 @@ target_include_directories(SlangReflectionTest PRIVATE
 
 target_link_libraries(SlangReflectionTest PRIVATE
     Vulkan::Vulkan
+    GPUOpen::VulkanMemoryAllocator
     EASTL
     fmt::fmt
     spdlog::spdlog

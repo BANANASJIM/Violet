@@ -48,7 +48,7 @@ void computeMain(uint3 globalId : SV_DispatchThreadID) {
     // Convert direction to equirectangular UV
     float2 equirectUV = directionToEquirectUV(direction);
 
-    // Sample from equirectangular map
+    // Sample from combined texture-sampler
     float4 color = equirectangularMap.SampleLevel(texSampler, equirectUV, 0);
 
     // Write to cubemap face

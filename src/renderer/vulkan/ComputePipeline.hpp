@@ -23,10 +23,13 @@ public:
 
     /**
      * @brief Initialize pipeline with Shader weak_ptr reference
+     * @param context Vulkan context
+     * @param descriptorManager Descriptor manager for layout registration
      * @param shader Compute shader weak_ptr (managed by ShaderLibrary)
+     * @param config Optional pipeline configuration
      */
-    void init(VulkanContext* context, eastl::weak_ptr<Shader> shader,
-              const ComputePipelineConfig& config = {});
+    void init(VulkanContext* context, class DescriptorManager* descriptorManager,
+              eastl::weak_ptr<Shader> shader, const ComputePipelineConfig& config = {});
 
     /**
      * @brief Rebuild pipeline after shader update (hot reload)
@@ -39,6 +42,9 @@ public:
     void bind(vk::CommandBuffer commandBuffer) override;
     vk::PipelineLayout getPipelineLayout() const override { return *pipelineLayout; }
     vk::Pipeline getPipeline() const { return *computePipeline; }
+
+    // Shader access (for ShaderResourceBinding)
+    eastl::weak_ptr<Shader> getShader() const { return computeShader; }
 
     void dispatch(vk::CommandBuffer commandBuffer, uint32_t groupCountX,
                   uint32_t groupCountY, uint32_t groupCountZ);
@@ -63,6 +69,7 @@ private:
     vk::raii::Pipeline computePipeline{nullptr};
 
     // Cached configuration for rebuild
+    class DescriptorManager* descriptorManager = nullptr;
     ComputePipelineConfig config;
 };
 

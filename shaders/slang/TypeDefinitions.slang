@@ -5,11 +5,8 @@ struct CameraUBO {
     float4x4 view;
     float4x4 proj;
     float3 cameraPos;
-    float padding0;
 
-    // Light data (physical units: lux for directional, lumens for point)
-    float4 lightPositions[8];
-    float4 lightColors[8];
+    // Light count (actual light data in StructuredBuffer<LightData>)
     int numLights;
     float3 ambientLight;
 
@@ -22,8 +19,6 @@ struct CameraUBO {
     // Shadow parameters
     int shadowsEnabled;
     int cascadeDebugMode;
-    uint padding1_0;
-    uint padding1_1;
 
     // IBL bindless indices
     uint environmentMapIndex;
@@ -36,7 +31,6 @@ struct LightData {
     float4 positionAndType;  // xyz=position/direction, w=type
     float4 colorAndRadius;   // xyz=color*intensity, w=radius
     int shadowIndex;
-    uint padding[3];
 };
 
 struct ShadowData {
@@ -48,11 +42,9 @@ struct ShadowData {
     uint lightType;
     uint cascadeCount;
     uint atlasIndex;
-    uint padding0;
 
     float4x4 cubeFaceMatrices[6];
-    uint padding1_0;
-    uint padding1_1;
+
 };
 
 struct MaterialData {
@@ -69,11 +61,9 @@ struct MaterialData {
     uint normalTexIndex;
     uint occlusionTexIndex;
     uint emissiveTexIndex;
-    uint padding[3];
 };
 
 struct PushConstants {
     float4x4 model;
     uint materialID;
-    uint padding[3];
 };

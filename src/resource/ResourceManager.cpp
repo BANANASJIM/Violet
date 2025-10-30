@@ -23,7 +23,8 @@ void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
     descriptorManager.init(context, maxFramesInFlight);
 
     // 2. Initialize sub-managers in dependency order using make_unique
-    shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx, &descriptorManager);
+    // Note: ShaderLibrary doesn't need DescriptorManager - layouts are registered by Pipeline
+    shaderLibrary = eastl::make_unique<ShaderLibrary>(ctx);
 
     textureManager = eastl::make_unique<TextureManager>();
     textureManager->init(ctx, &descriptorManager);
@@ -36,6 +37,10 @@ void ResourceManager::init(VulkanContext* ctx, uint32_t maxFramesInFlight) {
 
     // 3. Pre-load all shaders
     loadAllShaders();
+
+    // Note: Materials buffer initialization moved to ForwardRenderer::init()
+    // This ensures PBRBindless material pipeline is created first, which registers
+    // descriptor layouts with proper stage merging before materials buffer is allocated
 
     violet::Log::info("ResourceManager", "Initialized all sub-managers with DescriptorManager");
 }
@@ -154,6 +159,202 @@ void ResourceManager::processAsyncTasks() {
             task->mainThreadWork();
         }
     }
+}
+
+// === ShaderResources Management ===
+
+eastl::shared_ptr<ShaderResources> ResourceManager::createShaderResources(
+    const eastl::string& name,
+    const eastl::string& shaderName,
+    UpdateFrequency frequency,
+    const eastl::unordered_map<uint32_t, uint32_t>& bufferSizeOverrides) {
+
+    if (hasShaderResources(name)) {
+        violet::Log::warn("ResourceManager", "ShaderResources '{}' already exists, returning existing instance", name.c_str());
+        return shaderResourcesMap[name];
+    }
+
+    auto shaderWeakPtr = shaderLibrary->get(shaderName);
+    auto shader = shaderWeakPtr.lock();
+    if (!shader) {
+        violet::Log::error("ResourceManager", "Failed to find shader '{}' for ShaderResources '{}'",
+                          shaderName.c_str(), name.c_str());
+        return nullptr;
+    }
+
+    if (!shader->hasReflection()) {
+        violet::Log::error("ResourceManager", "Shader '{}' has no reflection data", shaderName.c_str());
+        return nullptr;
+    }
+
+    const ShaderReflection* shaderReflection = shader->getShaderReflection();
+    if (!shaderReflection) {
+        violet::Log::error("ResourceManager", "Shader '{}' has no extracted reflection data", shaderName.c_str());
+        return nullptr;
+    }
+
+    // Register descriptor layouts from shader reflection (if not already registered)
+    shader->registerDescriptorLayouts(&descriptorManager);
+
+    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+    if (layoutHandles.empty()) {
+        violet::Log::warn("ResourceManager", "Shader '{}' has no descriptor layouts", shaderName.c_str());
+    }
+
+    // Copy reflection and extract resourcesBySet BEFORE moving
+    ShaderReflection reflectionCopy = *shaderReflection;
+    // Make a COPY of the map, not a reference, so it survives the move below
+    auto resourcesBySet = reflectionCopy.getResourcesBySetMap();
+
+    // Create ShaderResources with DescriptorManager (moves reflectionCopy)
+    auto resources = eastl::make_shared<ShaderResources>(
+        name, shader, eastl::move(reflectionCopy), context, 3, &descriptorManager
+    );
+
+    // Create descriptor sets and buffers for each set
+    for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
+        LayoutHandle layoutHandle = layoutHandles[setIndex];
+
+        if (layoutHandle == 0) {
+            continue;
+        }
+
+        auto setResIt = resourcesBySet.find(static_cast<uint32_t>(setIndex));
+        if (setResIt == resourcesBySet.end() || setResIt->second.empty()) {
+            continue;
+        }
+
+        const auto& setResources = setResIt->second;
+
+        bool isBindless = false;
+        for (const auto& res : setResources) {
+            if (res.isBindless) {
+                isBindless = true;
+                break;
+            }
+        }
+
+        if (!descriptorManager.hasLayout(layoutHandle)) {
+            violet::Log::error("ResourceManager", "Layout handle {} not registered", layoutHandle);
+            continue;
+        }
+
+        // Use the frequency parameter passed by the caller
+        ShaderResources::SetData setData;
+        setData.setIndex = static_cast<uint32_t>(setIndex);
+        setData.layoutHandle = layoutHandle;
+        setData.isBindless = isBindless;
+        setData.frequency = frequency;
+        setData.hasBuffer = false;
+        setData.alignedSize = 0;
+        setData.mappedData = nullptr;
+
+        if (isBindless) {
+            setData.descriptorSet = descriptorManager.getBindlessSet();
+            violet::Log::debug("ResourceManager", "Instance '{}' using global bindless set for set {}",
+                      name.c_str(), setIndex);
+        } else {
+            setData.descriptorSet = descriptorManager.allocateSet(layoutHandle);
+
+            if (!setData.descriptorSet) {
+                violet::Log::error("ResourceManager", "Failed to allocate descriptor set for set {}", setIndex);
+                continue;
+            }
+
+            uint32_t totalBufferSize = 0;
+            for (const auto& res : setResources) {
+                if (res.type == vk::DescriptorType::eUniformBuffer ||
+                    res.type == vk::DescriptorType::eStorageBuffer) {
+                    setData.hasBuffer = true;
+                    if (res.bufferLayoutIndex != ~0u) {
+                        const auto* bufferLayout = shaderReflection->getBufferLayout(res.bufferLayoutIndex);
+                        if (bufferLayout) {
+                            totalBufferSize += bufferLayout->totalSize;
+                        }
+                    }
+                }
+            }
+
+            // Check if there's a buffer size override for this set
+            auto overrideIt = bufferSizeOverrides.find(static_cast<uint32_t>(setIndex));
+            if (overrideIt != bufferSizeOverrides.end()) {
+                totalBufferSize = overrideIt->second;
+                violet::Log::debug("ResourceManager", "Using buffer size override for set {}: {} bytes", setIndex, totalBufferSize);
+            }
+
+            if (setData.hasBuffer && totalBufferSize > 0) {
+                uint32_t bufferSize = totalBufferSize;
+                setData.alignedSize = totalBufferSize;
+
+                if (frequency == UpdateFrequency::PerFrame) {
+                    vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
+                    uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
+                    setData.alignedSize = (totalBufferSize + minAlignment - 1) & ~(minAlignment - 1);
+                    bufferSize = setData.alignedSize * 3;
+                }
+
+                eastl::string debugName = name + "_set";
+                char setIndexStr[16];
+                snprintf(setIndexStr, sizeof(setIndexStr), "%u", static_cast<uint32_t>(setIndex));
+                debugName += setIndexStr;
+
+                BufferInfo bufferInfo{
+                    .size = bufferSize,
+                    .usage = vk::BufferUsageFlagBits::eUniformBuffer |
+                             vk::BufferUsageFlagBits::eStorageBuffer,
+                    .memoryUsage = MemoryUsage::CPU_TO_GPU,
+                    .debugName = debugName
+                };
+
+                setData.buffer = ResourceFactory::createBuffer(context, bufferInfo);
+                setData.mappedData = setData.buffer.mappedData;
+
+                // Bind buffer to descriptor set via DescriptorManager
+                for (const auto& res : setResources) {
+                    if (res.type == vk::DescriptorType::eUniformBuffer ||
+                        res.type == vk::DescriptorType::eStorageBuffer) {
+                        vk::DeviceSize range = frequency == UpdateFrequency::PerFrame ?
+                                               setData.alignedSize : totalBufferSize;
+                        descriptorManager.bindBuffer(setData.descriptorSet, res.binding,
+                                                    setData.buffer, res.type,  // Use actual type (Uniform or Storage)
+                                                    0, range);
+                    }
+                }
+
+                violet::Log::debug("ResourceManager", "Allocated buffer ({}B total, {}B per frame) for set {} in instance '{}'",
+                          bufferSize, setData.alignedSize, setIndex, name.c_str());
+            }
+        }
+
+        resources->sets[static_cast<uint32_t>(setIndex)] = eastl::move(setData);
+    }
+
+    shaderResourcesMap[name] = resources;
+
+    violet::Log::info("ResourceManager", "Created ShaderResources '{}' from shader '{}' ({} sets)",
+              name.c_str(), shaderName.c_str(), resources->sets.size());
+
+    return resources;
+}
+
+eastl::shared_ptr<ShaderResources> ResourceManager::getShaderResources(const eastl::string& name) {
+    auto it = shaderResourcesMap.find(name);
+    if (it != shaderResourcesMap.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+const eastl::shared_ptr<ShaderResources> ResourceManager::getShaderResources(const eastl::string& name) const {
+    auto it = shaderResourcesMap.find(name);
+    if (it != shaderResourcesMap.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+bool ResourceManager::hasShaderResources(const eastl::string& name) const {
+    return shaderResourcesMap.find(name) != shaderResourcesMap.end();
 }
 
 } // namespace violet

@@ -379,7 +379,7 @@ eastl::unique_ptr<Scene> Scene::createFromAsset(
             texture->loadFromFile(context, texData.uri, isSRGB[i]);
         }
 
-        texture->setSampler(renderer.getDescriptorManager().getSampler(SamplerType::Default));
+        texture->setSampler(renderer.getDescriptorManager().getSamplerManager().getSampler(SamplerType::Default));
         Texture* texturePtr = materialManager->addTexture(eastl::move(texture));
         textures[i] = texturePtr;
     }

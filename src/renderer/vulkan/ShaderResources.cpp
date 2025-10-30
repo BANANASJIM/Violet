@@ -1,5 +1,4 @@
 #include "ShaderResources.hpp"
-#include "DescriptorManager.hpp"
 #include "VulkanContext.hpp"
 #include "resource/shader/Shader.hpp"
 #include "resource/Texture.hpp"
@@ -7,13 +6,51 @@
 
 namespace violet {
 
+// ===== ElementProxy Implementation =====
+
+ElementProxy::ElementProxy(ShaderResources* parent, const ReflectedResource* resourceInfo,
+                           size_t elementIndex, void* bufferData, uint32_t elementStride)
+    : parent(parent), resourceInfo(resourceInfo), elementIndex(elementIndex),
+      bufferData(bufferData), elementStride(elementStride) {}
+
+FieldProxy ElementProxy::operator[](const eastl::string& fieldName) {
+    if (!resourceInfo || !bufferData || !parent) {
+        Log::error("ShaderResources", "Invalid element proxy");
+        return FieldProxy(nullptr, 0, 0, "invalid");
+    }
+
+    const ReflectedBuffer* bufferLayout = parent->reflection.getBufferLayout(resourceInfo->bufferLayoutIndex);
+    if (!bufferLayout) {
+        Log::error("ShaderResources", "Resource '{}' has no buffer layout",
+                   resourceInfo->name.c_str());
+        return FieldProxy(nullptr, 0, 0, "invalid");
+    }
+
+    const ReflectedField* field = nullptr;
+    for (const auto& f : bufferLayout->fields) {
+        if (f.name == fieldName) {
+            field = &f;
+            break;
+        }
+    }
+
+    if (!field) {
+        Log::error("ShaderResources", "Field '{}' not found in buffer '{}' element",
+                   fieldName.c_str(), resourceInfo->name.c_str());
+        return FieldProxy(nullptr, 0, 0, "invalid");
+    }
+
+    uint32_t totalOffset = elementIndex * elementStride + field->offset;
+    return FieldProxy(bufferData, totalOffset, field->size, fieldName);
+}
+
 // ===== ResourceProxy Implementation =====
 
 ResourceProxy::ResourceProxy(ShaderResources* parent, const ReflectedResource* resourceInfo)
     : parent(parent), resourceInfo(resourceInfo) {}
 
 FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
-    if (!resourceInfo) {
+    if (!resourceInfo || !parent) {
         Log::error("ShaderResources", "Invalid resource proxy");
         return FieldProxy(nullptr, 0, 0, "invalid");
     }
@@ -25,15 +62,13 @@ FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
         return FieldProxy(nullptr, 0, 0, "invalid");
     }
 
-    // Get buffer layout
-    const ReflectedBuffer* bufferLayout = resourceInfo->bufferLayout;
+    const ReflectedBuffer* bufferLayout = parent->reflection.getBufferLayout(resourceInfo->bufferLayoutIndex);
     if (!bufferLayout) {
         Log::error("ShaderResources", "Resource '{}' has no buffer layout",
                    resourceInfo->name.c_str());
         return FieldProxy(nullptr, 0, 0, "invalid");
     }
 
-    // Find field
     const ReflectedField* field = nullptr;
     for (const auto& f : bufferLayout->fields) {
         if (f.name == fieldName) {
@@ -48,27 +83,53 @@ FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
         return FieldProxy(nullptr, 0, 0, "invalid");
     }
 
-    // Get managed data from DescriptorManager
-    auto* data = parent->manager->getShaderResourcesData(parent->handle);
-    if (!data) {
-        Log::error("ShaderResources", "Invalid ShaderResources handle");
-        return FieldProxy(nullptr, 0, 0, "invalid");
-    }
-
-    auto setIt = data->sets.find(resourceInfo->set);
-    if (setIt == data->sets.end() || !setIt->second.mappedData) {
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end() || !setIt->second.mappedData) {
         Log::error("ShaderResources", "Buffer for set {} is not mapped", resourceInfo->set);
         return FieldProxy(nullptr, 0, 0, "invalid");
     }
 
-    // For PerFrame buffers, use current frame offset
     void* basePtr = setIt->second.mappedData;
     if (setIt->second.frequency == UpdateFrequency::PerFrame) {
-        uint32_t frameIndex = parent->manager->getCurrentFrame();
-        basePtr = static_cast<char*>(basePtr) + (frameIndex * setIt->second.alignedSize);
+        basePtr = static_cast<char*>(basePtr) + (parent->getCurrentFrame() * setIt->second.alignedSize);
     }
 
     return FieldProxy(basePtr, field->offset, field->size, fieldName);
+}
+
+ElementProxy ResourceProxy::operator[](size_t elementIndex) {
+    if (!resourceInfo || !parent) {
+        Log::error("ShaderResources", "Invalid resource proxy");
+        return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
+    }
+
+    if (resourceInfo->type != vk::DescriptorType::eStorageBuffer) {
+        Log::error("ShaderResources", "Resource '{}' is not a StorageBuffer (cannot access array elements)",
+                   resourceInfo->name.c_str());
+        return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
+    }
+
+    const ReflectedBuffer* bufferLayout = parent->reflection.getBufferLayout(resourceInfo->bufferLayoutIndex);
+    if (!bufferLayout) {
+        Log::error("ShaderResources", "Resource '{}' has no buffer layout",
+                   resourceInfo->name.c_str());
+        return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
+    }
+
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end() || !setIt->second.mappedData) {
+        Log::error("ShaderResources", "Buffer for set {} is not mapped", resourceInfo->set);
+        return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
+    }
+
+    uint32_t elementStride = bufferLayout->totalSize;
+
+    void* basePtr = setIt->second.mappedData;
+    if (setIt->second.frequency == UpdateFrequency::PerFrame) {
+        basePtr = static_cast<char*>(basePtr) + (parent->getCurrentFrame() * setIt->second.alignedSize);
+    }
+
+    return ElementProxy(parent, resourceInfo, elementIndex, basePtr, elementStride);
 }
 
 ResourceProxy& ResourceProxy::operator=(Texture* texture) {
@@ -78,33 +139,18 @@ ResourceProxy& ResourceProxy::operator=(Texture* texture) {
         return *this;
     }
 
-    auto* data = parent->manager->getShaderResourcesData(parent->handle);
-    if (!data) {
-        Log::error("ShaderResources", "Invalid ShaderResources handle");
-        return *this;
-    }
-
-    auto setIt = data->sets.find(resourceInfo->set);
-    if (setIt == data->sets.end()) {
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end()) {
         Log::error("ShaderResources", "Set {} not found", resourceInfo->set);
         return *this;
     }
 
-    // Update descriptor
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageView = texture->getImageView();
-    imageInfo.sampler = texture->getSampler();
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = setIt->second.descriptorSet;
-    write.dstBinding = resourceInfo->binding;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.descriptorCount = 1;
-    write.pImageInfo = &imageInfo;
-
-    // Update through VulkanContext (accessed via manager)
-    parent->manager->getContext()->getDevice().updateDescriptorSets({write}, {});
+    // Use DescriptorManager for binding
+    if (parent->descriptorManager) {
+        parent->descriptorManager->bindTexture(setIt->second.descriptorSet, resourceInfo->binding, texture);
+    } else {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot bind texture");
+    }
 
     return *this;
 }
@@ -116,29 +162,20 @@ ResourceProxy& ResourceProxy::operator=(const StorageBufferBinding& binding) {
         return *this;
     }
 
-    auto* data = parent->manager->getShaderResourcesData(parent->handle);
-    if (!data) {
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end()) {
         return *this;
     }
 
-    auto setIt = data->sets.find(resourceInfo->set);
-    if (setIt == data->sets.end()) {
-        return *this;
+    // Use DescriptorManager for binding
+    if (parent->descriptorManager) {
+        BufferResource bufRes{binding.buffer, nullptr};
+        parent->descriptorManager->bindBuffer(setIt->second.descriptorSet, resourceInfo->binding,
+                                             bufRes, vk::DescriptorType::eStorageBuffer,
+                                             binding.offset, binding.range);
+    } else {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot bind storage buffer");
     }
-
-    vk::DescriptorBufferInfo bufferInfo;
-    bufferInfo.buffer = binding.buffer;
-    bufferInfo.offset = binding.offset;
-    bufferInfo.range = binding.range;
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = setIt->second.descriptorSet;
-    write.dstBinding = resourceInfo->binding;
-    write.descriptorType = vk::DescriptorType::eStorageBuffer;
-    write.descriptorCount = 1;
-    write.pBufferInfo = &bufferInfo;
-
-    parent->manager->getContext()->getDevice().updateDescriptorSets({write}, {});
 
     return *this;
 }
@@ -150,29 +187,17 @@ ResourceProxy& ResourceProxy::operator=(vk::ImageView imageView) {
         return *this;
     }
 
-    auto* data = parent->manager->getShaderResourcesData(parent->handle);
-    if (!data) {
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end()) {
         return *this;
     }
 
-    auto setIt = data->sets.find(resourceInfo->set);
-    if (setIt == data->sets.end()) {
-        return *this;
+    // Use DescriptorManager for binding
+    if (parent->descriptorManager) {
+        parent->descriptorManager->bindStorageImage(setIt->second.descriptorSet, resourceInfo->binding, imageView);
+    } else {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot bind storage image");
     }
-
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageView = imageView;
-    imageInfo.imageLayout = vk::ImageLayout::eGeneral;
-    imageInfo.sampler = nullptr;
-
-    vk::WriteDescriptorSet write;
-    write.dstSet = setIt->second.descriptorSet;
-    write.dstBinding = resourceInfo->binding;
-    write.descriptorType = vk::DescriptorType::eStorageImage;
-    write.descriptorCount = 1;
-    write.pImageInfo = &imageInfo;
-
-    parent->manager->getContext()->getDevice().updateDescriptorSets({write}, {});
 
     return *this;
 }
@@ -184,29 +209,41 @@ ResourceProxy& ResourceProxy::operator=(const BufferResource& buffer) {
         return *this;
     }
 
-    auto* data = parent->manager->getShaderResourcesData(parent->handle);
-    if (!data) {
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end()) {
         return *this;
     }
 
-    auto setIt = data->sets.find(resourceInfo->set);
-    if (setIt == data->sets.end()) {
+    // Use DescriptorManager for binding
+    if (parent->descriptorManager) {
+        parent->descriptorManager->bindBuffer(setIt->second.descriptorSet, resourceInfo->binding,
+                                             buffer, vk::DescriptorType::eUniformBuffer);
+    } else {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot bind uniform buffer");
+    }
+
+    return *this;
+}
+
+ResourceProxy& ResourceProxy::operator=(vk::Sampler sampler) {
+    if (!resourceInfo || resourceInfo->type != vk::DescriptorType::eSampler) {
+        Log::error("ShaderResources", "Resource '{}' is not a Sampler",
+                   resourceInfo ? resourceInfo->name.c_str() : "null");
         return *this;
     }
 
-    vk::DescriptorBufferInfo bufferInfo;
-    bufferInfo.buffer = buffer.buffer;
-    bufferInfo.offset = 0;
-    bufferInfo.range = VK_WHOLE_SIZE;
+    auto setIt = parent->sets.find(resourceInfo->set);
+    if (setIt == parent->sets.end()) {
+        Log::error("ShaderResources", "Set {} not found", resourceInfo->set);
+        return *this;
+    }
 
-    vk::WriteDescriptorSet write;
-    write.dstSet = setIt->second.descriptorSet;
-    write.dstBinding = resourceInfo->binding;
-    write.descriptorType = vk::DescriptorType::eUniformBuffer;
-    write.descriptorCount = 1;
-    write.pBufferInfo = &bufferInfo;
-
-    parent->manager->getContext()->getDevice().updateDescriptorSets({write}, {});
+    // Use DescriptorManager for binding
+    if (parent->descriptorManager) {
+        parent->descriptorManager->bindSampler(setIt->second.descriptorSet, resourceInfo->binding, sampler);
+    } else {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot bind sampler");
+    }
 
     return *this;
 }
@@ -220,53 +257,77 @@ const eastl::string& ResourceProxy::getName() const {
     return resourceInfo ? resourceInfo->name : empty;
 }
 
-// ===== ShaderResources Implementation (Lightweight Proxy) =====
+// ===== ShaderResources Implementation =====
 
-ShaderResources::ShaderResources(ShaderResourcesHandle handle, DescriptorManager* manager)
-    : handle(handle), manager(manager) {}
+ShaderResources::ShaderResources(
+    eastl::string instanceName,
+    eastl::shared_ptr<Shader> shader,
+    ShaderReflection reflection,
+    VulkanContext* context,
+    uint32_t maxFrames,
+    DescriptorManager* descriptorMgr)
+    : instanceName(eastl::move(instanceName))
+    , shader(eastl::move(shader))
+    , reflection(eastl::move(reflection))
+    , context(context)
+    , descriptorManager(descriptorMgr)
+    , maxFrames(maxFrames) {
+}
+
+ShaderResources::~ShaderResources() {
+    for (auto& [setIndex, setData] : sets) {
+        if (setData.hasBuffer && setData.buffer.buffer) {
+            ResourceFactory::destroyBuffer(context, setData.buffer);
+        }
+    }
+}
 
 ResourceProxy ShaderResources::operator[](const eastl::string& resourceName) {
-    auto* data = manager->getShaderResourcesData(handle);
-    if (!data || !data->reflection) {
-        Log::error("ShaderResources", "No reflection data available");
-        return ResourceProxy(this, nullptr);
-    }
-
-    const ReflectedResource* resource = data->reflection->findResource(resourceName);
+    const ReflectedResource* resource = reflection.findResource(resourceName);
     if (!resource) {
         Log::error("ShaderResources", "Resource '{}' not found in shader '{}'",
-                   resourceName.c_str(), data->shader->getName().c_str());
+                   resourceName.c_str(), shader ? shader->getName().c_str() : "null");
         return ResourceProxy(this, nullptr);
     }
 
     return ResourceProxy(this, resource);
 }
 
-vk::DescriptorSet ShaderResources::getSet(uint32_t setIndex) const {
-    auto* data = manager->getShaderResourcesData(handle);
-    if (!data) {
-        return nullptr;
+void ShaderResources::updateResources(uint32_t setIndex,
+                                      const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources) {
+    auto setIt = sets.find(setIndex);
+    if (setIt == sets.end()) {
+        Log::error("ShaderResources", "Set {} not found in ShaderResources '{}'",
+                  setIndex, instanceName.c_str());
+        return;
     }
 
-    auto it = data->sets.find(setIndex);
-    if (it == data->sets.end()) {
+    if (!descriptorManager) {
+        Log::error("ShaderResources", "DescriptorManager is null, cannot batch update descriptors");
+        return;
+    }
+
+    // Delegate to DescriptorManager's reflection-driven batch update
+    descriptorManager->updateSet(setIt->second.descriptorSet, reflection, resources);
+
+    Log::debug("ShaderResources", "Batch updated {} resource(s) in set {} for '{}'",
+              resources.size(), setIndex, instanceName.c_str());
+}
+
+vk::DescriptorSet ShaderResources::getSet(uint32_t setIndex) const {
+    auto it = sets.find(setIndex);
+    if (it == sets.end()) {
         return nullptr;
     }
     return it->second.descriptorSet;
 }
 
 uint32_t ShaderResources::getDynamicOffset(uint32_t setIndex, uint32_t frameIndex) const {
-    auto* data = manager->getShaderResourcesData(handle);
-    if (!data) {
+    auto it = sets.find(setIndex);
+    if (it == sets.end()) {
         return 0;
     }
 
-    auto it = data->sets.find(setIndex);
-    if (it == data->sets.end()) {
-        return 0;
-    }
-
-    // Return dynamic offset for PerFrame buffers
     if (it->second.frequency == UpdateFrequency::PerFrame) {
         return frameIndex * it->second.alignedSize;
     }
@@ -276,16 +337,13 @@ uint32_t ShaderResources::getDynamicOffset(uint32_t setIndex, uint32_t frameInde
 
 void ShaderResources::bind(vk::CommandBuffer cmd, vk::PipelineLayout layout,
                            vk::PipelineBindPoint bindPoint, uint32_t frameIndex) {
-    auto* data = manager->getShaderResourcesData(handle);
-    if (!data || data->sets.empty()) {
+    if (sets.empty()) {
         return;
     }
 
-    // Bind each descriptor set
-    for (auto& [setIndex, setData] : data->sets) {
+    for (auto& [setIndex, setData] : sets) {
         eastl::vector<uint32_t> dynamicOffsets;
 
-        // Add dynamic offset for PerFrame buffers
         if (setData.frequency == UpdateFrequency::PerFrame && setData.hasBuffer) {
             dynamicOffsets.push_back(frameIndex * setData.alignedSize);
         }
@@ -301,24 +359,11 @@ void ShaderResources::bind(vk::CommandBuffer cmd, vk::PipelineLayout layout,
 }
 
 bool ShaderResources::hasResource(const eastl::string& name) const {
-    auto* data = manager->getShaderResourcesData(handle);
-    return data && data->reflection && data->reflection->findResource(name) != nullptr;
+    return reflection.findResource(name) != nullptr;
 }
 
 const ReflectedResource* ShaderResources::getResourceInfo(const eastl::string& name) const {
-    auto* data = manager->getShaderResourcesData(handle);
-    return (data && data->reflection) ? data->reflection->findResource(name) : nullptr;
-}
-
-const eastl::string& ShaderResources::getInstanceName() const {
-    auto* data = manager->getShaderResourcesData(handle);
-    static eastl::string empty;
-    return data ? data->instanceName : empty;
-}
-
-eastl::shared_ptr<Shader> ShaderResources::getShader() const {
-    auto* data = manager->getShaderResourcesData(handle);
-    return data ? data->shader : nullptr;
+    return reflection.findResource(name);
 }
 
 } // namespace violet

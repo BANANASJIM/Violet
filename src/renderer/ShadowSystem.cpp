@@ -77,15 +77,33 @@ void ShadowSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, TextureM
     cpuShadowData.reserve(INITIAL_CAPACITY);
     shadowBuffers.resize(maxFramesInFlight);
 
-    ensureBufferCapacity(INITIAL_CAPACITY);
+    // Register descriptor layout for shadows (single SSBO binding) BEFORE allocating buffers
+    if (!descriptorManager->hasLayout("Shadow")) {
+        DescriptorLayoutDesc layoutDesc;
+        layoutDesc.name = "Shadow";
+        layoutDesc.frequency = UpdateFrequency::PerFrame;  // Triple buffered
 
+        BindingDesc binding;
+        binding.binding = 0;
+        binding.type = vk::DescriptorType::eStorageBuffer;
+        binding.stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+        binding.count = 1;
+
+        layoutDesc.bindings.push_back(binding);
+        descriptorManager->registerLayout(layoutDesc);
+    }
+
+    // Allocate descriptor sets
     descriptorSets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
 
+    // Create buffers
+    ensureBufferCapacity(INITIAL_CAPACITY);
+
+    // Bind buffers to descriptor sets
     for (uint32_t i = 0; i < maxFramesInFlight; i++) {
-        eastl::vector<ResourceBindingDesc> bindings;
-        bindings.push_back(ResourceBindingDesc::storageBuffer(
-            0, shadowBuffers[i].buffer, 0, bufferCapacity * sizeof(ShadowData)));
-        descriptorManager->updateSet(descriptorSets[i], bindings);
+        descriptorManager->bindBuffer(descriptorSets[i], 0, shadowBuffers[i],
+                                     vk::DescriptorType::eStorageBuffer,
+                                     0, bufferCapacity * sizeof(ShadowData));
     }
 
     createAtlas();
@@ -575,10 +593,11 @@ void ShadowSystem::ensureBufferCapacity(uint32_t shadowCount) {
     uint32_t newCapacity = eastl::max(shadowCount, bufferCapacity * 2);
     newCapacity = eastl::min(newCapacity, MAX_SHADOWS);
 
-    descriptorSets = descriptorManager->allocateSets("Shadow", maxFramesInFlight);
-
     for (uint32_t i = 0; i < maxFramesInFlight; i++) {
-        ResourceFactory::destroyBuffer(context, shadowBuffers[i]);
+        // Destroy old buffer if it exists
+        if (shadowBuffers[i].buffer) {
+            ResourceFactory::destroyBuffer(context, shadowBuffers[i]);
+        }
 
         BufferInfo bufferInfo{
             .size = newCapacity * sizeof(ShadowData),
@@ -588,10 +607,12 @@ void ShadowSystem::ensureBufferCapacity(uint32_t shadowCount) {
         };
         shadowBuffers[i] = ResourceFactory::createBuffer(context, bufferInfo);
 
-        eastl::vector<ResourceBindingDesc> bindings;
-        bindings.push_back(ResourceBindingDesc::storageBuffer(
-            0, shadowBuffers[i].buffer, 0, newCapacity * sizeof(ShadowData)));
-        descriptorManager->updateSet(descriptorSets[i], bindings);
+        // Only bind if descriptor sets are already allocated
+        if (i < descriptorSets.size() && descriptorSets[i]) {
+            descriptorManager->bindBuffer(descriptorSets[i], 0, shadowBuffers[i],
+                                         vk::DescriptorType::eStorageBuffer,
+                                         0, newCapacity * sizeof(ShadowData));
+        }
     }
 
     bufferCapacity = newCapacity;
@@ -608,7 +629,7 @@ void ShadowSystem::createAtlas() {
     );
 
     // Set shadow sampler for the texture
-    vk::Sampler depthSampler = descriptorManager->getSampler(SamplerType::Shadow);
+    vk::Sampler depthSampler = descriptorManager->getSamplerManager().getSampler(SamplerType::Shadow);
     atlasTexture->setSampler(depthSampler);
 
     // Register to bindless texture array manually

@@ -22,18 +22,6 @@ public:
     size_t computeSourceHash(const eastl::string& filePath) const override;
 
     /**
-     * @brief Get reflection data from last successful compilation
-     * @return Pointer to reflection layout (valid until next compile() or destruction)
-     *         Returns nullptr if no successful compilation has been done yet
-     */
-    slang::ProgramLayout* getReflection() const { return lastReflection; }
-
-    /**
-     * @brief Check if reflection data is available
-     */
-    bool hasReflection() const { return lastReflection != nullptr; }
-
-    /**
      * @brief Get all entry points from a Slang module
      * @param filePath Path to .slang module file
      * @param includePaths Search paths for imports
@@ -58,13 +46,21 @@ private:
      */
     bool checkDiagnostics(slang::IBlob* diagnostics, CompileResult& result);
 
+    /**
+     * @brief Get or create session with given compilation settings
+     * Reuses cached session if settings match, otherwise creates new one
+     */
+    slang::ISession* getOrCreateSession(
+        const eastl::vector<eastl::string>& includePaths,
+        const eastl::vector<eastl::string>& defines);
+
 private:
     Slang::ComPtr<slang::IGlobalSession> globalSession;
 
-    // Cached reflection data from last compilation
-    // Note: Reflection is part of the linked program, so we must keep program alive
-    Slang::ComPtr<slang::IComponentType> lastLinkedProgram;
-    slang::ProgramLayout* lastReflection = nullptr;
+    // Session cache (reuse session for identical compilation settings)
+    Slang::ComPtr<slang::ISession> cachedSession;
+    eastl::vector<eastl::string> cachedIncludePaths;
+    eastl::vector<eastl::string> cachedDefines;
 };
 
 } // namespace violet

@@ -5,11 +5,13 @@
 #include "resource/MeshManager.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/ShaderResources.hpp"
 #include "core/ThreadPool.hpp"
 
 #include <EASTL/vector.h>
 #include <EASTL/functional.h>
 #include <EASTL/shared_ptr.h>
+#include <EASTL/unordered_map.h>
 #include <mutex>
 #include <atomic>
 
@@ -56,6 +58,25 @@ public:
     DescriptorManager& getDescriptorManager() { return descriptorManager; }
     const DescriptorManager& getDescriptorManager() const { return descriptorManager; }
 
+    // === ShaderResources Management ===
+    // Create ShaderResources from shader reflection (auto-creates descriptor sets + buffers)
+    // frequency: PerFrame for globals (3x buffer), PerMaterial for materials (1x buffer)
+    // bufferSizeOverrides: Optional map of set index -> buffer size to override reflection-computed sizes
+    //                      Useful for unbounded arrays (e.g., StructuredBuffer<T> with no size info)
+    eastl::shared_ptr<ShaderResources> createShaderResources(
+        const eastl::string& name,
+        const eastl::string& shaderName,
+        UpdateFrequency frequency = UpdateFrequency::PerMaterial,
+        const eastl::unordered_map<uint32_t, uint32_t>& bufferSizeOverrides = {}
+    );
+
+    // Get registered ShaderResources by name
+    eastl::shared_ptr<ShaderResources> getShaderResources(const eastl::string& name);
+    const eastl::shared_ptr<ShaderResources> getShaderResources(const eastl::string& name) const;
+
+    // Check if ShaderResources exists
+    bool hasShaderResources(const eastl::string& name) const;
+
     // === Convenience Methods (delegates to sub-managers) ===
     void createDefaultResources();
 
@@ -73,6 +94,9 @@ private:
     eastl::unique_ptr<TextureManager> textureManager;    // depends on DescriptorManager
     eastl::unique_ptr<MaterialManager> materialManager;  // depends on TextureManager + DescriptorManager
     eastl::unique_ptr<MeshManager> meshManager;
+
+    // ShaderResources registry (reflection-driven descriptor sets + buffers)
+    eastl::unordered_map<eastl::string, eastl::shared_ptr<ShaderResources>> shaderResourcesMap;
 
     // Async loading support
     ThreadPool threadPool;

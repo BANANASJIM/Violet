@@ -65,61 +65,74 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
         // Set rendering formats in MaterialManager for compatible RenderPass creation
         matMgr->setRenderingFormats(swapchainFormat);
 
-        environmentMap.init(context, matMgr, &descMgr, resourceManager->getTextureManager(), resourceManager->getShaderLibrary(), renderGraph.get());
+        environmentMap.init(context, resourceManager, renderGraph.get());
     }
 
     // Initialize auto-exposure (now safe since shaders are loaded)
     autoExposure.init(context, &descMgr, currentExtent, resourceManager->getShaderLibrary(), renderGraph.get(), "hdr");
 
-    // Create materials (pipelines have descriptor layouts auto-registered from Slang reflection)
+    // CRITICAL: Pre-register pbr_bindless layouts with PerFrame for Global UBO (set 0)
+    // This must happen BEFORE any materials are created to ensure correct frequency
+    {
+        auto vertShader = resourceManager->getShaderLibrary()->get("pbr_bindless_vertex").lock();
+        auto fragShader = resourceManager->getShaderLibrary()->get("pbr_bindless_frag").lock();
+        if (vertShader) {
+            vertShader->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+        }
+        if (fragShader) {
+            fragShader->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+        }
+    }
+
+    // Create Global resources (uses pre-registered PerFrame layouts)
+    globalResources = resourceManager->createShaderResources("Global", "pbr_bindless_vertex", UpdateFrequency::PerFrame);
+    if (!globalResources) {
+        violet::Log::error("Renderer", "Failed to create Global ShaderResources");
+        return;
+    }
+
+    // Create materials (pipelines will use the already-registered layouts)
     matMgr->createPostProcessMaterial();
     matMgr->createPBRBindlessMaterial();
     matMgr->createSkyboxMaterial();
 
-    // Create Global resources using ShaderResources API
-    // Use pbr_bindless vertex shader as it contains the Global UBO definition
-    auto pbrVertShader = resourceManager->getShaderLibrary()->get("pbr_bindless_vertexMain");
-    if (!pbrVertShader.expired()) {
-        ShaderResourcesHandle handle = descMgr.createShaderResources(pbrVertShader.lock(), "Global");
-        if (handle != 0) {
-            // Wrap handle in shared_ptr with custom deleter
-            globalResources = eastl::shared_ptr<ShaderResources>(
-                new ShaderResources(handle, &descMgr),
-                [&descMgr, handle](ShaderResources* ptr) {
-                    delete ptr;
-                    descMgr.destroyShaderResources(handle);
-                }
-            );
-            violet::Log::info("Renderer", "Created Global ShaderResources");
-        } else {
-            violet::Log::error("Renderer", "Failed to create Global ShaderResources");
-        }
+    // Initialize materials buffer (uses already-registered layouts)
+    matMgr->initMaterialsBuffer(resourceManager);
+    if (globalResources) {
+        violet::Log::info("Renderer", "Created Global ShaderResources (PerFrame, triple-buffered)");
     } else {
-        violet::Log::error("Renderer", "pbr_bindless_vertexMain shader not found - ensure shaders are loaded first");
+        violet::Log::error("Renderer", "Failed to create Global ShaderResources - ensure pbr_bindless_vertex shader is loaded");
     }
 
-    tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain");
+    tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain", resourceManager->getShaderLibrary());
 
     // Initialize debug renderer (using reflection-based descriptor API)
     debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight, globalResources);
     debugRenderer.setEnabled(false);  // Disable debug renderer for testing
 
     // Initialize bindless through DescriptorManager
-    descMgr.initBindless(1024);
+    // Get bindless layout from pbr_bindless shader (Set 1)
+    auto pbrBindlessShader = resourceManager->getShaderLibrary()->get("pbr_bindless_frag").lock();
+    if (pbrBindlessShader && pbrBindlessShader->getDescriptorLayoutHandles().size() > 1) {
+        LayoutHandle bindlessLayoutHandle = pbrBindlessShader->getDescriptorLayoutHandles()[1];  // Set 1 is bindless
+        descMgr.initBindless(1024, bindlessLayoutHandle);
+        descMgr.initBindlessSamplers();  // Bind global samplers (linearSampler, nearestSampler, shadowSampler)
+    } else {
+        violet::Log::error("Renderer", "Failed to get bindless layout from pbr_bindless_frag shader");
+    }
 
-    // Initialize material data SSBO for bindless architecture
-    descMgr.initMaterialDataBuffer(1024);
+    // Note: Material data SSBO is now initialized in MaterialManager::initMaterialsBuffer()
+    // called during ResourceManager::init()
 
-    // TODO: Temporarily disabled shadow/lighting systems to test Slang pipeline creation
     // Initialize lighting and shadow systems
-    // lightingSystem = new LightingSystem();
-    // lightingSystem->init(context, &descMgr, maxFramesInFlight);
+    lightingSystem = new LightingSystem();
+    lightingSystem->init(context, &descMgr, maxFramesInFlight);
 
-    // shadowSystem = new ShadowSystem();
-    // shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
+    shadowSystem = new ShadowSystem();
+    shadowSystem->init(context, &descMgr, resourceManager->getTextureManager(), maxFramesInFlight);
 
-    // shadowPass = eastl::make_unique<ShadowPass>();
-    // shadowPass->init(context, &descMgr, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
+    shadowPass = eastl::make_unique<ShadowPass>();
+    shadowPass->init(context, &descMgr, resourceManager->getShaderLibrary(), shadowSystem, lightingSystem, renderGraph.get(), "shadowAtlas");
 
 }
 
@@ -615,20 +628,23 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
     // Bind pipeline once for all objects
     pbrBindlessMaterial->getPipeline()->bind(commandBuffer);
 
-    // Bind all descriptor sets once (set 0-4: Global, Bindless, MaterialData, Lighting, Shadow)
+    // Bind all descriptor sets once (set 0-2: Global, Bindless, MaterialData)
+    // NOTE: Lighting and Shadow data are now in Global set (set 0) as part of GlobalUBO
     auto& descMgr = resourceManager->getDescriptorManager();
     vk::DescriptorSet globalSet = globalResources->getSet(0);
     vk::DescriptorSet bindlessSet = descMgr.getBindlessSet();
-    vk::DescriptorSet materialDataSet = descMgr.getMaterialDataSet();
-    vk::DescriptorSet lightingSet = lightingSystem ? lightingSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};
-    vk::DescriptorSet shadowSet = shadowSystem ? shadowSystem->getDescriptorSet(frameIndex) : vk::DescriptorSet{};
 
-    eastl::array<vk::DescriptorSet, 5> descriptorSets = {globalSet, bindlessSet, materialDataSet, lightingSet, shadowSet};
+    // Get materials descriptor set from MaterialManager
+    auto* matMgr = getMaterialManager();
+    vk::DescriptorSet materialDataSet = matMgr && matMgr->getMaterialsBuffer() ?
+        matMgr->getMaterialsBuffer()->getSet(2) : vk::DescriptorSet{};  // Set 2 for materials SSBO
+
+    eastl::array<vk::DescriptorSet, 3> descriptorSets = {globalSet, bindlessSet, materialDataSet};
     commandBuffer.bindDescriptorSets(
         vk::PipelineBindPoint::eGraphics,
         pbrBindlessMaterial->getPipelineLayout(),
         0,  // First set = 0
-        5,  // Bind 5 sets
+        3,  // Bind 3 sets
         descriptorSets.data(),
         0,
         nullptr
@@ -667,19 +683,23 @@ void ForwardRenderer::renderScene(vk::CommandBuffer commandBuffer, uint32_t fram
             continue;
         }
 
-        // Push constants: model matrix + material ID
-        BindlessPushConstants push{
-            .model = renderable.worldTransform,
-            .materialID = matInstance->getMaterialID(),
-            .padding = {0, 0, 0}
-        };
+        // Push constants: model matrix + material ID (80 bytes total)
+        struct {
+            glm::mat4 model;        // 64 bytes
+            uint32_t materialID;    // 4 bytes
+            uint32_t padding[3];    // 12 bytes padding
+        } pushData;
+
+        pushData.model = renderable.worldTransform;
+        pushData.materialID = matInstance->getMaterialID();
+        pushData.padding[0] = pushData.padding[1] = pushData.padding[2] = 0;
 
         commandBuffer.pushConstants(
             pbrBindlessMaterial->getPipelineLayout(),
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
             0,
-            sizeof(BindlessPushConstants),
-            &push
+            sizeof(pushData),
+            &pushData
         );
 
         // Draw call

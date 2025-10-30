@@ -21,15 +21,29 @@ void LightingSystem::init(VulkanContext* ctx, DescriptorManager* descMgr, uint32
 
     ensureBufferCapacity(INITIAL_CAPACITY);
 
+    // Register descriptor layout for lighting (single SSBO binding)
+    if (!descriptorManager->hasLayout("Lighting")) {
+        DescriptorLayoutDesc layoutDesc;
+        layoutDesc.name = "Lighting";
+        layoutDesc.frequency = UpdateFrequency::PerFrame;  // Will use dynamic offset
+
+        BindingDesc binding;
+        binding.binding = 0;
+        binding.type = vk::DescriptorType::eStorageBuffer;
+        binding.stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+        binding.count = 1;
+
+        layoutDesc.bindings.push_back(binding);
+        descriptorManager->registerLayout(layoutDesc);
+    }
+
     // Allocate single descriptor set (will use dynamic offset for per-frame access)
     auto sets = descriptorManager->allocateSets("Lighting", 1);
     descriptorSet = sets[0];
 
     // Bind the buffer to descriptor set (range = alignedFrameSize for dynamic offset)
-    eastl::vector<ResourceBindingDesc> bindings;
-    bindings.push_back(ResourceBindingDesc::storageBuffer(
-        0, lightBuffer.buffer, 0, alignedFrameSize));
-    descriptorManager->updateSet(descriptorSet, bindings);
+    descriptorManager->bindBuffer(descriptorSet, 0, lightBuffer,
+                                 vk::DescriptorType::eStorageBuffer, 0, alignedFrameSize);
 
     violet::Log::info("LightingSystem", "Initialized (capacity: {}, aligned frame size: {} bytes)",
                      INITIAL_CAPACITY, alignedFrameSize);

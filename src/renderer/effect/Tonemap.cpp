@@ -10,7 +10,8 @@
 namespace violet {
 
 void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr,
-                   RenderGraph* graph, const eastl::string& hdrName, const eastl::string& swapchainName) {
+                   RenderGraph* graph, const eastl::string& hdrName, const eastl::string& swapchainName,
+                   ShaderLibrary* shaderLib) {
     context = ctx;
     materialManager = matMgr;
     descriptorManager = descMgr;
@@ -25,15 +26,11 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
         return;
     }
 
-    // For now, allocate descriptor sets using deprecated allocateSets API
-    // TODO: Replace with reflection-based texture descriptor API once implemented
-    auto sets = descriptorManager->allocateSets("PostProcess", MAX_FRAMES_IN_FLIGHT);
-    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        descriptorSets[i] = sets[i];
-    }
+    // Initialize ShaderResourceBinding with pipeline (automatic descriptor set management)
+    binding.init(postProcessMaterial->getPipeline(), 0);  // Use set 0
 
-    violet::Log::info("Tonemap", "Initialized with {} -> {} ({} frames)", hdrName.c_str(), swapchainName.c_str(), MAX_FRAMES_IN_FLIGHT);
+    violet::Log::info("Tonemap", "Initialized with {} -> {} (automatic descriptor management)",
+                     hdrName.c_str(), swapchainName.c_str());
 }
 
 void Tonemap::cleanup() {
@@ -50,11 +47,6 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    if (frameIndex >= descriptorSets.size()) {
-        violet::Log::error("Tonemap", "Invalid frame index: {}", frameIndex);
-        return;
-    }
-
     // Get HDR and depth resources from RenderGraph
     const LogicalResource* hdrRes = renderGraph->getResource(hdrImageName);
     if (!hdrRes) {
@@ -62,14 +54,13 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    // Get depth resource (transient depth buffer from Main pass)
     const LogicalResource* depthRes = renderGraph->getResource("depth");
     if (!depthRes) {
         violet::Log::error("Tonemap", "Depth resource not found in RenderGraph");
         return;
     }
 
-    // Get image views - check for null imageResource before accessing view
+    // Get image views
     vk::ImageView hdrView = (hdrRes->isExternal && hdrRes->imageResource) ?
         hdrRes->imageResource->view : hdrRes->transientView;
     vk::ImageView depthView = (depthRes->isExternal && depthRes->imageResource) ?
@@ -80,12 +71,15 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    // Update descriptor set for this frame (always update since RenderGraph rebuilds each frame)
-    vk::DescriptorSet currentSet = descriptorSets[frameIndex];
-    descriptorManager->updateSet(currentSet, {
-        ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge)),
-        ResourceBindingDesc::sampledImage(1, depthView, descriptorManager->getSampler(SamplerType::ClampToEdge))
-    });
+    // Bind resources using separate samplers (postprocess.slang uses Texture2D + SamplerState)
+    // Resource names from shader: colorTexture, depthTexture, texSampler
+    vk::Sampler clampSampler = descriptorManager->getSamplerManager().getSampler(SamplerType::ClampToEdge);
+    binding.bindSampledImage("colorTexture", hdrView);
+    binding.bindSampledImage("depthTexture", depthView);
+    binding.bindSampler("texSampler", clampSampler);
+
+    // One call does everything: allocate (if needed) → update (if dirty) → bind
+    descriptorManager->bindResources(cmd, binding, frameIndex);
 
     // Get swapchain resource to determine viewport/scissor dimensions
     const LogicalResource* swapchainRes = renderGraph->getResource(swapchainImageName);
@@ -113,16 +107,6 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     // Bind pipeline
     postProcessMaterial->getPipeline()->bind(cmd);
 
-    // Bind PostProcess descriptor set (Set 0)
-    cmd.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        postProcessMaterial->getPipelineLayout(),
-        0,  // Set 0
-        1,  // Bind 1 set
-        &currentSet,
-        0, nullptr
-    );
-
     // Push constants: ev100, gamma, tonemapMode, padding
     struct PushConstants {
         float ev100;
@@ -131,10 +115,11 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         float padding;
     } push{params.ev100, params.gamma, static_cast<uint32_t>(params.mode), 0.0f};
 
-    // Push constants must match the pipeline layout's stage flags (VERTEX|FRAGMENT)
+    // Push constants must match the pipeline layout's stage flags
+    // NOTE: Includes COMPUTE_BIT because luminance_histogram shader shares the same push constant layout
     cmd.pushConstants(
         postProcessMaterial->getPipelineLayout(),
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eCompute,
         0, sizeof(PushConstants), &push
     );
 

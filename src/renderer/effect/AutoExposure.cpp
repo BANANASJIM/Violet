@@ -29,32 +29,31 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
 
     // Get layout handle from DescriptorManager (shader auto-registers during pipeline creation later)
     // For now, we need to create pipeline first to register layout, then allocate sets
-    auto luminanceShader = shaderLibrary->get("luminance_average").lock();
+    auto luminanceShader = shaderLibrary->get("luminance_average_comp").lock();
     if (!luminanceShader) {
-        violet::Log::error("Renderer", "Failed to get luminance_average shader");
+        violet::Log::error("Renderer", "Failed to get luminance_average_comp shader");
         return;
     }
 
-    // Create pipeline first (registers layouts automatically)
+    // Create and initialize pipeline (registers layouts automatically via shader reflection)
     luminancePipeline = eastl::make_unique<ComputePipeline>();
+    ComputePipelineConfig config{};
+    luminancePipeline->init(context, descriptorManager, luminanceShader, config);
+
+    // Now get layout handles (registered by init())
     const auto& luminanceLayoutHandles = luminanceShader->getDescriptorLayoutHandles();
     if (luminanceLayoutHandles.empty()) {
         violet::Log::error("Renderer", "No descriptor layouts found in luminance_average shader");
         return;
     }
 
-    ComputePipelineConfig config{};
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout(luminanceLayoutHandles[0]));
-    luminancePipeline->init(context, luminanceShader, config);
-
     // Allocate descriptor sets for all frames in flight using reflection-based API
     luminanceDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         luminanceDescriptorSets[i] = descriptorManager->allocateSet(luminanceLayoutHandles[0]);
-        // Update storage buffer binding (same buffer for all frames)
-        descriptorManager->updateSet(luminanceDescriptorSets[i], {
-            ResourceBindingDesc::storageBuffer(1, luminanceBuffer.buffer, 0, sizeof(LuminanceData))
-        });
+        // Update storage buffer binding (binding 2 per shader reflection)
+        descriptorManager->bindBuffer(luminanceDescriptorSets[i], 2, luminanceBuffer,
+                                     vk::DescriptorType::eStorageBuffer, 0, sizeof(LuminanceData));
     }
 
     histogramBuffer = ResourceFactory::createBuffer(context, {
@@ -68,12 +67,20 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     mappedHistogramData->minLogLuminance = params.minLogLuminance;
     mappedHistogramData->maxLogLuminance = params.maxLogLuminance;
 
-    // Get shader and extract layout handles
-    auto histogramShader = shaderLibrary->get("luminance_histogram").lock();
+    // Get shader
+    auto histogramShader = shaderLibrary->get("luminance_histogram_comp").lock();
     if (!histogramShader) {
-        violet::Log::error("Renderer", "Failed to get luminance_histogram shader");
+        violet::Log::error("Renderer", "Failed to get luminance_histogram_comp shader");
         return;
     }
+
+    // Create and initialize pipeline first (registers layouts automatically)
+    histogramPipeline = eastl::make_unique<ComputePipeline>();
+    config = {};
+    config.pushConstantRanges.push_back({vk::ShaderStageFlagBits::eCompute, 0, 4 * sizeof(float)});
+    histogramPipeline->init(context, descriptorManager, histogramShader, config);
+
+    // Now get layout handles (registered by init())
     const auto& histogramLayoutHandles = histogramShader->getDescriptorLayoutHandles();
     if (histogramLayoutHandles.empty()) {
         violet::Log::error("Renderer", "No descriptor layouts found in luminance_histogram shader");
@@ -84,17 +91,10 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     histogramDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         histogramDescriptorSets[i] = descriptorManager->allocateSet(histogramLayoutHandles[0]);
-        // Update storage buffer binding (same buffer for all frames)
-        descriptorManager->updateSet(histogramDescriptorSets[i], {
-            ResourceBindingDesc::storageBuffer(1, histogramBuffer.buffer, 0, sizeof(HistogramData))
-        });
+        // Update storage buffer binding (binding 2 per shader reflection)
+        descriptorManager->bindBuffer(histogramDescriptorSets[i], 2, histogramBuffer,
+                                     vk::DescriptorType::eStorageBuffer, 0, sizeof(HistogramData));
     }
-
-    histogramPipeline = eastl::make_unique<ComputePipeline>();
-    config = {};
-    config.descriptorSetLayouts.push_back(descriptorManager->getLayout(histogramLayoutHandles[0]));
-    config.pushConstantRanges.push_back({vk::ShaderStageFlagBits::eCompute, 0, 4 * sizeof(float)});
-    histogramPipeline->init(context, histogramShader, config);
 }
 
 void AutoExposure::cleanup() {
@@ -147,9 +147,38 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ?
         luminanceDescriptorSets[frameIndex] : histogramDescriptorSets[frameIndex];
 
-    descriptorManager->updateSet(descSet, {
-        ResourceBindingDesc::sampledImage(0, hdrView, descriptorManager->getSampler(SamplerType::ClampToEdge))
-    });
+    // Bind HDR image and sampler separately (Slang uses separate Texture2D + SamplerState)
+    vk::DescriptorImageInfo imageInfo;
+    imageInfo.imageView = hdrView;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    imageInfo.sampler = nullptr;  // Not used for eSampledImage
+
+    vk::DescriptorImageInfo samplerInfo;
+    samplerInfo.sampler = descriptorManager->getSamplerManager().getSampler(SamplerType::ClampToEdge);
+
+    eastl::vector<vk::WriteDescriptorSet> writes;
+
+    // Binding 0: SampledImage (hdrScene)
+    vk::WriteDescriptorSet imageWrite;
+    imageWrite.dstSet = descSet;
+    imageWrite.dstBinding = 0;
+    imageWrite.dstArrayElement = 0;
+    imageWrite.descriptorCount = 1;
+    imageWrite.descriptorType = vk::DescriptorType::eSampledImage;
+    imageWrite.pImageInfo = &imageInfo;
+    writes.push_back(imageWrite);
+
+    // Binding 1: Sampler (texSampler)
+    vk::WriteDescriptorSet samplerWrite;
+    samplerWrite.dstSet = descSet;
+    samplerWrite.dstBinding = 1;
+    samplerWrite.dstArrayElement = 0;
+    samplerWrite.descriptorCount = 1;
+    samplerWrite.descriptorType = vk::DescriptorType::eSampler;
+    samplerWrite.pImageInfo = &samplerInfo;
+    writes.push_back(samplerWrite);
+
+    context->getDevice().updateDescriptorSets(writes, {});
 
     if (params.method == AutoExposureMethod::Simple) {
         cmd.fillBuffer(luminanceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);

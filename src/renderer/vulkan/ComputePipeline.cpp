@@ -1,14 +1,17 @@
 #include "renderer/vulkan/ComputePipeline.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/shader/Shader.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
 
 // New init with Shader weak_ptr
-void ComputePipeline::init(VulkanContext* ctx, eastl::weak_ptr<Shader> shader,
+void ComputePipeline::init(VulkanContext* ctx, DescriptorManager* descMgr,
+                           eastl::weak_ptr<Shader> shader,
                            const ComputePipelineConfig& cfg) {
     context = ctx;
+    descriptorManager = descMgr;
     computeShader = shader;
     config = cfg;
 
@@ -40,6 +43,11 @@ void ComputePipeline::buildPipeline() {
         return;
     }
 
+    // Register descriptor layouts from shader reflection (idempotent - safe to call multiple times)
+    if (descriptorManager) {
+        shader->registerDescriptorLayouts(descriptorManager);
+    }
+
     // Create shader module from SPIRV
     computeShaderModule = createShaderModuleFromSPIRV(shader->getSPIRV());
 
@@ -47,16 +55,45 @@ void ComputePipeline::buildPipeline() {
     vk::PipelineShaderStageCreateInfo computeShaderStageInfo;
     computeShaderStageInfo.stage = Shader::stageToVkFlag(shader->getStage());
     computeShaderStageInfo.module = *computeShaderModule;
-    computeShaderStageInfo.pName = shader->getEntryPoint().c_str();
+    // Slang compiles all entry points to "main" in SPIR-V
+    computeShaderStageInfo.pName = (shader->getLanguage() == Shader::Language::Slang) ? "main" : shader->getEntryPoint().c_str();
+
+    // Get descriptor layouts from shader (automatically registered above)
+    eastl::vector<vk::DescriptorSetLayout> setLayouts;
+    eastl::vector<vk::PushConstantRange> pushConstants;
+
+    // User-provided config overrides automatic extraction
+    if (!config.descriptorSetLayouts.empty()) {
+        setLayouts = config.descriptorSetLayouts;
+    } else if (descriptorManager) {
+        // Auto-extract from shader reflection
+        const auto& layoutHandles = shader->getDescriptorLayoutHandles();
+        setLayouts.reserve(layoutHandles.size());
+        for (LayoutHandle handle : layoutHandles) {
+            if (handle != 0) {
+                setLayouts.push_back(descriptorManager->getLayout(handle));
+            } else {
+                setLayouts.push_back(nullptr);  // Sparse set - preserve index
+            }
+        }
+    }
+
+    // Push constants from config (required - shader doesn't provide these)
+    if (!config.pushConstantRanges.empty()) {
+        pushConstants = config.pushConstantRanges;
+    }
 
     // Pipeline layout
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
-    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(config.descriptorSetLayouts.size());
-    pipelineLayoutInfo.pSetLayouts = config.descriptorSetLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(config.pushConstantRanges.size());
-    pipelineLayoutInfo.pPushConstantRanges = config.pushConstantRanges.data();
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = setLayouts.empty() ? nullptr : setLayouts.data();
+    pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstants.size());
+    pipelineLayoutInfo.pPushConstantRanges = pushConstants.empty() ? nullptr : pushConstants.data();
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
+
+    violet::Log::debug("Renderer", "Compute pipeline layout: {} descriptor sets, {} push constants",
+                      setLayouts.size(), pushConstants.size());
 
     // Create compute pipeline
     vk::ComputePipelineCreateInfo computePipelineCreateInfo;

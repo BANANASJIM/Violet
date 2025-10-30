@@ -20,10 +20,13 @@ class DescriptorManager;
  *
  * Responsibilities:
  * - Load and compile shaders (GLSL/Slang)
- * - Cache compiled SPIRV
+ * - Cache compiled SPIRV and reflection data
  * - Manage shader lifecycle
  * - Support hot reloading
- * - Automatically register descriptor layouts from Slang reflection
+ *
+ * Note: Descriptor layouts are registered by Pipeline during creation,
+ * not by ShaderLibrary during load. This keeps ShaderLibrary focused
+ * on pure resource management without Vulkan API dependencies.
  *
  * Usage:
  *   auto shader = shaderLibrary.load("pbr_vertex", {
@@ -37,7 +40,7 @@ class DescriptorManager;
 class ShaderLibrary {
 public:
     ShaderLibrary() = default;
-    explicit ShaderLibrary(VulkanContext* context, DescriptorManager* descriptorManager = nullptr);
+    explicit ShaderLibrary(VulkanContext* context);
     ~ShaderLibrary();
 
     /**
@@ -122,13 +125,12 @@ private:
 
 private:
     VulkanContext* context = nullptr;
-    DescriptorManager* descriptorManager = nullptr;
 
     // Shader storage: name -> Shader (shared_ptr for weak_ptr support + thread safety)
     eastl::unordered_map<eastl::string, eastl::shared_ptr<Shader>> shaders;
 
     // Compilers for each language
-    eastl::unique_ptr<ShaderCompiler> glslCompiler;
+    eastl::unique_ptr<ShaderCompiler> glslCompiler;//todo remove
     eastl::unique_ptr<ShaderCompiler> slangCompiler;
 
     // Default compilation options

@@ -6,27 +6,73 @@
 #include <EASTL/unordered_map.h>
 #include <EASTL/shared_ptr.h>
 #include "resource/shader/ShaderReflection.hpp"
+#include "resource/gpu/ResourceFactory.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
+#include "core/Log.hpp"
 
 namespace violet {
 
 // Forward declarations
 class VulkanContext;
-class DescriptorManager;
 class Shader;
 class Texture;
-struct BufferResource;
-class FieldProxy;
+class ElementProxy;
 class ResourceProxy;
 class ShaderResources;
-
-// Type alias for ShaderResources handle (must match DescriptorManager.hpp)
-using ShaderResourcesHandle = uint64_t;
 
 // Storage Buffer binding helper
 struct StorageBufferBinding {
     vk::Buffer buffer;
     vk::DeviceSize offset = 0;
     vk::DeviceSize range = VK_WHOLE_SIZE;
+};
+
+// ===== FieldProxy - Type-safe field access in UBO/SSBO =====
+class FieldProxy {
+public:
+    FieldProxy(void* bufferData, uint32_t offset, uint32_t size, const eastl::string& fieldName)
+        : bufferData(bufferData), offset(offset), size(size), fieldName(fieldName) {}
+
+    // Type-safe assignment operator with trivially copyable constraint
+    template<typename T>
+    requires std::is_trivially_copyable_v<T>
+    FieldProxy& operator=(const T& value) noexcept {
+        if (sizeof(T) != size) {
+            Log::error("ShaderResources",
+                "Size mismatch for field '{}': expected {} bytes, got {} bytes",
+                fieldName.c_str(), size, sizeof(T));
+            return *this;
+        }
+
+        if (bufferData) {
+            memcpy(static_cast<uint8_t*>(bufferData) + offset, &value, sizeof(T));
+        }
+        return *this;
+    }
+
+private:
+    void* bufferData;
+    uint32_t offset;
+    uint32_t size;
+    eastl::string fieldName;
+};
+
+// ===== ElementProxy - Proxy for array element access in SSBO =====
+// Supports syntax: lights[i]["fieldName"] = value
+class ElementProxy {
+public:
+    ElementProxy(ShaderResources* parent, const ReflectedResource* resourceInfo,
+                 size_t elementIndex, void* bufferData, uint32_t elementStride);
+
+    // Field access within array element
+    FieldProxy operator[](const eastl::string& fieldName);
+
+private:
+    ShaderResources* parent;
+    const ReflectedResource* resourceInfo;
+    size_t elementIndex;
+    void* bufferData;
+    uint32_t elementStride;
 };
 
 // ===== ResourceProxy - Smart proxy for unified resource access =====
@@ -37,11 +83,16 @@ public:
     // UBO field access (only valid for UniformBuffer)
     FieldProxy operator[](const eastl::string& fieldName);
 
+    // SSBO array element access (only valid for StorageBuffer)
+    // Supports syntax: lights[i]["fieldName"] = value
+    ElementProxy operator[](size_t elementIndex);
+
     // Unified assignment operators (auto-detect type from reflection)
     ResourceProxy& operator=(Texture* texture);
     ResourceProxy& operator=(const StorageBufferBinding& binding);
     ResourceProxy& operator=(vk::ImageView imageView);           // For StorageImage
     ResourceProxy& operator=(const BufferResource& buffer);      // For UniformBuffer
+    ResourceProxy& operator=(vk::Sampler sampler);               // For Sampler
 
     // Query resource info
     vk::DescriptorType getType() const;
@@ -53,30 +104,42 @@ private:
     const ReflectedResource* resourceInfo;
 };
 
-// ===== ShaderResources - Lightweight proxy for centralized management =====
-// 所有实际资源由 DescriptorManager 持有，此类只是访问接口
+// ===== ShaderResources - Direct data holder for shader resources =====
 class ShaderResources {
     friend class ResourceProxy;
+    friend class ElementProxy;
+    friend class ResourceManager;  // Factory access
 
 public:
-    // 构造函数：只持有 handle 和 manager 引用
-    ShaderResources(ShaderResourcesHandle handle, DescriptorManager* manager);
+    // Constructor: Directly holds all data
+    ShaderResources(
+        eastl::string instanceName,
+        eastl::shared_ptr<Shader> shader,
+        ShaderReflection reflection,
+        VulkanContext* context,
+        uint32_t maxFrames,
+        DescriptorManager* descriptorMgr = nullptr
+    );
 
-    // 析构函数：不需要清理资源（由 DescriptorManager 管理）
-    ~ShaderResources() = default;
+    // Destructor: Cleanup GPU resources
+    ~ShaderResources();
 
-    // 禁止拷贝（资源由 DescriptorManager 唯一持有）
+    // Non-copyable (owns GPU resources)
     ShaderResources(const ShaderResources&) = delete;
     ShaderResources& operator=(const ShaderResources&) = delete;
 
-    // 允许移动
-    ShaderResources(ShaderResources&&) = default;
-    ShaderResources& operator=(ShaderResources&&) = default;
+    // Movable
+    ShaderResources(ShaderResources&&) noexcept = default;
+    ShaderResources& operator=(ShaderResources&&) noexcept = default;
 
     // === Unified Resource Access ===
 
     // Access resource by name (returns proxy for chaining)
     ResourceProxy operator[](const eastl::string& resourceName);
+
+    // Batch update multiple resources by name (reflection-driven)
+    void updateResources(uint32_t setIndex,
+                        const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources);
 
     // === Descriptor Set Management ===
 
@@ -90,22 +153,45 @@ public:
     void bind(vk::CommandBuffer cmd, vk::PipelineLayout layout,
              vk::PipelineBindPoint bindPoint, uint32_t frameIndex = 0);
 
-    // === Resource Queries ===
+    // === Resource Query ===
 
     bool hasResource(const eastl::string& name) const;
     const ReflectedResource* getResourceInfo(const eastl::string& name) const;
 
-    // 获取实例信息
-    const eastl::string& getInstanceName() const;
-    eastl::shared_ptr<Shader> getShader() const;
+    // === Instance Info ===
 
-    // 获取 handle（供内部使用）
-    ShaderResourcesHandle getHandle() const { return handle; }
+    const eastl::string& getInstanceName() const { return instanceName; }
+    eastl::shared_ptr<Shader> getShader() const { return shader; }
+    uint32_t getCurrentFrame() const { return currentFrame; }
+    void setCurrentFrame(uint32_t frame) { currentFrame = frame; }
 
 private:
-    // 轻量级：只持有 handle 和 manager 指针
-    ShaderResourcesHandle handle;
-    DescriptorManager* manager;
+    // Per-set data
+    struct SetData {
+        vk::DescriptorSet descriptorSet;
+        uint32_t setIndex;
+        LayoutHandle layoutHandle;
+        UpdateFrequency frequency;
+        bool isBindless;
+
+        // Buffer data (for UBO/SSBO)
+        bool hasBuffer = false;
+        BufferResource buffer;
+        uint32_t alignedSize = 0;  // Size per frame (for PerFrame frequency)
+        void* mappedData = nullptr;
+    };
+
+    // Instance data
+    eastl::string instanceName;
+    eastl::shared_ptr<Shader> shader;
+    ShaderReflection reflection;
+    eastl::unordered_map<uint32_t, SetData> sets;
+
+    // Context for GPU operations
+    VulkanContext* context;
+    DescriptorManager* descriptorManager;
+    uint32_t maxFrames;
+    uint32_t currentFrame = 0;
 };
 
 } // namespace violet

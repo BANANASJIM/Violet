@@ -78,7 +78,7 @@ public:
     MaterialInstance(MaterialInstance&&) = default;
     MaterialInstance& operator=(MaterialInstance&&) = default;
 
-    virtual void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) = 0;
+    virtual void create(VulkanContext* context, Material* material, class MaterialManager* matMgr) = 0;
     virtual void cleanup() = 0;
 
     // Bindless API - material ID points to materials[materialID] in SSBO
@@ -89,7 +89,7 @@ public:
 protected:
     VulkanContext* context = nullptr;
     Material* material = nullptr;
-    DescriptorManager* descriptorManager = nullptr;
+    class MaterialManager* materialManager = nullptr;
 };
 
 class PBRMaterialInstance : public MaterialInstance {
@@ -97,7 +97,7 @@ public:
     PBRMaterialInstance() = default;
     ~PBRMaterialInstance();
 
-    void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) override;
+    void create(VulkanContext* context, Material* material, class MaterialManager* matMgr) override;
     void cleanup() override;
 
     // Texture setters - automatically update materialID's texture indices in SSBO
@@ -134,6 +134,13 @@ private:
     Texture* occlusionTexture = nullptr;
     Texture* emissiveTexture = nullptr;
 
+    // Bindless texture indices (for cleanup)
+    uint32_t baseColorTexIndex = 0;
+    uint32_t metallicRoughnessTexIndex = 0;
+    uint32_t normalTexIndex = 0;
+    uint32_t occlusionTexIndex = 0;
+    uint32_t emissiveTexIndex = 0;
+
     // Material ID - index into materials[] SSBO
     uint32_t materialID = 0;
 };
@@ -143,7 +150,7 @@ public:
     UnlitMaterialInstance() = default;
     ~UnlitMaterialInstance();
 
-    void create(VulkanContext* context, Material* material, DescriptorManager* descMgr) override;
+    void create(VulkanContext* context, Material* material, class MaterialManager* matMgr) override;
     void cleanup() override;
 
     // Texture setter - automatically update materialID's texture index in SSBO
@@ -167,6 +174,9 @@ private:
 
     // Texture pointer (for reference)
     Texture* baseColorTexture = nullptr;
+
+    // Bindless texture index (for cleanup)
+    uint32_t baseColorTexIndex = 0;
 
     // Material ID - index into materials[] SSBO
     uint32_t materialID = 0;

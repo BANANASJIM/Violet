@@ -4,6 +4,7 @@
 #include <EASTL/vector.h>
 #include <EASTL/unordered_map.h>
 #include <EASTL/unique_ptr.h>
+#include <EASTL/shared_ptr.h>
 #include <EASTL/string.h>
 #include <EASTL/fixed_vector.h>
 #include <EASTL/weak_ptr.h>
@@ -22,6 +23,7 @@ class TextureManager;
 class RenderPass;
 class ShaderLibrary;
 class Shader;
+class ShaderResources;
 
 // Material types
 enum class MaterialType {
@@ -63,6 +65,7 @@ public:
 
     // === Initialization ===
     void init(VulkanContext* ctx, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
+    void initMaterialsBuffer(class ResourceManager* resMgr);  // Called after ResourceManager is fully initialized
     void cleanup();
 
     // Set rendering formats for compatible RenderPass creation
@@ -99,6 +102,20 @@ public:
     // === Texture Management (delegated to TextureManager) ===
     Texture* addTexture(eastl::unique_ptr<Texture> texture);
     Texture* getDefaultTexture(DefaultTextureType type) const;
+
+    // === Bindless Texture Management (delegated to DescriptorManager) ===
+    uint32_t allocateBindlessTexture(Texture* texture);
+    void freeBindlessTexture(uint32_t index);
+
+    // === MaterialData SSBO Management (reflection-driven) ===
+    // Get global materials ShaderResources (for direct field updates via reflection)
+    ShaderResources* getMaterialsBuffer() { return materialsBuffer.get(); }
+    const ShaderResources* getMaterialsBuffer() const { return materialsBuffer.get(); }
+
+    // Simple MaterialID allocation (slot management, no struct definition)
+    uint32_t allocateMaterialSlot();
+    void freeMaterialSlot(uint32_t materialID);
+    uint32_t getMaxMaterialSlots() const { return maxMaterialSlots; }
 
     // === Format Information (for dynamic rendering) ===
     struct PipelineRenderingFormats {
@@ -151,6 +168,12 @@ private:
     TextureManager* textureManager = nullptr;
     ShaderLibrary* shaderLibrary = nullptr;
     uint32_t maxFramesInFlight = 0;
+
+    // === MaterialData SSBO (reflection-driven) ===
+    eastl::shared_ptr<ShaderResources> materialsBuffer;  // Global materials SSBO from shader reflection
+    eastl::vector<uint32_t> freeMaterialSlots;           // Free material ID pool
+    uint32_t nextMaterialSlot = 1;                       // Start from 1, 0 is invalid
+    uint32_t maxMaterialSlots = 1024;                    // Max materials in SSBO
 
     // === Format Storage (for dynamic rendering) ===
     vk::Format swapchainFormat = vk::Format::eUndefined;

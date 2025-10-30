@@ -1,14 +1,14 @@
 #include "ShaderLibrary.hpp"
 #include "GLSLCompiler.hpp"
 #include "SlangCompiler.hpp"
+#include "ShaderReflection.hpp"
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 
 namespace violet {
 
-ShaderLibrary::ShaderLibrary(VulkanContext* ctx, DescriptorManager* descMgr)
+ShaderLibrary::ShaderLibrary(VulkanContext* ctx)
     : context(ctx)
-    , descriptorManager(descMgr)
     , glslCompiler(eastl::make_unique<GLSLCompiler>())
     , slangCompiler(eastl::make_unique<SlangCompiler>()) {
 
@@ -17,8 +17,7 @@ ShaderLibrary::ShaderLibrary(VulkanContext* ctx, DescriptorManager* descMgr)
     defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/slang"));
     defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/include"));
 
-    Log::info("ShaderLibrary", "Initialized with GLSL and Slang compilers (DescriptorManager: {})",
-             descriptorManager ? "yes" : "no");
+    Log::info("ShaderLibrary", "Initialized with GLSL and Slang compilers");
 }
 
 ShaderLibrary::~ShaderLibrary() {
@@ -42,7 +41,6 @@ eastl::vector<eastl::weak_ptr<Shader>> ShaderLibrary::loadSlangShader(const east
         return loadedShaders;
     }
 
-    // Extract base name from file path (e.g., "shaders/pbr_bindless.slang" -> "pbr_bindless")
     eastl::string baseName = filePath;
     size_t lastSlash = baseName.find_last_of("/\\");
     if (lastSlash != eastl::string::npos) {
@@ -55,8 +53,13 @@ eastl::vector<eastl::weak_ptr<Shader>> ShaderLibrary::loadSlangShader(const east
 
     // Compile each entry point as a separate shader
     for (const auto& entryPoint : entryPoints) {
-        // Generate shader name: "filename_entrypoint" (e.g., "pbr_bindless_vertexMain")
-        eastl::string shaderName = baseName + "_" + entryPoint.name;
+        // Generate shader name using simplified stage names
+        // Stage name mapping: Vertex->vertex, Fragment->frag, Compute->comp, etc.
+        const char* stageNames[] = {"vertex", "frag", "comp", "geom", "tesc", "tese"};
+        const char* stageName = stageNames[static_cast<int>(entryPoint.stage)];
+
+        eastl::string shaderName = baseName + "_" + stageName;
+        // Result: "pbr_bindless_vertex", "pbr_bindless_frag"
 
         // Check if already loaded
         if (has(shaderName)) {
@@ -80,9 +83,8 @@ eastl::vector<eastl::weak_ptr<Shader>> ShaderLibrary::loadSlangShader(const east
         loadedShaders.push_back(shader);
 
         if (!shader.expired()) {
-            const char* stageNames[] = {"vert", "frag", "comp", "geom", "tesc", "tese"};
             Log::info("ShaderLibrary", "  ✓ Loaded '{}' ({})",
-                     shaderName.c_str(), stageNames[static_cast<int>(entryPoint.stage)]);
+                     shaderName.c_str(), stageName);
         } else {
             Log::error("ShaderLibrary", "  ✗ Failed to load '{}' ({})",
                       shaderName.c_str(), entryPoint.name.c_str());
@@ -131,40 +133,25 @@ eastl::weak_ptr<Shader> ShaderLibrary::load(const eastl::string& name, const Sha
         return eastl::weak_ptr<Shader>();
     }
 
-    // Compile shader
-    Log::info("ShaderLibrary", "Compiling shader '{}' from {}", name.c_str(), info.filePath.c_str());
+    // Compile shader - returns complete Shader object with reflection
+    Log::info("ShaderLibrary", "Compiling Slang shader '{}' from {}", name.c_str(), info.filePath.c_str());
     auto result = compiler->compile(mergedInfo);
 
-    if (!result.success) {
+    if (!result.shader) {
         lastError = result.errorMessage;
         Log::error("ShaderLibrary", "Failed to compile shader '{}': {}",
                    name.c_str(), result.errorMessage.c_str());
         return eastl::weak_ptr<Shader>();
     }
 
-    // Create shader object with shared_ptr
-    auto shader = eastl::make_shared<Shader>(mergedInfo, result.spirv);
-    shader->updateSPIRV(result.spirv, result.sourceHash);
+    // Note: Descriptor layouts are registered by Pipeline during creation,
+    // not here. This keeps ShaderLibrary pure resource management.
 
-    // Set reflection data and auto-register layouts (Slang only)
-    if (mergedInfo.language == Shader::Language::Slang) {
-        auto* slang = static_cast<SlangCompiler*>(compiler);
-        if (slang->hasReflection()) {
-            shader->setReflection(slang->getReflection());
+    shaders[name] = result.shader;
 
-            // Automatically register descriptor layouts from reflection
-            if (descriptorManager) {
-                shader->registerDescriptorLayouts(descriptorManager);
-            }
-        }
-    }
+    Log::info("ShaderLibrary", "Successfully loaded shader '{}'", name.c_str());
 
-    shaders[name] = shader;
-
-    Log::info("ShaderLibrary", "Successfully loaded shader '{}' ({} bytes SPIRV)",
-              name.c_str(), result.spirv.size() * 4);
-
-    return eastl::weak_ptr<Shader>(shader);
+    return eastl::weak_ptr<Shader>(result.shader);
 }
 
 eastl::weak_ptr<Shader> ShaderLibrary::get(const eastl::string& name) {
@@ -208,24 +195,18 @@ bool ShaderLibrary::reload(const eastl::string& name) {
     Log::info("ShaderLibrary", "Reloading shader '{}'...", name.c_str());
     auto result = compiler->compile(info);
 
-    if (!result.success) {
+    if (!result.shader) {
         lastError = result.errorMessage;
         Log::error("ShaderLibrary", "Failed to reload shader '{}': {}",
                    name.c_str(), result.errorMessage.c_str());
         return false;
     }
 
-    // Update SPIRV
-    shader->updateSPIRV(result.spirv, result.sourceHash);
+    // Replace old shader with new one
+    shaders[name] = result.shader;
 
-    // Re-register descriptor layouts if Slang shader with reflection
-    if (shader->getLanguage() == Shader::Language::Slang && descriptorManager) {
-        auto* slang = static_cast<SlangCompiler*>(compiler);
-        if (slang->hasReflection()) {
-            shader->setReflection(slang->getReflection());
-            shader->registerDescriptorLayouts(descriptorManager);
-        }
-    }
+    // Note: Pipelines using this shader must be rebuilt after reload
+    // to re-register descriptor layouts. Hot reload requires pipeline recreation.
 
     Log::info("ShaderLibrary", "Successfully reloaded shader '{}'", name.c_str());
     return true;

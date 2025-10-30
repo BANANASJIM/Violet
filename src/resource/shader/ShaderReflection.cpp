@@ -19,6 +19,8 @@ FieldType slangTypeToFieldType(slang::TypeReflection* type) {
     }
     else if (kind == slang::TypeReflection::Kind::Vector) {
         auto elemType = type->getElementType();
+        if (!elemType) return FieldType::Unknown;
+
         auto count = type->getElementCount();
 
         if (elemType->getScalarType() == slang::TypeReflection::ScalarType::Float32) {
@@ -54,11 +56,31 @@ void extractFields(slang::TypeLayoutReflection* typeLayout, eastl::vector<Reflec
         auto field = typeLayout->getFieldByIndex(i);
         if (!field) continue;
 
+        // Check for null type layout (e.g., arrays, nested structs)
+        auto fieldTypeLayout = field->getTypeLayout();
+        if (!fieldTypeLayout) {
+            Log::warn("ShaderReflection", "Field '{}' has no type layout, skipping", field->getName());
+            continue;
+        }
+
+        // Check for null type
+        auto fieldType = field->getType();
+        if (!fieldType) {
+            Log::warn("ShaderReflection", "Field '{}' has no type, skipping", field->getName());
+            continue;
+        }
+
         ReflectedField reflectedField;
         reflectedField.name = field->getName();
         reflectedField.offset = baseOffset + uint32_t(field->getOffset());
-        reflectedField.size = uint32_t(field->getTypeLayout()->getSize());
-        reflectedField.type = slangTypeToFieldType(field->getType());
+        reflectedField.size = uint32_t(fieldTypeLayout->getSize());
+        reflectedField.type = slangTypeToFieldType(fieldType);
+
+        // Skip unknown types
+        if (reflectedField.type == FieldType::Unknown) {
+            Log::debug("ShaderReflection", "Field '{}' has unsupported type, skipping", field->getName());
+            continue;
+        }
 
         fields.push_back(reflectedField);
     }
@@ -94,6 +116,9 @@ vk::ShaderStageFlags getShaderStageFlags(slang::ProgramLayout* programLayout) {
             case SLANG_STAGE_DOMAIN:
                 flags |= vk::ShaderStageFlagBits::eTessellationEvaluation;
                 break;
+            default:
+                // Ignore unsupported stages (e.g., ray tracing)
+                break;
         }
     }
 
@@ -125,11 +150,77 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
 
     vk::ShaderStageFlags stageFlags = getShaderStageFlags(programLayout);
 
-    // Extract each field (descriptor binding)
+    // Extract push constants from entry points (for single-entry-point shaders like shadow)
+    uint32_t entryPointCount = programLayout->getEntryPointCount();
+    for (uint32_t epIdx = 0; epIdx < entryPointCount; ++epIdx) {
+        auto entryPoint = programLayout->getEntryPointByIndex(epIdx);
+        if (!entryPoint) continue;
+
+        auto entryTypeLayout = entryPoint->getTypeLayout();
+        if (!entryTypeLayout) continue;
+
+        uint32_t entryFieldCount = entryTypeLayout->getFieldCount();
+        for (uint32_t i = 0; i < entryFieldCount; ++i) {
+            auto varLayout = entryTypeLayout->getFieldByIndex(i);
+            if (!varLayout) continue;
+
+            auto category = varLayout->getCategory();
+            if (category == slang::ParameterCategory::PushConstantBuffer) {
+                auto varTypeLayout = varLayout->getTypeLayout();
+                if (varTypeLayout) {
+                    auto elementTypeLayout = varTypeLayout->getElementTypeLayout();
+                    if (elementTypeLayout) {
+                        vk::ShaderStageFlags entryStageFlags = {};
+                        switch (entryPoint->getStage()) {
+                            case SLANG_STAGE_VERTEX: entryStageFlags = vk::ShaderStageFlagBits::eVertex; break;
+                            case SLANG_STAGE_FRAGMENT: entryStageFlags = vk::ShaderStageFlagBits::eFragment; break;
+                            case SLANG_STAGE_COMPUTE: entryStageFlags = vk::ShaderStageFlagBits::eCompute; break;
+                            default: break;
+                        }
+
+                        vk::PushConstantRange range;
+                        range.stageFlags = entryStageFlags;
+                        range.offset = uint32_t(varLayout->getOffset());
+                        range.size = uint32_t(elementTypeLayout->getSize());
+
+                        reflection.addPushConstantRange(range);
+                        Log::info("ShaderReflection", "Extracted entry-point push constant '{}': offset={}, size={}, stages={}",
+                                 varLayout->getName(), range.offset, range.size,
+                                 static_cast<uint32_t>(range.stageFlags));
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract each field (descriptor binding or push constant)
     uint32_t fieldCount = typeLayout->getFieldCount();
     for (uint32_t i = 0; i < fieldCount; i++) {
         auto varLayout = typeLayout->getFieldByIndex(i);
         if (!varLayout) continue;
+
+        // Check if this is a push constant (must check category first)
+        auto category = varLayout->getCategory();
+        if (category == slang::ParameterCategory::PushConstantBuffer) {
+            // Extract push constant range
+            auto varTypeLayout = varLayout->getTypeLayout();
+            if (varTypeLayout) {
+                // For ConstantBuffer types (including push constants), get element type size
+                auto elementTypeLayout = varTypeLayout->getElementTypeLayout();
+                if (elementTypeLayout) {
+                    vk::PushConstantRange range;
+                    range.stageFlags = stageFlags;  // Use global stage flags
+                    range.offset = uint32_t(varLayout->getOffset());
+                    range.size = uint32_t(elementTypeLayout->getSize());
+
+                    reflection.addPushConstantRange(range);
+                    Log::info("ShaderReflection", "Extracted push constant '{}': offset={}, size={}, stages={}",
+                             varLayout->getName(), range.offset, range.size,
+                             static_cast<uint32_t>(range.stageFlags));
+                }
+            }
+            continue;  // Skip adding push constants to regular resources
+        }
 
         auto paramType = varLayout->getType();
         if (!paramType) continue;
@@ -138,13 +229,18 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
 
         // Create unified ReflectedResource
         ReflectedResource resource;
-        resource.name = varLayout->getName();
+        const char* rawName = varLayout->getName();
+        if (!rawName || rawName[0] == '\0') {
+            // Skip resources without names (internal compiler artifacts)
+            continue;
+        }
+        resource.name = rawName;
         resource.binding = varLayout->getBindingIndex();
         resource.set = varLayout->getBindingSpace();
         resource.stages = stageFlags;
         resource.arraySize = 1;
         resource.isBindless = false;
-        resource.bufferLayout = nullptr;
+        resource.bufferLayoutIndex = ~0u;
 
         // Determine descriptor type and extract details
         switch (kind) {
@@ -158,14 +254,17 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                 buffer.binding = varLayout->getBindingIndex();
                 buffer.set = varLayout->getBindingSpace();
 
-                auto elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
-                if (elementTypeLayout) {
-                    buffer.totalSize = uint32_t(elementTypeLayout->getSize());
-                    extractFields(elementTypeLayout, buffer.fields);
+                auto varTypeLayout = varLayout->getTypeLayout();
+                if (varTypeLayout) {
+                    auto elementTypeLayout = varTypeLayout->getElementTypeLayout();
+                    if (elementTypeLayout) {
+                        buffer.totalSize = uint32_t(elementTypeLayout->getSize());
+                        extractFields(elementTypeLayout, buffer.fields);
+                    }
                 }
 
-                reflection.addBuffer(buffer);
-                resource.bufferLayout = reflection.findBuffer(buffer.name);
+                // Store buffer and link to resource
+                resource.bufferLayoutIndex = reflection.storeBuffer(buffer);
                 break;
             }
 
@@ -173,16 +272,28 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                 auto shape = paramType->getResourceShape();
                 auto access = paramType->getResourceAccess();
 
-                // Texture types
-                if (shape == SLANG_TEXTURE_1D || shape == SLANG_TEXTURE_2D ||
-                    shape == SLANG_TEXTURE_3D || shape == SLANG_TEXTURE_CUBE) {
+                // Extract base texture shape (ignore flags like ARRAY, MULTISAMPLE, etc.)
+                // SLANG_TEXTURE_2D_ARRAY = SLANG_TEXTURE_2D | SLANG_TEXTURE_ARRAY_FLAG (0x02 | 0x40)
+                uint32_t baseShape = shape & 0x0F;  // Mask to get base shape only
+
+                // Debug: Log resource type
+                Log::debug("ShaderReflection", "Resource '{}': shape={:#x}, baseShape={:#x}, access={:#x}",
+                          varLayout->getName(), static_cast<uint32_t>(shape), baseShape, static_cast<uint32_t>(access));
+
+                // Texture types (handles both regular and array textures)
+                if (baseShape == SLANG_TEXTURE_1D || baseShape == SLANG_TEXTURE_2D ||
+                    baseShape == SLANG_TEXTURE_3D || baseShape == SLANG_TEXTURE_CUBE) {
 
                     if (access == SLANG_RESOURCE_ACCESS_READ_WRITE) {
-                        // RWTexture -> StorageImage
+                        // RWTexture / RWTexture2DArray -> StorageImage
                         resource.type = vk::DescriptorType::eStorageImage;
+                        Log::debug("ShaderReflection", "  -> Mapped to StorageImage (type={})",
+                                  static_cast<uint32_t>(resource.type));
                     } else {
-                        // Texture -> CombinedImageSampler
-                        resource.type = vk::DescriptorType::eCombinedImageSampler;
+                        // Texture / Texture2DArray -> SampledImage (for separate sampler/texture)
+                        resource.type = vk::DescriptorType::eSampledImage;
+                        Log::debug("ShaderReflection", "  -> Mapped to SampledImage (type={})",
+                                  static_cast<uint32_t>(resource.type));
                     }
                 }
                 // Structured Buffer
@@ -195,20 +306,25 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                     buffer.binding = varLayout->getBindingIndex();
                     buffer.set = varLayout->getBindingSpace();
 
-                    auto elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
-                    if (elementTypeLayout) {
-                        buffer.totalSize = uint32_t(elementTypeLayout->getSize());
-                        extractFields(elementTypeLayout, buffer.fields);
+                    auto varTypeLayout = varLayout->getTypeLayout();
+                    if (varTypeLayout) {
+                        auto elementTypeLayout = varTypeLayout->getElementTypeLayout();
+                        if (elementTypeLayout) {
+                            buffer.totalSize = uint32_t(elementTypeLayout->getSize());
+                            extractFields(elementTypeLayout, buffer.fields);
+                        }
                     }
 
-                    reflection.addBuffer(buffer);
-                    resource.bufferLayout = reflection.findBuffer(buffer.name);
+                    // Store buffer and link to resource
+                    resource.bufferLayoutIndex = reflection.storeBuffer(buffer);
                 }
                 break;
             }
 
             case slang::TypeReflection::Kind::SamplerState: {
                 resource.type = vk::DescriptorType::eSampler;
+                Log::debug("ShaderReflection", "SamplerState '{}' -> Mapped to Sampler (type={})",
+                          varLayout->getName(), static_cast<uint32_t>(resource.type));
                 break;
             }
 
@@ -220,9 +336,12 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                     auto shape = elementType->getResourceShape();
                     auto access = elementType->getResourceAccess();
 
-                    // Determine array element type
-                    if (shape == SLANG_TEXTURE_1D || shape == SLANG_TEXTURE_2D ||
-                        shape == SLANG_TEXTURE_3D || shape == SLANG_TEXTURE_CUBE) {
+                    // Extract base texture shape (ignore flags)
+                    uint32_t baseShape = shape & 0x0F;
+
+                    // Determine array element type (handles both regular and array textures)
+                    if (baseShape == SLANG_TEXTURE_1D || baseShape == SLANG_TEXTURE_2D ||
+                        baseShape == SLANG_TEXTURE_3D || baseShape == SLANG_TEXTURE_CUBE) {
 
                         if (access == SLANG_RESOURCE_ACCESS_READ_WRITE) {
                             resource.type = vk::DescriptorType::eStorageImage;

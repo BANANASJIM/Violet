@@ -3,7 +3,7 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
-#include <slang.h>  // For ProgramLayout
+#include <EASTL/unique_ptr.h>
 
 namespace violet {
 
@@ -11,6 +11,7 @@ namespace violet {
 class DescriptorManager;
 struct DescriptorLayoutDesc;
 struct PushConstantInfo;
+enum class UpdateFrequency;  // Forward declare enum from DescriptorManager.hpp
 using LayoutHandle = uint32_t;
 using PushConstantHandle = uint32_t;
 
@@ -74,14 +75,12 @@ public:
     static const char* stageToString(Stage stage);
 
     // Reflection API (Slang only)
-    void setReflection(slang::ProgramLayout* layout);
-    bool hasReflection() const { return reflection != nullptr; }
-    slang::ProgramLayout* getReflection() const { return reflection; }
+    void setExtractedReflection(class ShaderReflection&& reflection);
+    bool hasReflection() const { return extractedReflection != nullptr; }
+    const class ShaderReflection* getShaderReflection() const { return extractedReflection.get(); }
 
-    // Get extracted shader reflection (all resources)
-    const class ShaderReflection* getShaderReflection() const { return shaderReflection; }
-
-    void registerDescriptorLayouts(DescriptorManager* manager);
+    void registerDescriptorLayouts(DescriptorManager* manager, UpdateFrequency baseFrequency);
+    void registerDescriptorLayouts(DescriptorManager* manager);  // Defaults to PerMaterial
     const eastl::vector<LayoutHandle>& getDescriptorLayoutHandles() const { return descriptorLayoutHandles; }
     PushConstantHandle getPushConstantHandle() const { return pushConstantHandle; }
 
@@ -99,8 +98,7 @@ private:
     eastl::vector<eastl::string> defines;
 
     // Reflection data (Slang only)
-    slang::ProgramLayout* reflection = nullptr;
-    class ShaderReflection* shaderReflection = nullptr;  // Extracted resource info
+    eastl::unique_ptr<class ShaderReflection> extractedReflection;
     eastl::vector<LayoutHandle> descriptorLayoutHandles;  // Ordered by set index
     PushConstantHandle pushConstantHandle = 0;  // 0 = no push constants
 };

@@ -11,6 +11,7 @@ class VulkanContext;
 class MaterialManager;
 class DescriptorManager;
 class TextureManager;
+class ResourceManager;
 class Texture;
 class ShaderLibrary;
 class RenderGraph;
@@ -34,7 +35,7 @@ public:
     EnvironmentMap& operator=(EnvironmentMap&& other) noexcept;
 
     // Initialization (all resources managed by injected managers)
-    void init(VulkanContext* context, MaterialManager* matMgr, DescriptorManager* descMgr, TextureManager* texMgr, ShaderLibrary* shaderLib, RenderGraph* graph);
+    void init(VulkanContext* context, ResourceManager* resMgr, RenderGraph* graph);
     void cleanup();
 
     // Loading methods
@@ -73,10 +74,7 @@ public:
 private:
     // Core resources (injected dependencies)
     VulkanContext* context = nullptr;
-    MaterialManager* materialManager = nullptr;
-    DescriptorManager* descriptorManager = nullptr;
-    TextureManager* textureManager = nullptr;
-    ShaderLibrary* shaderLibrary = nullptr;
+    ResourceManager* resourceManager = nullptr;
     RenderGraph* renderGraph = nullptr;
 
     // Texture handles (references to TextureManager-owned resources)

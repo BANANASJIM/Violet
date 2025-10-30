@@ -32,7 +32,7 @@ void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
     debugMaterial->create(context);
 
     // Get shaders from ShaderLibrary
-    auto debugVert = shaderLib->get("debug_vert");
+    auto debugVert = shaderLib->get("debug_vertex");
     auto debugFrag = shaderLib->get("debug_frag");
 
     // Create debug pipeline with line topology
@@ -43,7 +43,12 @@ void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
     config.enableDepthTest = true;
     config.enableDepthWrite = false;
     config.enableBlending = true;
-    config.globalDescriptorSetLayout = descMgr->getLayout("Global");  // Use DescriptorManager for layout
+
+    // Get Global descriptor set layout from debug vertex shader reflection (Set 0)
+    auto debugVertShader = debugVert.lock();
+    if (debugVertShader && !debugVertShader->getDescriptorLayoutHandles().empty()) {
+        config.globalDescriptorSetLayout = descMgr->getLayout(debugVertShader->getDescriptorLayoutHandles()[0]);
+    }
 
     // Add push constant range for model matrix (used in debug.vert)
     vk::PushConstantRange pushConstant;

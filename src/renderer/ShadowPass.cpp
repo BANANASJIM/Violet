@@ -23,9 +23,9 @@ void ShadowPass::init(VulkanContext* ctx, DescriptorManager* descMgr, ShaderLibr
     renderGraph = graph;
     atlasImageName = atlasName;
 
-    auto shadowVert = shaderLibrary->get("shadow_vert");
+    auto shadowVert = shaderLibrary->get("shadow_vertex");
     if (shadowVert.expired()) {
-        violet::Log::error("ShadowPass", "Failed to load shadow.vert shader");
+        violet::Log::error("ShadowPass", "Failed to load shadow_vertex shader");
         return;
     }
 
