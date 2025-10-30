@@ -161,6 +161,7 @@ void ForwardRenderer::cleanup() {
         lightingSystem = nullptr;
     }
 
+    autoExposure.cleanup();
     environmentMap.cleanup();
     tonemap.cleanup();
     debugRenderer.cleanup();

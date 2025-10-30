@@ -21,11 +21,19 @@ void TextureManager::init(VulkanContext* ctx, DescriptorManager* descMgr) {
 }
 
 void TextureManager::cleanup() {
-    for (auto& slot : textureSlots) {
+    // Guard against double cleanup
+    if (textureSlots.empty()) {
+        return;
+    }
+
+    // Use indexed loop to avoid iterator invalidation issues
+    for (size_t i = 0; i < textureSlots.size(); ++i) {
+        auto& slot = textureSlots[i];
         if (slot.inUse && slot.texture) {
             slot.texture.reset();
         }
     }
+
     textureSlots.clear();
     freeSlots.clear();
     nextSlot = 1;  // Reset to initial value (0 is reserved for invalid)

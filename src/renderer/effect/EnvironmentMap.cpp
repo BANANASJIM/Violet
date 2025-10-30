@@ -97,35 +97,39 @@ void EnvironmentMap::init(VulkanContext* ctx, ResourceManager* resMgr, RenderGra
 }
 
 void EnvironmentMap::cleanup() {
+    // Check if resourceManager is still valid (it may have been cleaned up already)
+    if (!resourceManager) {
+        context = nullptr;
+        return;
+    }
+
     // Clear temporary compute resources (must be done first while device is still valid)
     // Order matters: image views → textures (which own the images)
     tempImageViews.clear();
     tempComputeTextures.clear();
 
     // Free bindless indices if allocated
-    if (resourceManager) {
-        auto& descriptorManager = resourceManager->getDescriptorManager();
-        if (environmentMapIndex != 0) {
-            descriptorManager.freeBindlessCubemap(environmentMapIndex);  // Cubemap, not 2D texture
-            environmentMapIndex = 0;
-        }
-        if (irradianceMapIndex != 0) {
-            descriptorManager.freeBindlessCubemap(irradianceMapIndex);  // Cubemap, not 2D texture
-            irradianceMapIndex = 0;
-        }
-        if (prefilteredMapIndex != 0) {
-            descriptorManager.freeBindlessCubemap(prefilteredMapIndex);  // Cubemap, not 2D texture
-            prefilteredMapIndex = 0;
-        }
-        if (brdfLUTIndex != 0) {
-            descriptorManager.freeBindlessTexture(brdfLUTIndex);  // 2D texture (correct)
-            brdfLUTIndex = 0;
-        }
+    auto& descriptorManager = resourceManager->getDescriptorManager();
+    if (environmentMapIndex != 0) {
+        descriptorManager.freeBindlessCubemap(environmentMapIndex);  // Cubemap, not 2D texture
+        environmentMapIndex = 0;
+    }
+    if (irradianceMapIndex != 0) {
+        descriptorManager.freeBindlessCubemap(irradianceMapIndex);  // Cubemap, not 2D texture
+        irradianceMapIndex = 0;
+    }
+    if (prefilteredMapIndex != 0) {
+        descriptorManager.freeBindlessCubemap(prefilteredMapIndex);  // Cubemap, not 2D texture
+        prefilteredMapIndex = 0;
+    }
+    if (brdfLUTIndex != 0) {
+        descriptorManager.freeBindlessTexture(brdfLUTIndex);  // 2D texture (correct)
+        brdfLUTIndex = 0;
     }
 
     // Release texture handles (TextureManager owns the actual textures)
-    if (resourceManager) {
-        auto* textureManager = resourceManager->getTextureManager();
+    auto* textureManager = resourceManager->getTextureManager();
+    if (textureManager) {  // Check if TextureManager is still valid
         if (environmentTextureHandle.isValid()) {
             textureManager->removeTexture(environmentTextureHandle);
             environmentTextureHandle = {};
