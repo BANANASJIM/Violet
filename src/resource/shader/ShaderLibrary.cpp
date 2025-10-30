@@ -78,7 +78,6 @@ eastl::vector<eastl::weak_ptr<Shader>> ShaderLibrary::loadSlangShader(const east
         info.includePaths = defaultIncludePaths;
         info.defines = globalDefines;
 
-        // Load (compile + auto-register layouts)
         auto shader = load(shaderName, info);
         loadedShaders.push_back(shader);
 

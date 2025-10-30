@@ -183,8 +183,10 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
             shadowData.cascadeCount = cascadeCount;
 
             // Calculate cascade split depths
+            // CRITICAL: Use shadowFarPlane instead of camera far plane
+            // This ensures cascade splits match the actual shadow coverage area
             float nearPlane = perspCam ? perspCam->getNearPlane() : 0.1f;
-            float farPlane = perspCam ? perspCam->getFarPlane() : 100.0f;
+            float farPlane = light.shadowFarPlane;  // Use shadow far plane, not camera far plane
             auto splits = calculateCascadeSplits(nearPlane, farPlane, cascadeCount, light.cascadeSplitLambda);
 
             // For each cascade, compute light space matrix and allocate atlas space
@@ -460,11 +462,18 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
 
     // Upload each shadow's data using direct struct assignment
     // This handles all fields including arrays (cascadeViewProjMatrices, atlasRects, cubeFaceMatrices)
-    violet::Log::debug("ShadowSystem", "Uploading {} shadow(s) at frame {}, globalResources currentFrame={}",
-                      cpuShadowData.size(), frameIndex, globalResources->getCurrentFrame());
     for (size_t i = 0; i < cpuShadowData.size(); ++i) {
         auto shadowProxy = (*globalResources)["shadows"][i];
         shadowProxy = cpuShadowData[i];  // Direct struct copy
+    }
+
+    // CRITICAL: Re-upload light data to GPU after modifying shadowIndex
+    // LightingSystem already uploaded light data with shadowIndex = -1
+    // We need to update it with the correct shadow indices
+    const auto& lights = lightingSystem.getLightData();
+    for (size_t i = 0; i < lights.size(); ++i) {
+        auto lightProxy = (*globalResources)["lights"][i];
+        lightProxy["shadowIndex"] = lights[i].shadowIndex;
     }
 }
 

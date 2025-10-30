@@ -25,9 +25,6 @@ void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum,
     // Update light count in camera UBO
     (*globalResources)["camera"]["numLights"] = static_cast<int>(cpuLightData.size());
 
-    violet::Log::debug("LightingSystem", "Uploading {} light(s) at frame {}, globalResources currentFrame={}",
-                      cpuLightData.size(), frameIndex, globalResources->getCurrentFrame());
-
     // Upload each light's data
     for (size_t i = 0; i < cpuLightData.size(); ++i) {
         const auto& light = cpuLightData[i];
@@ -36,12 +33,6 @@ void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum,
         lightProxy["positionAndType"] = light.positionAndType;
         lightProxy["colorAndRadius"] = light.colorAndRadius;
         lightProxy["shadowIndex"] = light.shadowIndex;
-
-        if (i == 0) {  // Log first light for debugging
-            violet::Log::debug("LightingSystem", "Light 0: type={}, color=({},{},{}), intensity={}",
-                             light.positionAndType.w, light.colorAndRadius.r,
-                             light.colorAndRadius.g, light.colorAndRadius.b, light.colorAndRadius.a);
-        }
     }
 }
 

@@ -355,12 +355,7 @@ void ForwardRenderer::rebuildRenderGraph(uint32_t imageIndex) {
                     eastl::array<vk::DescriptorSet, 2> descriptorSets = {globalSet, bindlessSet};
 
                     // Set 0 requires dynamic offsets (one per binding: camera, lights, shadows)
-                    violet::Log::debug("Renderer", "Skybox Rendering: frameIndex={}, globalResources.currentFrame={}",
-                                      frame, globalResources->getCurrentFrame());
-
-                    // Get per-binding dynamic offsets for Set 0
                     auto dynamicOffsets = globalResources->getDynamicOffsetsForSet(0);
-                    violet::Log::debug("Renderer", "Skybox Dynamic offsets: {} for Set 0", dynamicOffsets.size());
 
                     cmd.bindDescriptorSets(
                         vk::PipelineBindPoint::eGraphics,

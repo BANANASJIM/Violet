@@ -93,8 +93,6 @@ void PBRMaterialInstance::create(VulkanContext* ctx, Material* mat, MaterialMana
         matBuf["materials"][materialID]["occlusionTexIndex"] = 0u;
         matBuf["materials"][materialID]["emissiveTexIndex"] = 0u;
     });
-
-    violet::Log::debug("Material", "Created PBRMaterialInstance with materialID {}", materialID);
 }
 
 void PBRMaterialInstance::cleanup() {
@@ -127,8 +125,6 @@ void PBRMaterialInstance::cleanup() {
     // Free material ID slot
     materialManager->freeMaterialSlot(materialID);
     materialID = 0;
-
-    violet::Log::debug("Material", "Cleaned up PBRMaterialInstance");
 }
 
 void PBRMaterialInstance::setBaseColorTexture(Texture* texture) {
@@ -349,8 +345,6 @@ void UnlitMaterialInstance::create(VulkanContext* ctx, Material* mat, MaterialMa
         matBuf["materials"][materialID]["baseColor"] = data.baseColor;
         matBuf["materials"][materialID]["baseColorTexIndex"] = 0u;
     });
-
-    violet::Log::debug("Material", "Created UnlitMaterialInstance with materialID {}", materialID);
 }
 
 void UnlitMaterialInstance::cleanup() {
@@ -366,8 +360,6 @@ void UnlitMaterialInstance::cleanup() {
 
     materialManager->freeMaterialSlot(materialID);
     materialID = 0;
-
-    violet::Log::debug("Material", "Cleaned up UnlitMaterialInstance");
 }
 
 void UnlitMaterialInstance::setBaseColorTexture(Texture* texture) {

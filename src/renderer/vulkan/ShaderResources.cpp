@@ -382,8 +382,6 @@ uint32_t ShaderResources::getDynamicOffset(uint32_t setIndex, uint32_t frameInde
         // Use currentFrame member set by setCurrentFrame(), not the parameter
         // The frameIndex parameter is deprecated but kept for API compatibility
         uint32_t offset = currentFrame * it->second.alignedSize;
-        Log::debug("ShaderResources", "getDynamicOffset({}): currentFrame={}, alignedSize={}, hasBuffer={}, offset={}",
-                   setIndex, currentFrame, it->second.alignedSize, it->second.hasBuffer, offset);
         return offset;
     }
 

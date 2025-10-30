@@ -50,10 +50,13 @@ VioletApp::~VioletApp() {
 void VioletApp::createResources() {
     // 1. Initialize ResourceManager first (includes DescriptorManager initialization)
     resourceManager.init(getContext(), MAX_FRAMES_IN_FLIGHT);
-    resourceManager.createDefaultResources();
 
-    // 2. Initialize Renderer (all dependencies are ready - DescriptorManager, MaterialManager, etc.)
+    // 2. Initialize Renderer (this will call initBindless())
     renderer.init(getContext(), &resourceManager, getSwapchain()->getImageFormat(), MAX_FRAMES_IN_FLIGHT);
+
+    // 3. Create default resources AFTER bindless is initialized
+    // NOTE: Moved here because bindless must be initialized before registering textures
+    resourceManager.createDefaultResources();
 
     // Set swapchain for RenderGraph
     renderer.setSwapchain(getSwapchain());

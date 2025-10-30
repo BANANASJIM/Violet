@@ -73,10 +73,14 @@ struct VSOutput {
 VSOutput vertexMain(VSInput input) {
     VSOutput output;
 
+    // CRITICAL: For column_major matrices in Slang, mul(matrix, vector) is correct
+    // The column_major attribute tells Slang how the matrix is stored in memory
+    // GLSL: push.model * vec4(inPosition, 1.0)
     float4 worldPos = mul(push.model, float4(input.position, 1.0));
     output.fragPos = worldPos.xyz;
 
     // Calculate view space position
+    // GLSL: global.view * worldPos
     float4 viewPos = mul(global.view, worldPos);
     output.fragViewPos = viewPos.xyz;
 
@@ -88,6 +92,7 @@ VSOutput vertexMain(VSInput input) {
     output.fragBitangent = cross(output.fragNormal, output.fragTangent) * input.tangent.w;
 
     output.fragTexCoord = input.texCoord;
+    // GLSL: global.proj * viewPos
     output.position = mul(global.proj, viewPos);
 
     return output;
@@ -139,7 +144,9 @@ int selectCascade(float viewDepth, float4 cascadeSplits, uint cascadeCount) {
 }
 
 float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, float3 normal, float3 lightDir) {
-    float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    // CRITICAL: column_major matrices work correctly with mul(matrix, vector)
+    // GLSL: lightSpaceMatrix * vec4(fragPos, 1.0)
     float4 lightSpacePos = mul(lightSpaceMatrix, float4(fragPos, 1.0));
     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
