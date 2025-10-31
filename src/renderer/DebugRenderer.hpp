@@ -44,7 +44,8 @@ public:
     // Simplified init - no RenderPass dependency
     void init(VulkanContext* context, DescriptorManager* descMgr,
               ShaderLibrary* shaderLib, uint32_t maxFramesInFlight,
-              eastl::shared_ptr<class ShaderResources> globalRes = nullptr);
+              class ResourceManager* resourceMgr = nullptr,
+              const eastl::string& globalResourcesName = "Global");
 
     void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
 
@@ -97,7 +98,8 @@ private:
                                   const glm::vec3& color, eastl::vector<Vertex>& outVertices, eastl::vector<uint32_t>& outIndices);
 
     DescriptorManager* descriptorManager = nullptr;
-    eastl::shared_ptr<class ShaderResources> globalResources;
+    class ResourceManager* resourceManager = nullptr;
+    eastl::string globalResourcesName;
 
     eastl::unique_ptr<Material> debugMaterial;
 

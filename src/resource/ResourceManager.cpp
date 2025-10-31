@@ -455,6 +455,42 @@ bool ResourceManager::hasShaderResources(const eastl::string& name) const {
     return shaderResourcesMap.find(name) != shaderResourcesMap.end();
 }
 
+vk::DescriptorSet ResourceManager::getDescriptorSet(const eastl::string& resourcesName, uint32_t setIndex) const {
+    auto it = shaderResourcesMap.find(resourcesName);
+    if (it == shaderResourcesMap.end()) {
+        violet::Log::error("ResourceManager",
+            "ShaderResources '{}' not found when getting descriptor set", resourcesName.c_str());
+        return nullptr;
+    }
+
+    const auto& resources = it->second;
+    if (!resources) {
+        violet::Log::error("ResourceManager",
+            "ShaderResources '{}' is null", resourcesName.c_str());
+        return nullptr;
+    }
+
+    return resources->getSet(setIndex);
+}
+
+eastl::vector<uint32_t> ResourceManager::getDynamicOffsets(const eastl::string& resourcesName, uint32_t setIndex) const {
+    auto it = shaderResourcesMap.find(resourcesName);
+    if (it == shaderResourcesMap.end()) {
+        violet::Log::error("ResourceManager",
+            "ShaderResources '{}' not found when getting dynamic offsets", resourcesName.c_str());
+        return {};
+    }
+
+    const auto& resources = it->second;
+    if (!resources) {
+        violet::Log::error("ResourceManager",
+            "ShaderResources '{}' is null", resourcesName.c_str());
+        return {};
+    }
+
+    return resources->getDynamicOffsetsForSet(setIndex);
+}
+
 void ResourceManager::setCurrentFrame(uint32_t frameIndex) {
     // Synchronize DescriptorManager frame
     descriptorManager.setCurrentFrame(frameIndex);

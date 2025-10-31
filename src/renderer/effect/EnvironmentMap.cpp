@@ -1,6 +1,7 @@
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/ShaderResourceBinding.hpp"
+#include "renderer/vulkan/DescriptorSetBinding.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/ResourceManager.hpp"
@@ -323,9 +324,8 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
 
     pipeline.init(context, &descriptorManager, shader, config);
 
-    // Step 4: Create ShaderResourceBinding for this compute task
-    ShaderResourceBinding binding;
-    binding.init(&pipeline, 0);  // Use set 0
+    // Step 4: Create ShaderResourceBinding for this compute task (pure data)
+    ShaderResourceBinding resources;
 
     // Create 2D array image view for compute shader (shader uses RWTexture2DArray)
     // Cubemap images can be accessed as 2D arrays with 6 layers for compute shaders
@@ -340,11 +340,12 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
     arrayViewInfo.subresourceRange.layerCount = 6;  // 6 faces
     vk::raii::ImageView cubemap2DArrayView(context->getDeviceRAII(), arrayViewInfo);
 
-    // Bind resources to ShaderResourceBinding (separate sampler/texture bindings)
+    // Bind resources using (set, binding) pairs
+    // Shader layout: binding 0 = input image (Texture2D), binding 1 = output image (RWTexture2DArray), binding 2 = sampler
     vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Default);
-    binding.bindSampledImage("equirectangularMap", equirectTexturePtr->getImageView());
-    binding.bindStorageImage("outputCubemap", *cubemap2DArrayView);
-    binding.bindSampler("texSampler", sampler);
+    resources.bindSampledImage(0, 0, equirectTexturePtr->getImageView());  // Binding 0: equirectangularMap
+    resources.bindStorageImage(0, 1, *cubemap2DArrayView);                 // Binding 1: outputCubemap
+    resources.bindSampler(0, 2, sampler);                                  // Binding 2: texSampler
 
     // Step 5: Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
@@ -369,9 +370,14 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
             {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
+        // Allocate and bind GPU descriptor sets (RAII - auto-freed on scope exit)
+        LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
+        DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
+        gpuBinding.update(resources, 0);
+
         // Bind pipeline and resources
         pipeline.bind(cmd);
-        descriptorManager.bindResources(cmd, binding, 0);  // Frame 0 for single-time commands
+        gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
 
         // Single dispatch for all 6 faces using Z dimension (ultimate optimization)
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -463,9 +469,8 @@ void EnvironmentMap::generateIrradianceMap() {
 
     pipeline.init(context, &descriptorManager, shader, config);
 
-    // Create ShaderResourceBinding for this compute task
-    ShaderResourceBinding binding;
-    binding.init(&pipeline, 0);  // Use set 0
+    // Create ShaderResourceBinding (pure data) for this compute task
+    ShaderResourceBinding resources;
 
     // Create 2D array image view for compute shader (shader uses RWTexture2DArray)
     vk::ImageViewCreateInfo irradianceArrayViewInfo;
@@ -479,15 +484,21 @@ void EnvironmentMap::generateIrradianceMap() {
     irradianceArrayViewInfo.subresourceRange.layerCount = 6;
     vk::raii::ImageView irradiance2DArrayView(context->getDeviceRAII(), irradianceArrayViewInfo);
 
-    // Bind resources to ShaderResourceBinding
+    // Bind resources using (set, binding) pairs
+    // Shader layout: binding 0 = input cubemap (TextureCube), binding 1 = output (RWTexture2DArray), binding 2 = sampler
     Texture* envTex = textureManager->getTexture(environmentTextureHandle);
     vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap);
-    binding.bindSampledImage("environmentMap", envTex->getImageView());  // Separate sampler binding
-    binding.bindStorageImage("irradianceMap", *irradiance2DArrayView);
-    binding.bindSampler("texSampler", sampler);
+    resources.bindSampledImage(0, 0, envTex->getImageView());      // Binding 0: environmentMap
+    resources.bindStorageImage(0, 1, *irradiance2DArrayView);      // Binding 1: irradianceMap
+    resources.bindSampler(0, 2, sampler);                          // Binding 2: texSampler
 
     // Execute compute shader
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
+        // Create GPU binding inside lambda for RAII
+        LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
+        DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
+        gpuBinding.update(resources, 0);
+
         // Transition to general layout
         vk::ImageMemoryBarrier barrier;
         barrier.srcAccessMask = {};
@@ -510,7 +521,7 @@ void EnvironmentMap::generateIrradianceMap() {
         );
 
         pipeline.bind(cmd);
-        descriptorManager.bindResources(cmd, binding, 0);  // Frame 0 for single-time commands
+        gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);  // Set 0, frame 0
 
         // Single dispatch for all 6 faces using Z dimension
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -623,9 +634,8 @@ void EnvironmentMap::generatePrefilteredMap() {
             pc.size = mipSize;
             pc.roughness = static_cast<float>(mip) / static_cast<float>(mipLevels - 1);
 
-            // Create ShaderResourceBinding for this mip level
-            ShaderResourceBinding mipBinding;
-            mipBinding.init(&pipeline, 0);  // Use set 0
+            // Create ShaderResourceBinding for this mip level (pure data)
+            ShaderResourceBinding resources;
 
             // Create per-mip 2D array image view for compute shader (shader uses RWTexture2DArray)
             vk::ImageViewCreateInfo mipArrayViewInfo;
@@ -639,17 +649,21 @@ void EnvironmentMap::generatePrefilteredMap() {
             mipArrayViewInfo.subresourceRange.layerCount = 6;
             vk::raii::ImageView mipView(context->getDeviceRAII(), mipArrayViewInfo);
 
-            // Bind resources to ShaderResourceBinding
+            // Bind resources using (set, binding) pairs
+            // Shader layout: binding 0 = input cubemap (TextureCube), binding 1 = output mip (RWTexture2DArray), binding 2 = sampler
             vk::Sampler sampler = descriptorManager.getSamplerManager().getSampler(SamplerType::Cubemap);
-            mipBinding.bindSampledImage("environmentMap", envTex->getImageView());  // Separate sampler binding
-            mipBinding.bindStorageImage("prefilteredMap", *mipView);
-            mipBinding.bindSampler("texSampler", sampler);
+            resources.bindSampledImage(0, 0, envTex->getImageView());  // Binding 0: environmentMap
+            resources.bindStorageImage(0, 1, *mipView);                // Binding 1: prefilteredMap
+            resources.bindSampler(0, 2, sampler);                      // Binding 2: texSampler
 
             // Keep image view alive to prevent validation errors
             tempImageViews.push_back(eastl::move(mipView));
 
-            // Bind resources
-            descriptorManager.bindResources(cmd, mipBinding, 0);  // Frame 0 for single-time commands
+            // Allocate and bind GPU descriptor sets (once per mip level)
+            LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
+            DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
+            gpuBinding.update(resources, 0);
+            gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
 
             uint32_t workgroups = (mipSize + 15) / 16;
 

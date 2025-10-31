@@ -3,6 +3,7 @@
 #include "ecs/Components.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/ShaderResources.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/camera/Camera.hpp"
 #include "renderer/camera/PerspectiveCamera.hpp"
 #include "resource/TextureManager.hpp"

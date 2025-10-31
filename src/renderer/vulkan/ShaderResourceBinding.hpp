@@ -8,145 +8,175 @@ namespace violet {
 
 class BufferResource;
 class Texture;
-class ShaderReflection;
-class GraphicsPipeline;
-class ComputePipeline;
 
 /**
- * @brief Shader Resource Binding - Automatic descriptor set management
+ * @brief Pure data container mapping (set, binding) to resource handles
  *
- * This class provides a high-level interface for binding resources to shaders.
- * It automatically manages descriptor set allocation, updates, and binding.
+ * This class is a lightweight map that stores descriptor resource bindings.
+ * It does NOT manage GPU resources - it only stores the mapping data.
  *
- * Lifecycle: Per-object (per-material, per-pass, per-frame)
- * - Per-frame bindings: Global UBO, lights, shadows
- * - Per-pass bindings: Render targets, compute outputs
- * - Per-draw bindings: Material data, mesh-specific resources
+ * Key design principles:
+ * - Pure data container (like std::map)
+ * - No GPU resource allocation/deallocation
+ * - No pipeline or shader dependencies
+ * - Safe to copy, move, and use as local variable
+ *
+ * GPU resource management is handled by DescriptorSetBinding class.
  *
  * Usage:
- * 1. Initialize with pipeline and set index:
- *    ShaderResourceBinding binding;
- *    binding.init(pipeline, 0);  // Use set 0 of this pipeline
+ *   ShaderResourceBinding resources;
+ *   resources.bind(0, 0, DescriptorResourceHandle::fromBuffer(...));
+ *   resources.bind(0, 1, DescriptorResourceHandle::fromTexture(...));
  *
- * 2. Bind resources by name:
- *    binding.bindBuffer("global", globalUBO);
- *    binding.bindTexture("albedoMap", albedoTexture);
+ *   // GPU resource allocation happens here:
+ *   DescriptorSetBinding gpuBinding(&descriptorMgr, layoutHandle);
+ *   gpuBinding.update(resources, frameIndex);
+ *   gpuBinding.bind(cmd, pipelineLayout, firstSet, frameIndex);
  *
- * 3. Automatic descriptor management (one call does everything):
- *    descriptorManager->bindResources(cmd, binding, frameIndex);
- *    // This automatically: allocates sets (if needed) → updates (if dirty) → binds to cmd
+ * Layered composition example:
+ *   ShaderResourceBinding globalResources;  // Camera, lights
+ *   globalResources.bind(0, 0, cameraHandle);
  *
- * 4. No manual descriptor set management needed!
+ *   ShaderResourceBinding drawResources;
+ *   drawResources.merge(globalResources);  // Inherit global bindings
+ *   drawResources.bind(1, 0, textureHandle);  // Add draw-specific bindings
  */
 class ShaderResourceBinding {
 public:
     ShaderResourceBinding() = default;
     ~ShaderResourceBinding() = default;
 
-    // ===== Initialization =====
-
-    // Initialize with graphics pipeline and set index
-    void init(GraphicsPipeline* pipeline, uint32_t setIndex);
-
-    // Initialize with compute pipeline and set index
-    void init(ComputePipeline* pipeline, uint32_t setIndex);
-
-    // Check if initialized
-    bool isInitialized() const { return graphicsPipeline != nullptr || computePipeline != nullptr; }
+    // Copyable and movable (pure data)
+    ShaderResourceBinding(const ShaderResourceBinding&) = default;
+    ShaderResourceBinding& operator=(const ShaderResourceBinding&) = default;
+    ShaderResourceBinding(ShaderResourceBinding&&) noexcept = default;
+    ShaderResourceBinding& operator=(ShaderResourceBinding&&) noexcept = default;
 
     // ===== Resource Binding API =====
 
-    // Bind buffer resource by name (reflection-based)
-    void bindBuffer(const eastl::string& name, const BufferResource* buffer,
-                   vk::DeviceSize offset = 0, vk::DeviceSize range = VK_WHOLE_SIZE);
+    /**
+     * @brief Bind resource by (set, binding) tuple
+     * @param set Descriptor set index
+     * @param binding Binding index within the set
+     * @param handle Resource handle (buffer, texture, image, sampler)
+     */
+    void bind(uint32_t set, uint32_t binding, const DescriptorResourceHandle& handle);
 
-    // Bind texture resource by name
-    void bindTexture(const eastl::string& name, Texture* texture);
+    /**
+     * @brief Merge another binding into this one
+     *
+     * Copies all bindings from other. If a binding already exists in this object,
+     * it is NOT overwritten (this binding takes precedence).
+     *
+     * @param other Source binding to merge from
+     */
+    void merge(const ShaderResourceBinding& other);
 
-    // Bind sampled image by name (for separate sampler/texture bindings)
-    void bindSampledImage(const eastl::string& name, vk::ImageView imageView,
-                          vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
+    /**
+     * @brief Clear all bindings
+     */
+    void clear();
 
-    // Bind storage image by name
-    void bindStorageImage(const eastl::string& name, vk::ImageView imageView);
+    // ===== Query API =====
 
-    // Bind sampler by name
-    void bindSampler(const eastl::string& name, vk::Sampler sampler);
-
-    // Bind combined image sampler by name
-    void bindCombinedImageSampler(const eastl::string& name, vk::ImageView imageView,
-                                  vk::Sampler sampler, vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    // ===== Resource Query =====
-
-    // Get all bound resources (for descriptor updates)
-    const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& getResources() const {
+    /**
+     * @brief Get all bound resources
+     * @return Const reference to resource map
+     */
+    const eastl::unordered_map<BindingKey, DescriptorResourceHandle>& getResources() const {
         return resources;
     }
 
-    // Check if a resource is bound
-    bool hasResource(const eastl::string& name) const {
-        return resources.find(name) != resources.end();
-    }
+    /**
+     * @brief Check if a specific binding exists
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @return true if binding exists, false otherwise
+     */
+    bool hasResource(uint32_t set, uint32_t binding) const;
 
-    // Get specific resource handle (returns nullptr if not found)
-    const DescriptorResourceHandle* getResource(const eastl::string& name) const {
-        auto it = resources.find(name);
-        return it != resources.end() ? &it->second : nullptr;
-    }
+    /**
+     * @brief Get specific resource handle
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @return Pointer to resource handle, or nullptr if not found
+     */
+    const DescriptorResourceHandle* getResource(uint32_t set, uint32_t binding) const;
 
-    // ===== Dirty Tracking (manual) =====
+    /**
+     * @brief Get number of bound resources
+     * @return Number of bindings
+     */
+    size_t size() const { return resources.size(); }
 
-    void markDirty() { dirty = true; }
-    void clearDirty() { dirty = false; }
-    bool isDirty() const { return dirty; }
+    /**
+     * @brief Check if binding map is empty
+     * @return true if no bindings exist
+     */
+    bool empty() const { return resources.empty(); }
 
-    // ===== Cache Key Generation =====
+    // ===== Legacy typed binding helpers (convenience wrappers) =====
 
-    // Generate hash key for this binding configuration (for caching/reuse)
-    // Hash is based on resource names + types, not actual resource pointers
-    uint64_t generateCacheKey() const;
+    /**
+     * @brief Bind buffer resource
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param buffer Buffer resource
+     * @param offset Offset within buffer
+     * @param range Range of buffer data
+     */
+    void bindBuffer(uint32_t set, uint32_t binding, const BufferResource* buffer,
+                   vk::DeviceSize offset = 0, vk::DeviceSize range = VK_WHOLE_SIZE);
 
-    // Clear all bindings
-    void clear() {
-        resources.clear();
-        dirty = true;
-    }
+    /**
+     * @brief Bind texture resource (combined image sampler)
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param texture Texture object
+     */
+    void bindTexture(uint32_t set, uint32_t binding, Texture* texture);
 
-    // Get number of bound resources
-    size_t getResourceCount() const { return resources.size(); }
+    /**
+     * @brief Bind sampled image (separate from sampler)
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param imageView Image view
+     * @param layout Image layout
+     */
+    void bindSampledImage(uint32_t set, uint32_t binding, vk::ImageView imageView,
+                          vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    // ===== Internal Access (for DescriptorManager) =====
+    /**
+     * @brief Bind storage image (RW access)
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param imageView Image view
+     */
+    void bindStorageImage(uint32_t set, uint32_t binding, vk::ImageView imageView);
 
-    vk::PipelineLayout getPipelineLayout() const;
-    const ShaderReflection* getShaderReflection() const;
-    GraphicsPipeline* getGraphicsPipeline() const { return graphicsPipeline; }
-    ComputePipeline* getComputePipeline() const { return computePipeline; }
-    LayoutHandle getLayoutHandle() const { return layoutHandle; }
-    uint32_t getSetIndex() const { return setIndex; }
-    SetGroupHandle getSetGroupHandle() const { return setGroupHandle; }
-    void setSetGroupHandle(SetGroupHandle handle) { setGroupHandle = handle; }
+    /**
+     * @brief Bind sampler
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param sampler Sampler object
+     */
+    void bindSampler(uint32_t set, uint32_t binding, vk::Sampler sampler);
+
+    /**
+     * @brief Bind combined image sampler (explicit image+sampler)
+     * @param set Descriptor set index
+     * @param binding Binding index
+     * @param imageView Image view
+     * @param sampler Sampler
+     * @param layout Image layout
+     */
+    void bindCombinedImageSampler(uint32_t set, uint32_t binding,
+                                  vk::ImageView imageView, vk::Sampler sampler,
+                                  vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
 
 private:
-    // Pipeline association (one or the other, not both)
-    GraphicsPipeline* graphicsPipeline = nullptr;
-    ComputePipeline* computePipeline = nullptr;
-
-    // Cached shader info (for fast access)
-    eastl::weak_ptr<class Shader> shader;
-    LayoutHandle layoutHandle = 0;
-
-    // Which descriptor set in the pipeline's layout
-    uint32_t setIndex = 0;
-
-    // Internal descriptor set group handle (managed by DescriptorManager)
-    SetGroupHandle setGroupHandle = 0;
-
-    // Resource name → GPU resource handle mapping
-    eastl::unordered_map<eastl::string, DescriptorResourceHandle> resources;
-
-    // Dirty flag (automatic tracking)
-    bool dirty = true;
+    // The only data member - a pure map
+    eastl::unordered_map<BindingKey, DescriptorResourceHandle> resources;
 };
 
 } // namespace violet

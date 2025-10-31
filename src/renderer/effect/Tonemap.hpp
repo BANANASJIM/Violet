@@ -3,12 +3,14 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
+#include <EASTL/unique_ptr.h>
 #include "renderer/vulkan/ShaderResourceBinding.hpp"
 
 namespace violet {
 
 class VulkanContext;
 class DescriptorManager;
+class DescriptorSetBinding;
 class MaterialManager;
 class RenderGraph;
 class Material;
@@ -41,6 +43,9 @@ class ShaderLibrary;
 
 class Tonemap {
 public:
+    Tonemap();  // Must be defined in .cpp for unique_ptr<DescriptorSetBinding>
+    ~Tonemap();  // Must be defined in .cpp for unique_ptr<DescriptorSetBinding>
+
     void init(VulkanContext* context, MaterialManager* materialManager,
               DescriptorManager* descriptorManager,
               RenderGraph* renderGraph,
@@ -69,7 +74,8 @@ private:
     RenderGraph* renderGraph = nullptr;
 
     Material* postProcessMaterial = nullptr;  // Reference from MaterialManager, not owned
-    ShaderResourceBinding binding;  // Automatic descriptor set management
+    ShaderResourceBinding resources;  // Pure data container
+    eastl::unique_ptr<DescriptorSetBinding> gpuBinding;  // GPU resource manager (RAII)
 
     TonemapParams params;
 

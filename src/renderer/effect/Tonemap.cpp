@@ -1,6 +1,7 @@
 #include "Tonemap.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/DescriptorSetBinding.hpp"
 #include "resource/MaterialManager.hpp"
 #include "resource/Material.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
@@ -8,6 +9,9 @@
 #include "core/Log.hpp"
 
 namespace violet {
+
+Tonemap::Tonemap() = default;  // Defined here where DescriptorSetBinding is complete
+Tonemap::~Tonemap() = default;
 
 void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManager* descMgr,
                    RenderGraph* graph, const eastl::string& hdrName, const eastl::string& swapchainName,
@@ -26,10 +30,16 @@ void Tonemap::init(VulkanContext* ctx, MaterialManager* matMgr, DescriptorManage
         return;
     }
 
-    // Initialize ShaderResourceBinding with pipeline (automatic descriptor set management)
-    binding.init(postProcessMaterial->getPipeline(), 0);  // Use set 0
+    // Create GPU binding once (reused every frame)
+    auto fragShader = postProcessMaterial->getPipeline()->getFragmentShader().lock();
+    if (!fragShader) {
+        violet::Log::error("Tonemap", "Fragment shader not available during init");
+        return;
+    }
+    LayoutHandle layoutHandle = fragShader->getDescriptorLayoutHandles()[0];
+    gpuBinding = eastl::make_unique<DescriptorSetBinding>(descriptorManager, layoutHandle);
 
-    violet::Log::info("Tonemap", "Initialized with {} -> {} (automatic descriptor management)",
+    violet::Log::info("Tonemap", "Initialized with {} -> {} (GPU binding created)",
                      hdrName.c_str(), swapchainName.c_str());
 }
 
@@ -71,15 +81,21 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         return;
     }
 
-    // Bind resources using separate samplers (postprocess.slang uses Texture2D + SamplerState)
-    // Resource names from shader: colorTexture, depthTexture, texSampler
+    // Update resources (reusing member variables, not creating new ones every frame)
+    // Binding 0: colorTexture, Binding 1: depthTexture, Binding 2: texSampler
     vk::Sampler clampSampler = descriptorManager->getSamplerManager().getSampler(SamplerType::ClampToEdge);
-    binding.bindSampledImage("colorTexture", hdrView);
-    binding.bindSampledImage("depthTexture", depthView);
-    binding.bindSampler("texSampler", clampSampler);
+    resources.clear();  // Clear previous frame's data
+    resources.bindSampledImage(0, 0, hdrView);      // Set 0, Binding 0: colorTexture
+    resources.bindSampledImage(0, 1, depthView);    // Set 0, Binding 1: depthTexture
+    resources.bindSampler(0, 2, clampSampler);      // Set 0, Binding 2: texSampler
 
-    // One call does everything: allocate (if needed) → update (if dirty) → bind
-    descriptorManager->bindResources(cmd, binding, frameIndex);
+    // Update and bind using persistent GPU binding (created once in init())
+    if (!gpuBinding) {
+        violet::Log::error("Tonemap", "GPU binding not initialized");
+        return;
+    }
+    gpuBinding->update(resources, frameIndex);
+    gpuBinding->bind(cmd, postProcessMaterial->getPipelineLayout(), 0, frameIndex);
 
     // Get swapchain resource to determine viewport/scissor dimensions
     const LogicalResource* swapchainRes = renderGraph->getResource(swapchainImageName);

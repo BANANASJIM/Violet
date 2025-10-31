@@ -77,6 +77,14 @@ public:
     // Check if ShaderResources exists
     bool hasShaderResources(const eastl::string& name) const;
 
+    // === Convenience Methods for ShaderResources access ===
+
+    // Get descriptor set from ShaderResources (for binding to command buffer)
+    vk::DescriptorSet getDescriptorSet(const eastl::string& resourcesName, uint32_t setIndex) const;
+
+    // Get dynamic offsets from ShaderResources (for dynamic uniform/storage buffers)
+    eastl::vector<uint32_t> getDynamicOffsets(const eastl::string& resourcesName, uint32_t setIndex) const;
+
     // === Convenience Methods (delegates to sub-managers) ===
     void createDefaultResources();
 

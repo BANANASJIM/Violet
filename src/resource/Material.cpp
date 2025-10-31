@@ -13,11 +13,17 @@ namespace violet {
 template<typename Func>
 static void writeToAllFrames(ShaderResources* materialsBuffer, Func&& writeFunc) {
     if (!materialsBuffer) return;
+
+    // Save current frame
     uint32_t savedFrame = materialsBuffer->getCurrentFrame();
+
+    // Write to all 3 frames (triple buffering)
     for (uint32_t frame = 0; frame < 3; ++frame) {
         materialsBuffer->setCurrentFrame(frame);
         writeFunc();
     }
+
+    // Restore original frame
     materialsBuffer->setCurrentFrame(savedFrame);
 }
 

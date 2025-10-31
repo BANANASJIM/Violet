@@ -108,7 +108,7 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     tonemap.init(context, matMgr, &descMgr, renderGraph.get(), "hdr", "swapchain", resourceManager->getShaderLibrary());
 
     // Initialize debug renderer (using reflection-based descriptor API)
-    debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight, globalResources);
+    debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight, resourceManager, "Global");
     debugRenderer.setEnabled(false);  // Disable debug renderer for testing
 
     // Initialize bindless through DescriptorManager

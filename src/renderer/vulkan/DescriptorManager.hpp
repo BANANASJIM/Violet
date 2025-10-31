@@ -21,6 +21,16 @@ using LayoutHandle = uint32_t;
 using PushConstantHandle = uint32_t;
 using SetGroupHandle = uint64_t;  // Handle to a group of descriptor sets (auto-managed by frequency)
 
+// Binding key for (set, binding) tuple
+struct BindingKey {
+    uint32_t set;
+    uint32_t binding;
+
+    bool operator==(const BindingKey& other) const {
+        return set == other.set && binding == other.binding;
+    }
+};
+
 // ===== Descriptor Layout Description =====
 
 enum class UpdateFrequency {
@@ -149,10 +159,11 @@ public:
 
     // ===== High-Level Automatic Binding Interface =====
 
-    // **RECOMMENDED API**: Fully automatic descriptor set management
-    // Allocates (if needed) → Updates (if dirty) → Binds to command buffer
-    // All information is derived from the ShaderResourceBinding's associated pipeline
-    void bindResources(vk::CommandBuffer cmd, class ShaderResourceBinding& binding, uint32_t frameIndex);
+    // REMOVED: bindResources() method has been deleted.
+    // Use DescriptorSetBinding class instead:
+    //   DescriptorSetBinding gpuBinding(&descriptorMgr, layoutHandle);
+    //   gpuBinding.update(shaderResourceBinding, frameIndex);
+    //   gpuBinding.bind(cmd, pipelineLayout, firstSet, frameIndex);
 
     // ===== Unified Reflection-Driven Binding Interface =====
 
@@ -160,6 +171,12 @@ public:
     // Automatically selects the correct set from the group based on frameIndex
     void updateSetFromBinding(SetGroupHandle handle, const class ShaderResourceBinding& binding,
                              const ShaderReflection& reflection, uint32_t frameIndex = 0);
+
+    // Unified API: bind resources using (set, binding) keys
+    // Uses reflection to query resource types for validation
+    void updateSet(vk::DescriptorSet set,
+                   const ShaderReflection& reflection,
+                   const eastl::unordered_map<struct BindingKey, DescriptorResourceHandle>& resources);
 
     // Legacy API: bind resources using reflection-driven map
     // All binding numbers and types are queried from reflection
@@ -174,6 +191,14 @@ public:
                     Texture* texture, const ShaderReflection& reflection);
     void bindStorageImage(vk::DescriptorSet set, const eastl::string& resourceName,
                          vk::ImageView imageView, const ShaderReflection& reflection);
+
+    // ===== Unified Binding API =====
+
+    // Bind multiple descriptor sets with dynamic offsets (convenience wrapper)
+    void bindDescriptorSets(vk::CommandBuffer cmd, vk::PipelineLayout layout,
+                           vk::PipelineBindPoint bindPoint, uint32_t firstSet,
+                           const eastl::vector<vk::DescriptorSet>& sets,
+                           const eastl::vector<uint32_t>& dynamicOffsets = {});
 
     // ===== Direct Resource Binding (bypassesreflection) =====
 
@@ -275,3 +300,11 @@ private:
 };
 
 } // namespace violet
+
+// Hash function for BindingKey (outside violet namespace for EASTL)
+template<>
+struct eastl::hash<violet::BindingKey> {
+    size_t operator()(const violet::BindingKey& key) const {
+        return eastl::hash<uint64_t>{}((static_cast<uint64_t>(key.set) << 32) | key.binding);
+    }
+};

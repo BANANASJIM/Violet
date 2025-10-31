@@ -4,6 +4,7 @@
 #include "core/FileSystem.hpp"
 #include "resource/Material.hpp"
 #include "resource/Mesh.hpp"
+#include "resource/ResourceManager.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/GraphicsPipeline.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
@@ -21,11 +22,13 @@ DebugRenderer::~DebugRenderer() {
 
 void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
                          ShaderLibrary* shaderLib, uint32_t framesInFlight,
-                         eastl::shared_ptr<ShaderResources> globalRes) {
+                         ResourceManager* resourceMgr,
+                         const eastl::string& globalResourcesName) {
     context = ctx;
     maxFramesInFlight = framesInFlight;
     descriptorManager = descMgr;
-    globalResources = globalRes;
+    resourceManager = resourceMgr;
+    this->globalResourcesName = globalResourcesName;
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -309,9 +312,11 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     debugPipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!globalResources) return;
-    vk::DescriptorSet globalSet = globalResources->getSet(0);
-    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
+    if (!resourceManager) return;
+    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
+    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
+                                     0, {globalSet}, dynamicOffsets);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -378,9 +383,11 @@ void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frame
     debugPipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!globalResources) return;
-    vk::DescriptorSet globalSet = globalResources->getSet(0);
-    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
+    if (!resourceManager) return;
+    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
+    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
+                                     0, {globalSet}, dynamicOffsets);
 
     // Bind vertex and index buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -446,9 +453,11 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     debugPipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!globalResources) return;
-    vk::DescriptorSet globalSet = globalResources->getSet(0);
-    bindGlobalDescriptors(commandBuffer, debugPipeline->getPipelineLayout(), globalSet, 0);
+    if (!resourceManager) return;
+    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
+    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
+                                     0, {globalSet}, dynamicOffsets);
 
     // Bind vertex and index buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -558,9 +567,11 @@ void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameInd
     trianglePipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!globalResources) return;
-    vk::DescriptorSet globalSet = globalResources->getSet(0);
-    bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
+    if (!resourceManager) return;
+    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
+    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, trianglePipeline->getPipelineLayout(),
+                                     0, {globalSet}, dynamicOffsets);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -719,9 +730,11 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
     trianglePipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!globalResources) return;
-    vk::DescriptorSet globalSet = globalResources->getSet(0);
-    bindGlobalDescriptors(commandBuffer, trianglePipeline->getPipelineLayout(), globalSet, 0);
+    if (!resourceManager) return;
+    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
+    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, trianglePipeline->getPipelineLayout(),
+                                     0, {globalSet}, dynamicOffsets);
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };

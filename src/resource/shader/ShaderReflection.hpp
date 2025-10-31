@@ -94,6 +94,19 @@ public:
         return nullptr;
     }
 
+    // Find resource by (set, binding) tuple
+    const ReflectedResource* findResourceByBinding(uint32_t set, uint32_t binding) const {
+        auto setIt = resourcesBySet.find(set);
+        if (setIt != resourcesBySet.end()) {
+            for (const auto& resource : setIt->second) {
+                if (resource.binding == binding) {
+                    return &resource;
+                }
+            }
+        }
+        return nullptr;
+    }
+
     const eastl::vector<ReflectedResource>& getResourcesBySet(uint32_t set) const {
         static eastl::vector<ReflectedResource> empty;
         auto it = resourcesBySet.find(set);

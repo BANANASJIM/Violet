@@ -407,62 +407,7 @@ vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle) {
 }
 
 // ===== High-Level Automatic Binding Interface =====
-
-void DescriptorManager::bindResources(vk::CommandBuffer cmd, ShaderResourceBinding& binding, uint32_t frameIndex) {
-    // 1. Validate binding
-    if (!binding.isInitialized()) {
-        violet::Log::error("DescriptorManager", "Cannot bind uninitialized ShaderResourceBinding");
-        return;
-    }
-
-    LayoutHandle layoutHandle = binding.getLayoutHandle();
-    if (layoutHandle == 0) {
-        violet::Log::error("DescriptorManager", "ShaderResourceBinding has invalid layout handle");
-        return;
-    }
-
-    // 2. Allocate set group if not already allocated
-    SetGroupHandle setGroupHandle = binding.getSetGroupHandle();
-    if (setGroupHandle == 0) {
-        setGroupHandle = allocateSetGroup(layoutHandle);
-        binding.setSetGroupHandle(setGroupHandle);
-        violet::Log::debug("DescriptorManager", "Allocated set group {} for binding (layout {})",
-                          setGroupHandle, layoutHandle);
-    }
-
-    // 3. Update descriptor set if dirty
-    if (binding.isDirty()) {
-        const ShaderReflection* reflection = binding.getShaderReflection();
-        if (!reflection) {
-            violet::Log::error("DescriptorManager", "Cannot update binding: shader reflection not available");
-            return;
-        }
-
-        updateSetFromBinding(setGroupHandle, binding, *reflection, frameIndex);
-        binding.clearDirty();
-    }
-
-    // 4. Bind descriptor set to command buffer
-    vk::DescriptorSet set = getSet(setGroupHandle, frameIndex);
-    vk::PipelineLayout pipelineLayout = binding.getPipelineLayout();
-    uint32_t setIndex = binding.getSetIndex();
-
-    // Auto-detect compute vs graphics
-    vk::PipelineBindPoint bindPoint = binding.getComputePipeline() ?
-        vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
-
-    cmd.bindDescriptorSets(
-        bindPoint,
-        pipelineLayout,
-        setIndex,
-        1,
-        &set,
-        0, nullptr
-    );
-
-    violet::Log::debug("DescriptorManager", "Bound descriptor set for binding at set index {} ({})",
-                      setIndex, bindPoint == vk::PipelineBindPoint::eCompute ? "compute" : "graphics");
-}
+// REMOVED: bindResources() has been deleted. Use DescriptorSetBinding class instead.
 
 // ===== Reflection-Driven Resource Binding =====
 
@@ -480,6 +425,164 @@ void DescriptorManager::updateSetFromBinding(SetGroupHandle handle, const Shader
     updateSet(set, reflection, binding.getResources());
 }
 
+// Unified API: updateSet with (set, binding) keys
+void DescriptorManager::updateSet(vk::DescriptorSet set,
+                                   const ShaderReflection& reflection,
+                                   const eastl::unordered_map<BindingKey, DescriptorResourceHandle>& resources) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot update null descriptor set");
+        return;
+    }
+
+    eastl::vector<vk::WriteDescriptorSet> writes;
+    eastl::vector<vk::DescriptorBufferInfo> bufferInfos;
+    eastl::vector<vk::DescriptorImageInfo> imageInfos;
+
+    // Reserve space to avoid reallocation
+    writes.reserve(resources.size());
+    bufferInfos.reserve(resources.size());
+    imageInfos.reserve(resources.size());
+
+    for (const auto& [key, resource] : resources) {
+        // 1. Look up reflection info by (set, binding)
+        const auto* reflectedRes = reflection.findResourceByBinding(key.set, key.binding);
+        if (!reflectedRes) {
+            violet::Log::warn("DescriptorManager", "Resource at set={}, binding={} not found in shader reflection",
+                            key.set, key.binding);
+            continue;
+        }
+
+        // Debug: Log reflected resource details
+        violet::Log::debug("DescriptorManager", "Found reflected resource '{}': set={}, binding={}, type={} ({})",
+                          reflectedRes->name.c_str(), key.set, key.binding,
+                          static_cast<uint32_t>(reflectedRes->type),
+                          vk::to_string(reflectedRes->type).c_str());
+
+        // 2. Verify resource type matches reflection
+        vk::DescriptorType expectedType = reflectedRes->type;
+        vk::DescriptorType actualType = expectedType;
+
+        // Map DescriptorResourceHandle type to DescriptorType
+        switch (resource.type) {
+            case DescriptorResourceHandle::Type::Buffer:
+                // expectedType already set from reflection (eUniformBuffer or eStorageBuffer)
+                break;
+            case DescriptorResourceHandle::Type::Texture:
+                actualType = vk::DescriptorType::eCombinedImageSampler;
+                break;
+            case DescriptorResourceHandle::Type::SampledImage:
+                actualType = vk::DescriptorType::eSampledImage;
+                break;
+            case DescriptorResourceHandle::Type::ImageView:
+                actualType = vk::DescriptorType::eStorageImage;
+                break;
+            case DescriptorResourceHandle::Type::Sampler:
+                actualType = vk::DescriptorType::eSampler;
+                break;
+            case DescriptorResourceHandle::Type::CombinedImageSampler:
+                actualType = vk::DescriptorType::eCombinedImageSampler;
+                break;
+        }
+
+        // For buffers, we don't know the exact type from DescriptorResourceHandle alone, trust reflection
+        if (resource.type != DescriptorResourceHandle::Type::Buffer && actualType != expectedType) {
+            violet::Log::error("DescriptorManager", "Resource at set={}, binding={} type mismatch: expected {}, got {}",
+                              key.set, key.binding, vk::to_string(expectedType).c_str(), vk::to_string(actualType).c_str());
+            continue;
+        }
+
+        // 3. Create WriteDescriptorSet
+        vk::WriteDescriptorSet write;
+        write.dstSet = set;
+        write.dstBinding = key.binding;
+        write.dstArrayElement = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = expectedType;
+
+        // 4. Fill descriptor info based on resource type
+        switch (resource.type) {
+            case DescriptorResourceHandle::Type::Buffer: {
+                vk::DescriptorBufferInfo bufferInfo;
+                bufferInfo.buffer = resource.bufferData.buffer;
+                bufferInfo.offset = resource.bufferData.offset;
+                bufferInfo.range = resource.bufferData.range;
+                bufferInfos.push_back(bufferInfo);
+                write.pBufferInfo = &bufferInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::Texture: {
+                if (!resource.texture) {
+                    violet::Log::error("DescriptorManager", "Resource at set={}, binding={} has null texture",
+                                      key.set, key.binding);
+                    continue;
+                }
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.texture->getImageView();
+                imageInfo.sampler = resource.texture->getSampler();
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::SampledImage: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.imageView;
+                imageInfo.sampler = nullptr;  // Separate sampler binding
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::ImageView: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.imageView;
+                imageInfo.sampler = nullptr;
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::Sampler: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = vk::ImageLayout::eUndefined;
+                imageInfo.imageView = nullptr;
+                imageInfo.sampler = resource.sampler;
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            case DescriptorResourceHandle::Type::CombinedImageSampler: {
+                vk::DescriptorImageInfo imageInfo;
+                imageInfo.imageLayout = resource.imageLayout;
+                imageInfo.imageView = resource.combinedData.imageView;
+                imageInfo.sampler = resource.combinedData.sampler;
+                imageInfos.push_back(imageInfo);
+                write.pImageInfo = &imageInfos.back();
+                break;
+            }
+
+            default:
+                violet::Log::warn("DescriptorManager", "Unsupported resource handle type at set={}, binding={}",
+                                key.set, key.binding);
+                continue;
+        }
+
+        writes.push_back(write);
+    }
+
+    // 5. Batch update all resources in one Vulkan call
+    if (!writes.empty()) {
+        context->getDevice().updateDescriptorSets(writes, {});
+        violet::Log::debug("DescriptorManager", "Batched update of {} descriptor(s)", writes.size());
+    }
+}
+
+// Legacy API: updateSet with name-based keys
 void DescriptorManager::updateSet(vk::DescriptorSet set,
                                    const ShaderReflection& reflection,
                                    const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources) {
@@ -1224,6 +1327,27 @@ const eastl::vector<vk::PushConstantRange>& DescriptorManager::getPushConstants(
 
 bool DescriptorManager::hasPushConstants(PushConstantHandle handle) const {
     return handle != 0 && pushConstants.find(handle) != pushConstants.end();
+}
+
+// ===== Unified Binding API =====
+
+void DescriptorManager::bindDescriptorSets(vk::CommandBuffer cmd, vk::PipelineLayout layout,
+                                           vk::PipelineBindPoint bindPoint, uint32_t firstSet,
+                                           const eastl::vector<vk::DescriptorSet>& sets,
+                                           const eastl::vector<uint32_t>& dynamicOffsets) {
+    if (sets.empty()) {
+        return;
+    }
+
+    cmd.bindDescriptorSets(
+        bindPoint,
+        layout,
+        firstSet,
+        static_cast<uint32_t>(sets.size()),
+        sets.data(),
+        static_cast<uint32_t>(dynamicOffsets.size()),
+        dynamicOffsets.empty() ? nullptr : dynamicOffsets.data()
+    );
 }
 
 } // namespace violet
