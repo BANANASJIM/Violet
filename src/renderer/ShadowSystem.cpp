@@ -3,9 +3,13 @@
 #include "ecs/Components.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/ShaderResources.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/camera/Camera.hpp"
 #include "renderer/camera/PerspectiveCamera.hpp"
+#include "resource/ResourceManager.hpp"
+#include "resource/MaterialManager.hpp"
+#include "resource/Material.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/Texture.hpp"
 #include "core/Log.hpp"
@@ -65,16 +69,49 @@ namespace {
 namespace violet {
 
 
-void ShadowSystem::init(VulkanContext* ctx, TextureManager* texMgr, DescriptorManager* descMgr, eastl::shared_ptr<ShaderResources> globalRes) {
+void ShadowSystem::init(VulkanContext* ctx, ResourceManager* resMgr) {
     context = ctx;
-    textureManager = texMgr;
-    descriptorManager = descMgr;
-    globalResources = globalRes;
+
+    if (!resMgr) {
+        Log::error("ShadowSystem", "Invalid ResourceManager");
+        return;
+    }
+
+    textureManager = resMgr->getTextureManager();
+    descriptorManager = &resMgr->getDescriptorManager();
+
+    // Get PBR material and pipeline from ResourceManager
+    auto* matMgr = resMgr->getMaterialManager();
+    auto* pbrMaterial = matMgr->getMaterialByName("PBRBindless");
+    if (!pbrMaterial) {
+        Log::error("ShadowSystem", "PBRBindless material not found");
+        return;
+    }
+
+    auto* pipeline = pbrMaterial->getPipeline();
+    if (!pipeline) {
+        Log::error("ShadowSystem", "PBRBindless pipeline not found");
+        return;
+    }
+
+    // Create ShaderResources from pipeline reflection
+    shadowsResources = resMgr->createShaderResources(
+        "Shadows", pipeline, "ShadowData", UpdateFrequency::PerFrame);
+
+    if (!shadowsResources) {
+        Log::error("ShadowSystem", "Failed to create shadowsResources");
+        return;
+    }
+
+    auto bindings = shadowsResources->getBufferBindings();
+    for (const auto& [key, handle] : bindings) {
+        shadowsSRB.bind(key.set, key.binding, handle);
+    }
 
     cpuShadowData.reserve(32);
     createAtlas();
 
-    violet::Log::info("ShadowSystem", "Initialized with ShaderResources reflection API (atlas: {}x{})",
+    violet::Log::info("ShadowSystem", "Initialized with own ShaderResources (atlas: {}x{})",
                       atlasSize, atlasSize);
 }
 
@@ -94,7 +131,7 @@ void ShadowSystem::cleanup() {
     textureManager = nullptr;
 }
 
-void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem, Camera* camera, uint32_t frameIndex, const AABB& sceneBounds) {
+void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem, Camera* camera, const AABB& sceneBounds) {
     cpuShadowData.clear();
     clearAllAllocations();
     shadowRenderables.clear();
@@ -456,29 +493,21 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
     }
 
     // Upload shadow data via ShaderResources reflection API
-    if (!globalResources) {
-        violet::Log::error("ShadowSystem", "globalResources is null");
+    if (!shadowsResources) {
+        violet::Log::error("ShadowSystem", "shadowsResources is null");
         return;
     }
 
     // Upload each shadow's data using direct struct assignment
     // This handles all fields including arrays (cascadeViewProjMatrices, atlasRects, cubeFaceMatrices)
     for (size_t i = 0; i < cpuShadowData.size(); ++i) {
-        auto shadowProxy = (*globalResources)["shadows"][i];
+        auto shadowProxy = (*shadowsResources)["shadows"][i];
         shadowProxy = cpuShadowData[i];  // Direct struct copy
     }
 
-    // CRITICAL: Re-upload light data to GPU after modifying shadowIndex
-    // LightingSystem already uploaded light data with shadowIndex = -1
-    // We need to update it with the correct shadow indices
-    const auto& lights = lightingSystem.getLightData();
-    for (size_t i = 0; i < lights.size(); ++i) {
-        auto lightProxy = (*globalResources)["lights"][i];
-        lightProxy["shadowIndex"] = lights[i].shadowIndex;
-    }
 }
 
-// Removed: uploadToGPU, getDescriptorSet
+// Removed: uploadToGPU, gDescriptetorSet
 // All data upload is now handled directly in update() via ShaderResources API
 
 ShadowAtlasAllocation ShadowSystem::allocateSpace(uint32_t resolution, uint32_t lightIndex) {

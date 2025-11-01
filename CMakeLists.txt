@@ -281,10 +281,6 @@ add_executable(SlangReflectionTest
     src/resource/shader/SlangCompiler.cpp
     src/resource/shader/ShaderReflection.cpp
     src/resource/shader/Shader.cpp
-    src/renderer/vulkan/DescriptorManager.cpp
-    src/renderer/vulkan/DescriptorSetBinding.cpp
-    src/renderer/vulkan/SamplerManager.cpp
-    src/renderer/vulkan/ShaderResourceBinding.cpp
     src/core/Log.cpp
     src/core/FileSystem.cpp
 )

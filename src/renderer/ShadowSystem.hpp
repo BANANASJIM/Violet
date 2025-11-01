@@ -9,6 +9,7 @@
 #include "resource/gpu/ResourceFactory.hpp"
 #include "math/AABB.hpp"
 #include "renderer/Renderable.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 
 namespace violet {
 
@@ -17,6 +18,8 @@ class LightingSystem;
 class RenderGraph;
 class TextureManager;
 class ShaderResources;
+class ResourceManager;
+class PipelineBase;
 
 // GPU shadow data (must match shader ShadowData in TypeDefinitions.slang)
 struct ShadowData {
@@ -50,10 +53,10 @@ public:
     ShadowSystem(const ShadowSystem&) = delete;
     ShadowSystem& operator=(const ShadowSystem&) = delete;
 
-    void init(VulkanContext* context, TextureManager* texMgr, DescriptorManager* descMgr, eastl::shared_ptr<ShaderResources> globalRes);
+    void init(VulkanContext* context, ResourceManager* resMgr);
     void cleanup();
 
-    void update(entt::registry& world, LightingSystem& lightingSystem, class Camera* camera, uint32_t frameIndex, const AABB& sceneBounds = AABB());
+    void update(entt::registry& world, LightingSystem& lightingSystem, class Camera* camera, const AABB& sceneBounds = AABB());
 
     uint32_t getShadowCount() const { return static_cast<uint32_t>(cpuShadowData.size()); }
     uint32_t getAtlasIndex() const { return atlasBindlessIndex; }
@@ -64,6 +67,9 @@ public:
 
     // Get shadow renderables (culled for shadow frustum, not camera frustum)
     const eastl::vector<Renderable>& getShadowRenderables() const { return shadowRenderables; }
+
+    // Get SRB for merging into ForwardRenderer's globalSRB
+    const ShaderResourceBinding& getSRB() const { return shadowsSRB; }
 
     // Atlas management
     ShadowAtlasAllocation allocateSpace(uint32_t resolution, uint32_t lightIndex);
@@ -77,8 +83,9 @@ private:
     VulkanContext* context = nullptr;
     TextureManager* textureManager = nullptr;
     DescriptorManager* descriptorManager = nullptr;
-    eastl::shared_ptr<ShaderResources> globalResources;
 
+    eastl::shared_ptr<ShaderResources> shadowsResources;
+    ShaderResourceBinding shadowsSRB;
     eastl::vector<ShadowData> cpuShadowData;
 
     // Shadow renderables (all objects that can cast shadows)

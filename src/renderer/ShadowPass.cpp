@@ -41,7 +41,7 @@ void ShadowPass::init(VulkanContext* ctx, DescriptorManager* descMgr, ShaderLibr
     config.stencilFormat = vk::Format::eUndefined;
 
     shadowPipeline = eastl::make_unique<GraphicsPipeline>();
-    shadowPipeline->init(context, descriptorManager, nullptr, shadowVert, eastl::weak_ptr<Shader>(), config);
+    shadowPipeline->init(context, descriptorManager, nullptr, {shadowVert}, config);
 
     violet::Log::info("ShadowPass", "Initialized shadow pass");
 }

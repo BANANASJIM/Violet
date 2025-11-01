@@ -10,6 +10,7 @@
 #include <EASTL/weak_ptr.h>
 
 #include "renderer/vulkan/GraphicsPipeline.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "resource/TextureManager.hpp"
 
 namespace violet {
@@ -112,6 +113,12 @@ public:
     ShaderResources* getMaterialsBuffer() { return materialsBuffer.get(); }
     const ShaderResources* getMaterialsBuffer() const { return materialsBuffer.get(); }
 
+    // Update material SRB with current buffer bindings (Set 2)
+    void updateMaterialSRB();
+
+    // Get material SRB for merging into draw calls
+    const ShaderResourceBinding& getMaterialSRB() const { return materialSRB; }
+
     // Simple MaterialID allocation (slot management, no struct definition)
     uint32_t allocateMaterialSlot();
     void freeMaterialSlot(uint32_t materialID);
@@ -171,6 +178,7 @@ private:
 
     // === MaterialData SSBO (reflection-driven) ===
     eastl::shared_ptr<ShaderResources> materialsBuffer;  // Global materials SSBO from shader reflection
+    ShaderResourceBinding materialSRB;                   // Set 2: materials SSBO bindings
     eastl::vector<uint32_t> freeMaterialSlots;           // Free material ID pool
     uint32_t nextMaterialSlot = 1;                       // Start from 1, 0 is invalid
     uint32_t maxMaterialSlots = 1024;                    // Max materials in SSBO

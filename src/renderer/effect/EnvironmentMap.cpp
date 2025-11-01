@@ -1,7 +1,6 @@
 #include "renderer/effect/EnvironmentMap.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/ShaderResourceBinding.hpp"
-#include "renderer/vulkan/DescriptorSetBinding.hpp"
 #include "resource/Texture.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/ResourceManager.hpp"
@@ -370,14 +369,13 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
             {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
-        // Allocate and bind GPU descriptor sets (RAII - auto-freed on scope exit)
-        LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
-        DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
-        gpuBinding.update(resources, 0);
+        // TODO: Phase 3 - Implement DescriptorManager::update/bind API
+        // LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
+        // descriptorManager.update(resources, &pipeline);
+        // descriptorManager.bind(cmd, &pipeline);
 
-        // Bind pipeline and resources
+        // Bind pipeline
         pipeline.bind(cmd);
-        gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
 
         // Single dispatch for all 6 faces using Z dimension (ultimate optimization)
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -496,8 +494,8 @@ void EnvironmentMap::generateIrradianceMap() {
     ResourceFactory::executeSingleTimeCommands(context, [&](vk::CommandBuffer cmd) {
         // Create GPU binding inside lambda for RAII
         LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
-        DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
-        gpuBinding.update(resources, 0);
+        // TODO: Phase 3 -         ShaderResourceBinding gpuBinding(&descriptorManager, layoutHandle);
+        // TODO: Phase 3 -         gpuBinding.update(resources, 0);
 
         // Transition to general layout
         vk::ImageMemoryBarrier barrier;
@@ -521,7 +519,7 @@ void EnvironmentMap::generateIrradianceMap() {
         );
 
         pipeline.bind(cmd);
-        gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);  // Set 0, frame 0
+        // TODO: Phase 3 -         gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);  // Set 0, frame 0
 
         // Single dispatch for all 6 faces using Z dimension
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -661,9 +659,9 @@ void EnvironmentMap::generatePrefilteredMap() {
 
             // Allocate and bind GPU descriptor sets (once per mip level)
             LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
-            DescriptorSetBinding gpuBinding(&descriptorManager, layoutHandle);
-            gpuBinding.update(resources, 0);
-            gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
+            // TODO: Phase 3 -             ShaderResourceBinding gpuBinding(&descriptorManager, layoutHandle);
+            // TODO: Phase 3 -             gpuBinding.update(resources, 0);
+            // TODO: Phase 3 -             gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
 
             uint32_t workgroups = (mipSize + 15) / 16;
 
@@ -765,7 +763,9 @@ void EnvironmentMap::generateBRDFLUT() {
         return;
     }
 
-    descriptorManager.bindStorageImage(descSet, brdfLUTRes->binding, *lutView);
+    // Update descriptor using DescriptorManager API (one-off operation for IBL generation)
+    descriptorManager.updateSingleDescriptor(descSet, brdfLUTRes->binding,
+                                            DescriptorResourceHandle::fromStorageImage(*lutView));
 
     // Keep image view alive to prevent validation errors
     tempImageViews.push_back(eastl::move(lutView));

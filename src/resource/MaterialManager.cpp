@@ -76,14 +76,8 @@ Material* MaterialManager::createMaterial(const MaterialDesc& desc) {
 
     // Create pipeline - layouts and push constants auto-extracted from shader reflection
     auto pipeline = eastl::make_unique<GraphicsPipeline>();
-    pipeline->init(
-        context,
-        descriptorManager,
-        material.get(),
-        desc.vertexShader,
-        desc.fragmentShader,
-        desc.pipelineConfig
-    );
+    eastl::vector<eastl::weak_ptr<Shader>> shaders = {desc.vertexShader, desc.fragmentShader};
+    pipeline->init(context, descriptorManager, material.get(), shaders, desc.pipelineConfig);
 
     material->pipeline = eastl::move(pipeline);
 
@@ -583,27 +577,48 @@ void MaterialManager::initMaterialsBuffer(ResourceManager* resMgr) {
     // MaterialData element size from shader reflection
     uint32_t materialDataSize = materialDataLayout->totalSize;
 
-    // IMPORTANT: Materials is an unbounded StructuredBuffer<MaterialData>, so reflection
-    // only reports single element size. We need to override the buffer size
-    // to accommodate maxMaterialSlots (1024) materials.
-    eastl::unordered_map<uint32_t, uint32_t> bufferSizeOverrides;
-    bufferSizeOverrides[2] = maxMaterialSlots * materialDataSize;  // Set 2: materials SSBO
-
-    // Use PerFrame frequency to match shader's Set 0 (camera/lights/shadows)
-    // Set 2 (materials SSBO) will also be PerFrame but that's okay for correctness
-    materialsBuffer = resMgr->createShaderResources("GlobalMaterials", "pbr_bindless_vertex",
-                                                    UpdateFrequency::PerFrame, bufferSizeOverrides);
-
-    if (!materialsBuffer) {
-        violet::Log::error("MaterialManager", "Failed to create materials buffer from shader reflection");
+    // Get PBR bindless material pipeline
+    auto* pbrMaterial = getMaterialByName("PBRBindless");
+    if (!pbrMaterial || !pbrMaterial->getPipeline()) {
+        violet::Log::error("MaterialManager", "PBRBindless material not found during buffer initialization");
         return;
     }
+
+    auto* pipeline = pbrMaterial->getPipeline();
+
+    // Create materials buffer using new API (one ShaderResources = one buffer)
+    // MaterialData buffer is NOT PerFrame - it's PerMaterial (static data shared across all frames)
+    materialsBuffer = resMgr->createShaderResources("GlobalMaterials", pipeline,
+                                                    "MaterialData", UpdateFrequency::PerMaterial);
+
+    if (!materialsBuffer) {
+        violet::Log::error("MaterialManager", "Failed to create materials buffer from pipeline reflection");
+        return;
+    }
+
+    // Note: ShaderResources now handles buffer size automatically from reflection
+    // The actual buffer will be sized according to shader's MaterialData[] declaration
 
     // Reserve free slots
     freeMaterialSlots.reserve(maxMaterialSlots);
 
     violet::Log::info("MaterialManager", "Initialized materials buffer (max {} materials, {} bytes per material, {} bytes total)",
                      maxMaterialSlots, materialDataSize, maxMaterialSlots * materialDataSize);
+
+    // Initialize materialSRB with buffer bindings
+    updateMaterialSRB();
+}
+
+void MaterialManager::updateMaterialSRB() {
+    if (!materialsBuffer) {
+        return;
+    }
+
+    materialSRB.clear();
+    auto buffers = materialsBuffer->getBufferBindings();
+    for (const auto& [key, handle] : buffers) {
+        materialSRB.bind(key.set, key.binding, handle);
+    }
 }
 
 uint32_t MaterialManager::allocateMaterialSlot() {

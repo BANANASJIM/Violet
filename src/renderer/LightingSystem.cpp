@@ -2,33 +2,67 @@
 #include "ecs/Components.hpp"
 #include "renderer/camera/Camera.hpp"
 #include "renderer/vulkan/ShaderResources.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
+#include "renderer/vulkan/PipelineBase.hpp"
+#include "resource/ResourceManager.hpp"
+#include "resource/MaterialManager.hpp"
+#include "resource/Material.hpp"
 #include "core/Log.hpp"
 
 namespace violet {
 
-void LightingSystem::init(eastl::shared_ptr<ShaderResources> globalRes) {
-    globalResources = globalRes;
+void LightingSystem::init(ResourceManager* resMgr) {
+    if (!resMgr) {
+        Log::error("LightingSystem", "Invalid ResourceManager");
+        return;
+    }
+
+    // Get PBR material and pipeline from ResourceManager
+    auto* matMgr = resMgr->getMaterialManager();
+    auto* pbrMaterial = matMgr->getMaterialByName("PBRBindless");
+    if (!pbrMaterial) {
+        Log::error("LightingSystem", "PBRBindless material not found");
+        return;
+    }
+
+    auto* pipeline = pbrMaterial->getPipeline();
+    if (!pipeline) {
+        Log::error("LightingSystem", "PBRBindless pipeline not found");
+        return;
+    }
+
+    // Create ShaderResources from pipeline reflection
+    lightsResources = resMgr->createShaderResources(
+        "Lights", pipeline, "LightData", UpdateFrequency::PerFrame);
+
+    if (!lightsResources) {
+        Log::error("LightingSystem", "Failed to create lightsResources");
+        return;
+    }
+
+    auto bindings = lightsResources->getBufferBindings();
+    for (const auto& [key, handle] : bindings) {
+        lightsSRB.bind(key.set, key.binding, handle);
+    }
+
     cpuLightData.reserve(64);
-    violet::Log::info("LightingSystem", "Initialized with ShaderResources reflection API");
+    violet::Log::info("LightingSystem", "Initialized with own ShaderResources");
 }
 
-void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum, uint32_t frameIndex) {
+void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum) {
     cpuLightData.clear();
     collectLights(world, cameraFrustum);
 
     // Upload light data via ShaderResources reflection API
-    if (!globalResources) {
-        Log::error("LightingSystem", "globalResources is null");
+    if (!lightsResources) {
+        Log::error("LightingSystem", "lightsResources is null");
         return;
     }
-
-    // Update light count in camera UBO
-    (*globalResources)["camera"]["numLights"] = static_cast<int>(cpuLightData.size());
 
     // Upload each light's data
     for (size_t i = 0; i < cpuLightData.size(); ++i) {
         const auto& light = cpuLightData[i];
-        auto lightProxy = (*globalResources)["lights"][i];
+        auto lightProxy = (*lightsResources)["lights"][i];
 
         lightProxy["positionAndType"] = light.positionAndType;
         lightProxy["colorAndRadius"] = light.colorAndRadius;

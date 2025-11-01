@@ -626,7 +626,52 @@ void DescriptorManager::updateSet(vk::DescriptorSet set,
     }
 }
 
-// ===== Direct Resource Binding =====
+// ===== One-off Descriptor Updates =====
+
+void DescriptorManager::updateSingleDescriptor(vk::DescriptorSet set, uint32_t binding,
+                                                const DescriptorResourceHandle& resource) {
+    if (!set) {
+        violet::Log::error("DescriptorManager", "Cannot update null descriptor set");
+        return;
+    }
+
+    // Dispatch to type-specific internal helpers
+    switch (resource.type) {
+        case DescriptorResourceHandle::Type::Buffer: {
+            // For buffers, need to construct BufferResource for bindBuffer
+            // Note: We don't have mappedData/size/alignment in DescriptorResourceHandle,
+            // so create a minimal BufferResource for descriptor update only
+            BufferResource bufRes{resource.bufferData.buffer, nullptr, 0, 0};
+            bindBuffer(set, binding, bufRes,
+                      vk::DescriptorType::eStorageBuffer, // Assume storage buffer for simplicity
+                      resource.bufferData.offset, resource.bufferData.range);
+            break;
+        }
+
+        case DescriptorResourceHandle::Type::Texture:
+            bindTexture(set, binding, resource.texture);
+            break;
+
+        case DescriptorResourceHandle::Type::ImageView:
+            bindStorageImage(set, binding, resource.imageView);
+            break;
+
+        case DescriptorResourceHandle::Type::Sampler:
+            bindSampler(set, binding, resource.sampler);
+            break;
+
+        case DescriptorResourceHandle::Type::SampledImage:
+        case DescriptorResourceHandle::Type::CombinedImageSampler:
+            violet::Log::error("DescriptorManager", "SampledImage/CombinedImageSampler not supported in updateSingleDescriptor, use dedicated methods");
+            break;
+
+        default:
+            violet::Log::error("DescriptorManager", "Unsupported resource type in updateSingleDescriptor");
+            break;
+    }
+}
+
+// ===== Internal Descriptor Binding Helpers =====
 
 void DescriptorManager::bindBuffer(vk::DescriptorSet set, uint32_t binding,
                                    const BufferResource& buffer, vk::DescriptorType type,
@@ -851,9 +896,10 @@ void DescriptorManager::initBindlessSamplers() {
     vk::Sampler nearestSampler = samplerManager.getSampler(SamplerType::Nearest);
     vk::Sampler shadowSampler = samplerManager.getSampler(SamplerType::Shadow);
 
-    bindSampler(bindlessSet, 2, linearSampler);
-    bindSampler(bindlessSet, 3, nearestSampler);
-    bindSampler(bindlessSet, 4, shadowSampler);
+    // Use public API for descriptor updates
+    updateSingleDescriptor(bindlessSet, 2, DescriptorResourceHandle::fromSampler(linearSampler));
+    updateSingleDescriptor(bindlessSet, 3, DescriptorResourceHandle::fromSampler(nearestSampler));
+    updateSingleDescriptor(bindlessSet, 4, DescriptorResourceHandle::fromSampler(shadowSampler));
 
     violet::Log::info("Renderer", "Initialized bindless global samplers (linear, nearest, shadow)");
 }
@@ -1308,6 +1354,13 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
         LayoutHandle layoutHandle = pipeline->getLayoutHandle(setIndex);
         if (layoutHandle == 0) break;
 
+        // Auto-bind Set 1 (bindless set) if enabled
+        if (setIndex == 1 && bindlessEnabled) {
+            sets.push_back(bindlessSet);
+            violet::Log::debug("DescriptorManager", "Auto-binding bindless set at index 1");
+            continue;  // bindless set is already populated in initBindless(), just bind it
+        }
+
         UpdateFrequency maxFreq = getMaxFrequencyForSet(allResources, setIndex);
         size_t ownerID = computeOwnerID(srb, setIndex, maxFreq);
 
@@ -1317,6 +1370,7 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
         }
     }
 
+    //todo perframe ubo need dynamic offset
     if (!sets.empty()) {
         cmd.bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,

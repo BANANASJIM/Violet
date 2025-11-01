@@ -21,14 +21,10 @@ DebugRenderer::~DebugRenderer() {
 }
 
 void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
-                         ShaderLibrary* shaderLib, uint32_t framesInFlight,
-                         ResourceManager* resourceMgr,
-                         const eastl::string& globalResourcesName) {
+                         ShaderLibrary* shaderLib, uint32_t framesInFlight) {
     context = ctx;
     maxFramesInFlight = framesInFlight;
     descriptorManager = descMgr;
-    resourceManager = resourceMgr;
-    this->globalResourcesName = globalResourcesName;
 
     // Create debug material
     debugMaterial = eastl::make_unique<Material>();
@@ -47,43 +43,24 @@ void DebugRenderer::init(VulkanContext* ctx, DescriptorManager* descMgr,
     config.enableDepthWrite = false;
     config.enableBlending = true;
 
-    // Get Global descriptor set layout from debug vertex shader reflection (Set 0)
-    auto debugVertShader = debugVert.lock();
-    if (debugVertShader && !debugVertShader->getDescriptorLayoutHandles().empty()) {
-        config.globalDescriptorSetLayout = descMgr->getLayout(debugVertShader->getDescriptorLayoutHandles()[0]);
-    }
-
-    // Add push constant range for model matrix (used in debug.vert)
-    vk::PushConstantRange pushConstant;
-    pushConstant.stageFlags = vk::ShaderStageFlagBits::eVertex;
-    pushConstant.offset = 0;
-    pushConstant.size = 64;  // sizeof(mat4)
-    config.pushConstantRanges.push_back(pushConstant);
-
-    // Query available device features to determine what we can use
     vk::PhysicalDeviceFeatures availableFeatures = context->getPhysicalDevice().getFeatures();
-
-    // For line topology, always use Fill mode. eLine mode is for wireframing triangles, not lines.
     config.polygonMode = vk::PolygonMode::eFill;
 
-    // Use wider lines only if wideLines feature is supported
     if (availableFeatures.wideLines) {
         config.lineWidth = 2.0f;
     } else {
-        config.lineWidth = 1.0f;  // Default line width
+        config.lineWidth = 1.0f;
     }
 
-    // Use new shader-based init API (dynamic rendering - no RenderPass needed)
-    debugPipeline->init(context, descMgr, debugMaterial.get(), debugVert, debugFrag, config);
+    debugPipeline->init(context, descMgr, debugMaterial.get(), {debugVert, debugFrag}, config);
 
-    // Create triangle pipeline for filled geometry (rays, mesh wireframes converted to lines)
     trianglePipeline = eastl::make_unique<GraphicsPipeline>();
-    PipelineConfig triangleConfig = config;  // Copy base config (including globalDescriptorSetLayout)
-    triangleConfig.topology = vk::PrimitiveTopology::eTriangleList;  // Use triangle list
-    triangleConfig.polygonMode = vk::PolygonMode::eFill;  // Filled triangles
-    triangleConfig.cullMode = vk::CullModeFlagBits::eNone;  // No culling for debug geometry
+    PipelineConfig triangleConfig = config;
+    triangleConfig.topology = vk::PrimitiveTopology::eTriangleList;
+    triangleConfig.polygonMode = vk::PolygonMode::eFill;
+    triangleConfig.cullMode = vk::CullModeFlagBits::eNone;
 
-    trianglePipeline->init(context, descMgr, debugMaterial.get(), debugVert, debugFrag, triangleConfig);
+    trianglePipeline->init(context, descMgr, debugMaterial.get(), {debugVert, debugFrag}, triangleConfig);
 
     // Create per-frame buffers
     frameData.resize(maxFramesInFlight);
@@ -139,7 +116,7 @@ void DebugRenderer::cleanup() {
     }
 }
 
-void DebugRenderer::render(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
+void DebugRenderer::render(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const ShaderResourceBinding& globalSRB) {
     // Base render method - this would be called if DebugRenderer is used standalone
     // For now, this is empty as debug rendering is typically done through specific methods
     // like renderFrustum, renderAABBs, etc.
@@ -280,7 +257,7 @@ void DebugRenderer::generateSphereGeometry(const glm::vec3& center, float radius
     }
 }
 
-void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum) {
+void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !showFrustumDebug || !debugPipeline) {
         return;
     }
@@ -311,12 +288,9 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Get Global uniform descriptor set using reflection-based API
-    if (!resourceManager) return;
-    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
-    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
-                                     0, {globalSet}, dynamicOffsets);
+    // Bind descriptors using new SRB API
+    descriptorManager->update(globalSRB, debugPipeline.get());
+    descriptorManager->bind(commandBuffer, globalSRB, debugPipeline.get());
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -331,18 +305,18 @@ void DebugRenderer::renderFrustum(vk::CommandBuffer commandBuffer, uint32_t fram
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
 }
 
-void DebugRenderer::renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible) {
+void DebugRenderer::renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !showAABBDebug) {
         return;
     }
 
     eastl::vector<AABB> aabbs = { aabb };
     eastl::vector<bool> visibility = { isVisible };
-    renderAABBs(commandBuffer, frameIndex, aabbs, visibility);
+    renderAABBs(commandBuffer, frameIndex, aabbs, visibility, globalSRB);
 }
 
 void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
-                                const glm::vec3& center, float radius, const glm::vec3& color) {
+                                const glm::vec3& center, float radius, const glm::vec3& color, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !debugPipeline) {
         return;
     }
@@ -382,12 +356,9 @@ void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frame
     // Bind pipeline
     debugPipeline->bind(commandBuffer);
 
-    // Get Global uniform descriptor set using reflection-based API
-    if (!resourceManager) return;
-    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
-    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
-                                     0, {globalSet}, dynamicOffsets);
+    // Bind descriptors using new SRB API
+    descriptorManager->update(globalSRB, debugPipeline.get());
+    descriptorManager->bind(commandBuffer, globalSRB, debugPipeline.get());
 
     // Bind vertex and index buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -402,7 +373,7 @@ void DebugRenderer::renderSphere(vk::CommandBuffer commandBuffer, uint32_t frame
     commandBuffer.drawIndexed(frame.indexCount, 1, 0, 0, 0);
 }
 
-void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask) {
+void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !showAABBDebug || aabbs.empty() || !debugPipeline) {
         return;
     }
@@ -453,11 +424,9 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     debugPipeline->bind(commandBuffer);
 
     // Get Global uniform descriptor set using reflection-based API
-    if (!resourceManager) return;
-    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
-    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, debugPipeline->getPipelineLayout(),
-                                     0, {globalSet}, dynamicOffsets);
+    // Bind descriptors using new SRB API
+    descriptorManager->update(globalSRB, debugPipeline.get());
+    descriptorManager->bind(commandBuffer, globalSRB, debugPipeline.get());
 
     // Bind vertex and index buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -483,7 +452,7 @@ void DebugRenderer::renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameI
     }
 }
 
-void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length) {
+void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !trianglePipeline) {
         return;
     }
@@ -566,12 +535,9 @@ void DebugRenderer::renderRay(vk::CommandBuffer commandBuffer, uint32_t frameInd
     // Bind triangle pipeline for filled mesh rendering
     trianglePipeline->bind(commandBuffer);
 
-    // Get Global uniform descriptor set using reflection-based API
-    if (!resourceManager) return;
-    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
-    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, trianglePipeline->getPipelineLayout(),
-                                     0, {globalSet}, dynamicOffsets);
+    // Bind descriptors using new SRB API
+    descriptorManager->update(globalSRB, trianglePipeline.get());
+    descriptorManager->bind(commandBuffer, globalSRB, trianglePipeline.get());
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -701,7 +667,7 @@ void DebugRenderer::addRayToBatch(const glm::vec3& origin, const glm::vec3& dire
     batchedRayIndices.push_back(baseVertexIndex + 0); batchedRayIndices.push_back(baseVertexIndex + 7); batchedRayIndices.push_back(baseVertexIndex + 4);
 }
 
-void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex) {
+void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const ShaderResourceBinding& globalSRB) {
     if (!enabled || !trianglePipeline || batchedRayVertices.empty()) {
         return;
     }
@@ -729,12 +695,9 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
     // Bind triangle pipeline for filled mesh rendering
     trianglePipeline->bind(commandBuffer);
 
-    // Get Global uniform descriptor set using reflection-based API
-    if (!resourceManager) return;
-    vk::DescriptorSet globalSet = resourceManager->getDescriptorSet(globalResourcesName, 0);
-    auto dynamicOffsets = resourceManager->getDynamicOffsets(globalResourcesName, 0);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, trianglePipeline->getPipelineLayout(),
-                                     0, {globalSet}, dynamicOffsets);
+    // Bind descriptors using new SRB API
+    descriptorManager->update(globalSRB, trianglePipeline.get());
+    descriptorManager->bind(commandBuffer, globalSRB, trianglePipeline.get());
 
     // Bind buffers
     vk::Buffer vertexBuffers[] = { frame.vertexBuffer->buffer };
@@ -750,7 +713,7 @@ void DebugRenderer::renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t fra
 }
 
 void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32_t frameIndex,
-                                        entt::registry& world, const ForwardRenderer& renderer) {
+                                        entt::registry& world, const ForwardRenderer& renderer, const ShaderResourceBinding& globalSRB) {
     if (!enabled || selectedEntity == entt::null) {
         return;
     }
@@ -762,7 +725,7 @@ void DebugRenderer::renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32
     // Render point light influence sphere if entity is a point light
     if (lightComp && lightComp->type == LightType::Point && transformComp) {
         renderSphere(commandBuffer, frameIndex, transformComp->world.position,
-                    lightComp->radius, DebugColors::SELECTED_ENTITY);
+                    lightComp->radius, DebugColors::SELECTED_ENTITY, globalSRB);
     }
     // Note: Mesh wireframe rendering removed for lightweight implementation
     // Can be re-added later using generateWireframeGeometry() + debugPipeline if needed

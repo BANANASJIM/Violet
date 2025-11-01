@@ -43,22 +43,20 @@ public:
 
     // Simplified init - no RenderPass dependency
     void init(VulkanContext* context, DescriptorManager* descMgr,
-              ShaderLibrary* shaderLib, uint32_t maxFramesInFlight,
-              class ResourceManager* resourceMgr = nullptr,
-              const eastl::string& globalResourcesName = "Global");
+              ShaderLibrary* shaderLib, uint32_t maxFramesInFlight);
 
-    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
+    void render(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const class ShaderResourceBinding& globalSRB);
 
-    void renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum);
-    void renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible);
-    void renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask);
-    void renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length = 1000.0f);
-    void renderSphere(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& center, float radius, const glm::vec3& color);
+    void renderFrustum(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const Frustum& frustum, const class ShaderResourceBinding& globalSRB);
+    void renderAABB(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const AABB& aabb, bool isVisible, const class ShaderResourceBinding& globalSRB);
+    void renderAABBs(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const eastl::vector<AABB>& aabbs, const eastl::vector<bool>& visibilityMask, const class ShaderResourceBinding& globalSRB);
+    void renderRay(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& origin, const glm::vec3& direction, float length, const class ShaderResourceBinding& globalSRB);
+    void renderSphere(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const glm::vec3& center, float radius, const glm::vec3& color, const class ShaderResourceBinding& globalSRB);
 
     // Batched ray rendering for multiple rays
     void beginRayBatch();
     void addRayToBatch(const glm::vec3& origin, const glm::vec3& direction, float length);
-    void renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex);
+    void renderRayBatch(vk::CommandBuffer commandBuffer, uint32_t frameIndex, const class ShaderResourceBinding& globalSRB);
 
     // Ray data management for UI integration
     void setRayData(const glm::vec3& origin, const glm::vec3& direction, float length, bool enabled);
@@ -72,7 +70,7 @@ public:
 
     void setSelectedEntity(entt::entity entity) { selectedEntity = entity; }
     entt::entity getSelectedEntity() const { return selectedEntity; }
-    void renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world, const ForwardRenderer& renderer);
+    void renderSelectedEntity(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world, const ForwardRenderer& renderer, const class ShaderResourceBinding& globalSRB);
 
     bool isEnabled() const { return enabled; }
     void setEnabled(bool enable) { enabled = enable; }
@@ -98,8 +96,6 @@ private:
                                   const glm::vec3& color, eastl::vector<Vertex>& outVertices, eastl::vector<uint32_t>& outIndices);
 
     DescriptorManager* descriptorManager = nullptr;
-    class ResourceManager* resourceManager = nullptr;
-    eastl::string globalResourcesName;
 
     eastl::unique_ptr<Material> debugMaterial;
 

@@ -13,6 +13,7 @@
 #include <entt/entt.hpp>
 
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "resource/Material.hpp"
 #include "resource/MaterialManager.hpp"
 #include "renderer/Renderable.hpp"
@@ -71,7 +72,7 @@ public:
     void rebuildRenderGraph(uint32_t imageIndex);
 
     void collectRenderables(entt::registry& world);
-    void updateGlobalUniforms(entt::registry& world, uint32_t frameIndex);
+    void updateGlobalUniforms(entt::registry& world);
     void renderScene(vk::CommandBuffer commandBuffer, uint32_t frameIndex, entt::registry& world);
 
     // Helper to find active camera (moved from GlobalUniforms)
@@ -151,6 +152,7 @@ private:
 
     // Global resources using ShaderResources API
     eastl::shared_ptr<class ShaderResources> globalResources;
+    ShaderResourceBinding globalSRB;  // Set 0: camera, lights, shadows bindings
 
     DebugRenderer debugRenderer;
 

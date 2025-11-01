@@ -4,6 +4,7 @@
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "resource/gpu/ResourceFactory.hpp"
 #include "renderer/vulkan/ComputePipeline.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "core/Timer.hpp"
 #include <EASTL/unique_ptr.h>
 #include <EASTL/string.h>
@@ -139,13 +140,13 @@ private:
 
     // Simple method resources
     eastl::unique_ptr<ComputePipeline> luminancePipeline;
-    eastl::vector<vk::DescriptorSet> luminanceDescriptorSets;  // One per frame in flight
+    ShaderResourceBinding luminanceSRB;
     BufferResource luminanceBuffer;
     LuminanceData* mappedLuminanceData = nullptr;
 
     // Histogram method resources
     eastl::unique_ptr<ComputePipeline> histogramPipeline;
-    eastl::vector<vk::DescriptorSet> histogramDescriptorSets;  // One per frame in flight
+    ShaderResourceBinding histogramSRB;
     BufferResource histogramBuffer;
     HistogramData* mappedHistogramData = nullptr;
 

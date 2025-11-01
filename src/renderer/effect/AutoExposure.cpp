@@ -2,6 +2,7 @@
 #include "resource/gpu/ResourceFactory.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "renderer/vulkan/DescriptorManager.hpp"
+#include "renderer/vulkan/ShaderResourceBinding.hpp"
 #include "renderer/graph/RenderGraph.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Log.hpp"
@@ -40,21 +41,8 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     ComputePipelineConfig config{};
     luminancePipeline->init(context, descriptorManager, luminanceShader, config);
 
-    // Now get layout handles (registered by init())
-    const auto& luminanceLayoutHandles = luminanceShader->getDescriptorLayoutHandles();
-    if (luminanceLayoutHandles.empty()) {
-        violet::Log::error("Renderer", "No descriptor layouts found in luminance_average shader");
-        return;
-    }
-
-    // Allocate descriptor sets for all frames in flight using reflection-based API
-    luminanceDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        luminanceDescriptorSets[i] = descriptorManager->allocateSet(luminanceLayoutHandles[0]);
-        // Update storage buffer binding (binding 2 per shader reflection)
-        descriptorManager->bindBuffer(luminanceDescriptorSets[i], 2, luminanceBuffer,
-                                     vk::DescriptorType::eStorageBuffer, 0, sizeof(LuminanceData));
-    }
+    // Create SRB and bind storage buffer (binding 2)
+    luminanceSRB.bindBuffer(0, 2, &luminanceBuffer, 0, sizeof(LuminanceData));
 
     histogramBuffer = ResourceFactory::createBuffer(context, {
         .size = sizeof(HistogramData),
@@ -80,21 +68,8 @@ void AutoExposure::init(VulkanContext* ctx, DescriptorManager* descMgr, vk::Exte
     config.pushConstantRanges.push_back({vk::ShaderStageFlagBits::eCompute, 0, 4 * sizeof(float)});
     histogramPipeline->init(context, descriptorManager, histogramShader, config);
 
-    // Now get layout handles (registered by init())
-    const auto& histogramLayoutHandles = histogramShader->getDescriptorLayoutHandles();
-    if (histogramLayoutHandles.empty()) {
-        violet::Log::error("Renderer", "No descriptor layouts found in luminance_histogram shader");
-        return;
-    }
-
-    // Allocate descriptor sets for all frames in flight using reflection-based API
-    histogramDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        histogramDescriptorSets[i] = descriptorManager->allocateSet(histogramLayoutHandles[0]);
-        // Update storage buffer binding (binding 2 per shader reflection)
-        descriptorManager->bindBuffer(histogramDescriptorSets[i], 2, histogramBuffer,
-                                     vk::DescriptorType::eStorageBuffer, 0, sizeof(HistogramData));
-    }
+    // Create SRB and bind storage buffer (binding 2)
+    histogramSRB.bindBuffer(0, 2, &histogramBuffer, 0, sizeof(HistogramData));
 }
 
 void AutoExposure::cleanup() {
@@ -138,52 +113,31 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     vk::ImageView hdrView = hdrRes->isExternal ? hdrRes->imageResource->view : hdrRes->transientView;
     if (!hdrView) return;
 
-    if (frameIndex >= luminanceDescriptorSets.size() || frameIndex >= histogramDescriptorSets.size()) {
-        violet::Log::error("AutoExposure", "Invalid frame index: {}", frameIndex);
-        return;
+    // Create temporary SRB with per-frame resources
+    ShaderResourceBinding tempSRB;
+
+    // Binding 0: HDR image (SampledImage)
+    tempSRB.bindSampledImage(0, 0, hdrView, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    // Binding 1: Sampler
+    vk::Sampler sampler = descriptorManager->getSamplerManager().getSampler(SamplerType::ClampToEdge);
+    tempSRB.bindSampler(0, 1, sampler);
+
+    // Binding 2: Storage buffer (merge from persistent SRB)
+    if (params.method == AutoExposureMethod::Simple) {
+        tempSRB.merge(luminanceSRB);
+    } else {
+        tempSRB.merge(histogramSRB);
     }
-
-    // Update descriptor set for current frame (always update since RenderGraph rebuilds each frame)
-    vk::DescriptorSet descSet = params.method == AutoExposureMethod::Simple ?
-        luminanceDescriptorSets[frameIndex] : histogramDescriptorSets[frameIndex];
-
-    // Bind HDR image and sampler separately (Slang uses separate Texture2D + SamplerState)
-    vk::DescriptorImageInfo imageInfo;
-    imageInfo.imageView = hdrView;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    imageInfo.sampler = nullptr;  // Not used for eSampledImage
-
-    vk::DescriptorImageInfo samplerInfo;
-    samplerInfo.sampler = descriptorManager->getSamplerManager().getSampler(SamplerType::ClampToEdge);
-
-    eastl::vector<vk::WriteDescriptorSet> writes;
-
-    // Binding 0: SampledImage (hdrScene)
-    vk::WriteDescriptorSet imageWrite;
-    imageWrite.dstSet = descSet;
-    imageWrite.dstBinding = 0;
-    imageWrite.dstArrayElement = 0;
-    imageWrite.descriptorCount = 1;
-    imageWrite.descriptorType = vk::DescriptorType::eSampledImage;
-    imageWrite.pImageInfo = &imageInfo;
-    writes.push_back(imageWrite);
-
-    // Binding 1: Sampler (texSampler)
-    vk::WriteDescriptorSet samplerWrite;
-    samplerWrite.dstSet = descSet;
-    samplerWrite.dstBinding = 1;
-    samplerWrite.dstArrayElement = 0;
-    samplerWrite.descriptorCount = 1;
-    samplerWrite.descriptorType = vk::DescriptorType::eSampler;
-    samplerWrite.pImageInfo = &samplerInfo;
-    writes.push_back(samplerWrite);
-
-    context->getDevice().updateDescriptorSets(writes, {});
 
     if (params.method == AutoExposureMethod::Simple) {
         cmd.fillBuffer(luminanceBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, luminancePipeline->getPipelineLayout(), 0, 1, &descSet, 0, nullptr);
+
+        // Update and bind descriptors using SRB
+        descriptorManager->update(tempSRB, luminancePipeline.get());
+        descriptorManager->bind(cmd, tempSRB, luminancePipeline.get());
+
         cmd.dispatch(1, 1, 1);
     } else {
         cmd.fillBuffer(histogramBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
@@ -193,7 +147,11 @@ void AutoExposure::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
         };
 
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, histogramPipeline->getPipelineLayout(), 0, 1, &descSet, 0, nullptr);
+
+        // Update and bind descriptors using SRB
+        descriptorManager->update(tempSRB, histogramPipeline.get());
+        descriptorManager->bind(cmd, tempSRB, histogramPipeline.get());
+
         cmd.pushConstants(histogramPipeline->getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pushConstants), &pushConstants);
         cmd.dispatch((sceneExtent.width + 15) / 16, (sceneExtent.height + 15) / 16, 1);
     }

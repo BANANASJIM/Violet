@@ -182,27 +182,16 @@ public:
 
     vk::DescriptorSet allocateSet(LayoutHandle handle);
 
-    // ===== New Unified API =====
+    // ===== Resource Binding API (Unified) =====
 
     void update(const class ShaderResourceBinding& srb, const class PipelineBase* pipeline);
     void bind(vk::CommandBuffer cmd, const class ShaderResourceBinding& srb, const class PipelineBase* pipeline);
 
-    // ===== Internal/Low-Level APIs =====
+    // ===== One-off Descriptor Updates =====
 
-    void updateSet(vk::DescriptorSet set,
-                   const ShaderReflection& reflection,
-                   const eastl::unordered_map<struct BindingKey, DescriptorResourceHandle>& resources);
-
-    void updateSet(vk::DescriptorSet set,
-                   const ShaderReflection& reflection,
-                   const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources);
-
-    void bindBuffer(vk::DescriptorSet set, uint32_t binding,
-                   const BufferResource& buffer, vk::DescriptorType type,
-                   vk::DeviceSize offset = 0, vk::DeviceSize range = VK_WHOLE_SIZE);
-    void bindTexture(vk::DescriptorSet set, uint32_t binding, Texture* texture);
-    void bindStorageImage(vk::DescriptorSet set, uint32_t binding, vk::ImageView imageView);
-    void bindSampler(vk::DescriptorSet set, uint32_t binding, vk::Sampler sampler);
+    // Update a single descriptor (for special operations: bindless init, IBL compute, etc.)
+    void updateSingleDescriptor(vk::DescriptorSet set, uint32_t binding,
+                               const DescriptorResourceHandle& resource);
 
     // ===== Bindless Resource Management =====
 
@@ -259,6 +248,22 @@ private:
     size_t computeOwnerID(const class ShaderResourceBinding& srb, uint32_t setIndex, UpdateFrequency maxFreq);
     vk::DescriptorSet getOrCreateCachedSet(LayoutHandle handle, size_t ownerID);
     void updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key, const DescriptorResourceHandle& resource);
+
+    // Internal reflection-driven update helpers (private)
+    void updateSet(vk::DescriptorSet set,
+                   const class ShaderReflection& reflection,
+                   const eastl::unordered_map<struct BindingKey, DescriptorResourceHandle>& resources);
+    void updateSet(vk::DescriptorSet set,
+                   const class ShaderReflection& reflection,
+                   const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources);
+
+    // Internal descriptor update helpers (private)
+    void bindBuffer(vk::DescriptorSet set, uint32_t binding,
+                   const BufferResource& buffer, vk::DescriptorType type,
+                   vk::DeviceSize offset = 0, vk::DeviceSize range = VK_WHOLE_SIZE);
+    void bindTexture(vk::DescriptorSet set, uint32_t binding, Texture* texture);
+    void bindStorageImage(vk::DescriptorSet set, uint32_t binding, vk::ImageView imageView);
+    void bindSampler(vk::DescriptorSet set, uint32_t binding, vk::Sampler sampler);
 
     // ===== Member Variables =====
 

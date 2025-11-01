@@ -10,7 +10,6 @@ namespace violet {
 
 class VulkanContext;
 class DescriptorManager;
-class DescriptorSetBinding;
 class MaterialManager;
 class RenderGraph;
 class Material;
@@ -43,8 +42,8 @@ class ShaderLibrary;
 
 class Tonemap {
 public:
-    Tonemap();  // Must be defined in .cpp for unique_ptr<DescriptorSetBinding>
-    ~Tonemap();  // Must be defined in .cpp for unique_ptr<DescriptorSetBinding>
+    Tonemap() = default;
+    ~Tonemap() = default;
 
     void init(VulkanContext* context, MaterialManager* materialManager,
               DescriptorManager* descriptorManager,
@@ -53,10 +52,8 @@ public:
               ShaderLibrary* shaderLibrary);
     void cleanup();
 
-    // RenderGraph integration - execution only (pass declaration in ForwardRenderer)
     void executePass(vk::CommandBuffer cmd, uint32_t frameIndex);
 
-    // Parameter access
     TonemapParams& getParams() { return params; }
     const TonemapParams& getParams() const { return params; }
     void setEV100(float ev100) { params.ev100 = glm::clamp(ev100, params.minEV100, params.maxEV100); }
@@ -73,13 +70,11 @@ private:
     DescriptorManager* descriptorManager = nullptr;
     RenderGraph* renderGraph = nullptr;
 
-    Material* postProcessMaterial = nullptr;  // Reference from MaterialManager, not owned
-    ShaderResourceBinding resources;  // Pure data container
-    eastl::unique_ptr<DescriptorSetBinding> gpuBinding;  // GPU resource manager (RAII)
+    Material* postProcessMaterial = nullptr;
+    ShaderResourceBinding resources;
 
     TonemapParams params;
 
-    // Resource names for RenderGraph
     eastl::string hdrImageName;
     eastl::string swapchainImageName;
 };
