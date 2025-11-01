@@ -1,6 +1,7 @@
 #include "renderer/vulkan/DescriptorManager.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
 #include "renderer/vulkan/ShaderResourceBinding.hpp"
+#include "renderer/vulkan/PipelineBase.hpp"
 #include "resource/Texture.hpp"
 #include "core/Log.hpp"
 #include <functional>
@@ -47,52 +48,58 @@ PushConstantHandle PushConstantDesc::hash() const {
 
 // ===== DescriptorResourceHandle Factory Methods =====
 
-DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(vk::Buffer buf, vk::DeviceSize offset, vk::DeviceSize range) {
+DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(vk::Buffer buf, vk::DeviceSize offset, vk::DeviceSize range, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::Buffer;
+    handle.frequency = freq;
     handle.bufferData.buffer = buf;
     handle.bufferData.offset = offset;
     handle.bufferData.range = range;
     return handle;
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(const BufferResource& buf) {
-    return fromBuffer(buf.buffer, 0, VK_WHOLE_SIZE);
+DescriptorResourceHandle DescriptorResourceHandle::fromBuffer(const BufferResource& buf, UpdateFrequency freq) {
+    return fromBuffer(buf.buffer, 0, VK_WHOLE_SIZE, freq);
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromTexture(Texture* tex) {
+DescriptorResourceHandle DescriptorResourceHandle::fromTexture(Texture* tex, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::Texture;
+    handle.frequency = freq;
     handle.texture = tex;
     return handle;
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromSampledImage(vk::ImageView view, vk::ImageLayout layout) {
+DescriptorResourceHandle DescriptorResourceHandle::fromSampledImage(vk::ImageView view, vk::ImageLayout layout, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::SampledImage;
+    handle.frequency = freq;
     handle.imageView = view;
     handle.imageLayout = layout;
     return handle;
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromStorageImage(vk::ImageView view) {
+DescriptorResourceHandle DescriptorResourceHandle::fromStorageImage(vk::ImageView view, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::ImageView;
+    handle.frequency = freq;
     handle.imageView = view;
-    handle.imageLayout = vk::ImageLayout::eGeneral;  // Storage images use General layout
+    handle.imageLayout = vk::ImageLayout::eGeneral;
     return handle;
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromSampler(vk::Sampler samp) {
+DescriptorResourceHandle DescriptorResourceHandle::fromSampler(vk::Sampler samp, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::Sampler;
+    handle.frequency = freq;
     handle.sampler = samp;
     return handle;
 }
 
-DescriptorResourceHandle DescriptorResourceHandle::fromCombinedImageSampler(vk::ImageView view, vk::Sampler samp, vk::ImageLayout layout) {
+DescriptorResourceHandle DescriptorResourceHandle::fromCombinedImageSampler(vk::ImageView view, vk::Sampler samp, vk::ImageLayout layout, UpdateFrequency freq) {
     DescriptorResourceHandle handle;
     handle.type = Type::CombinedImageSampler;
+    handle.frequency = freq;
     handle.combinedData.imageView = view;
     handle.combinedData.sampler = samp;
     handle.imageLayout = layout;
@@ -275,105 +282,6 @@ LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc)
     return handle;
 }
 
-// ===== Set Group Management (frequency-based allocation) =====
-
-SetGroupHandle DescriptorManager::allocateSetGroup(LayoutHandle layoutHandle) {
-    auto it = layouts.find(layoutHandle);
-    if (it == layouts.end()) {
-        violet::Log::error("DescriptorManager", "Layout handle {} not found", layoutHandle);
-        return 0;
-    }
-
-    const LayoutInfo& layoutInfo = it->second;
-    UpdateFrequency frequency = layoutInfo.frequency;
-
-    // Determine how many sets to allocate based on frequency
-    uint32_t setCount = (frequency == UpdateFrequency::PerFrame) ? maxFrames : 1;
-
-    // Get pool for this frequency
-    vk::DescriptorPool pool = getOrCreatePool(frequency);
-
-    // Allocate all sets in a single batch from the pool
-    eastl::vector<vk::DescriptorSetLayout> layouts(setCount, layoutInfo.layout);
-    vk::DescriptorSetAllocateInfo allocInfo;
-    allocInfo.descriptorPool = pool;
-    allocInfo.descriptorSetCount = setCount;
-    allocInfo.pSetLayouts = layouts.data();
-
-    eastl::vector<vk::DescriptorSet> sets;
-    try {
-        auto stdSets = context->getDevice().allocateDescriptorSets(allocInfo);
-        // Manually copy std::vector to eastl::vector (iterator tags incompatible)
-        sets.reserve(stdSets.size());
-        for (const auto& set : stdSets) {
-            sets.push_back(set);
-        }
-    } catch (const vk::SystemError& e) {
-        violet::Log::error("DescriptorManager", "Failed to allocate {} descriptor sets: {}", setCount, e.what());
-        return 0;
-    }
-
-    // Update pool remaining sets count
-    auto& pools = poolsByFrequency[frequency];
-    for (auto& poolInfo : pools) {
-        if (poolInfo.pool == pool) {
-            poolInfo.remainingSets -= setCount;
-            break;
-        }
-    }
-
-    // Create set group and store it
-    DescriptorSetGroup group;
-    group.sets = eastl::move(sets);
-    group.layoutHandle = layoutHandle;
-    group.frequency = frequency;
-
-    SetGroupHandle handle = nextSetGroupHandle++;
-    setGroups[handle] = eastl::move(group);
-
-    violet::Log::debug("DescriptorManager", "Allocated set group {} with {} set(s) from pool (frequency: {})",
-                      handle, setCount, static_cast<int>(frequency));
-
-    return handle;
-}
-
-vk::DescriptorSet DescriptorManager::getSet(SetGroupHandle handle, uint32_t frameIndex) const {
-    auto it = setGroups.find(handle);
-    if (it == setGroups.end()) {
-        violet::Log::error("DescriptorManager", "Set group handle {} not found", handle);
-        return nullptr;
-    }
-
-    const DescriptorSetGroup& group = it->second;
-
-    // For PerFrame, return the set for the specified frame
-    if (group.frequency == UpdateFrequency::PerFrame) {
-        if (frameIndex >= group.sets.size()) {
-            violet::Log::error("DescriptorManager", "Frame index {} out of range for set group {} (size: {})",
-                              frameIndex, handle, group.sets.size());
-            return nullptr;
-        }
-        return group.sets[frameIndex];
-    }
-
-    // For other frequencies, always return the single set
-    return group.sets[0];
-}
-
-void DescriptorManager::freeSetGroup(SetGroupHandle handle) {
-    auto it = setGroups.find(handle);
-    if (it == setGroups.end()) {
-        violet::Log::warn("DescriptorManager", "Attempted to free non-existent set group {}", handle);
-        return;
-    }
-
-    // Note: Descriptor sets are pool-allocated and will be freed when pool is destroyed
-    // We just remove the group from our tracking map
-    setGroups.erase(it);
-
-    violet::Log::debug("DescriptorManager", "Freed set group {}", handle);
-}
-
 vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle) {
     auto it = layouts.find(handle);
     if (it == layouts.end()) {
@@ -406,24 +314,7 @@ vk::DescriptorSet DescriptorManager::allocateSet(LayoutHandle handle) {
     return sets[0];
 }
 
-// ===== High-Level Automatic Binding Interface =====
-// REMOVED: bindResources() has been deleted. Use DescriptorSetBinding class instead.
-
 // ===== Reflection-Driven Resource Binding =====
-
-void DescriptorManager::updateSetFromBinding(SetGroupHandle handle, const ShaderResourceBinding& binding,
-                                              const ShaderReflection& reflection, uint32_t frameIndex) {
-    // Get the descriptor set for this frame from the set group
-    vk::DescriptorSet set = getSet(handle, frameIndex);
-    if (!set) {
-        violet::Log::error("DescriptorManager", "Failed to get descriptor set from group {} for frame {}",
-                          handle, frameIndex);
-        return;
-    }
-
-    // Delegate to existing updateSet implementation
-    updateSet(set, reflection, binding.getResources());
-}
 
 // Unified API: updateSet with (set, binding) keys
 void DescriptorManager::updateSet(vk::DescriptorSet set,
@@ -733,59 +624,6 @@ void DescriptorManager::updateSet(vk::DescriptorSet set,
         context->getDevice().updateDescriptorSets(writes, {});
         violet::Log::debug("DescriptorManager", "Batched update of {} descriptor(s)", writes.size());
     }
-}
-
-void DescriptorManager::bindBuffer(vk::DescriptorSet set, const eastl::string& resourceName,
-                                   const BufferResource& buffer, const ShaderReflection& reflection) {
-    const auto* resource = reflection.findResource(resourceName);
-    if (!resource) {
-        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
-        return;
-    }
-
-    if (resource->type != vk::DescriptorType::eUniformBuffer &&
-        resource->type != vk::DescriptorType::eStorageBuffer) {
-        violet::Log::error("DescriptorManager", "Resource '{}' is not a buffer (type={})",
-                          resourceName.c_str(), vk::to_string(resource->type).c_str());
-        return;
-    }
-
-    bindBuffer(set, resource->binding, buffer, resource->type);
-}
-
-void DescriptorManager::bindTexture(vk::DescriptorSet set, const eastl::string& resourceName,
-                                   Texture* texture, const ShaderReflection& reflection) {
-    const auto* resource = reflection.findResource(resourceName);
-    if (!resource) {
-        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
-        return;
-    }
-
-    if (resource->type != vk::DescriptorType::eCombinedImageSampler &&
-        resource->type != vk::DescriptorType::eSampledImage) {
-        violet::Log::error("DescriptorManager", "Resource '{}' is not a texture (type={})",
-                          resourceName.c_str(), vk::to_string(resource->type).c_str());
-        return;
-    }
-
-    bindTexture(set, resource->binding, texture);
-}
-
-void DescriptorManager::bindStorageImage(vk::DescriptorSet set, const eastl::string& resourceName,
-                                         vk::ImageView imageView, const ShaderReflection& reflection) {
-    const auto* resource = reflection.findResource(resourceName);
-    if (!resource) {
-        violet::Log::error("DescriptorManager", "Resource '{}' not found in shader reflection", resourceName.c_str());
-        return;
-    }
-
-    if (resource->type != vk::DescriptorType::eStorageImage) {
-        violet::Log::error("DescriptorManager", "Resource '{}' is not a storage image (type={})",
-                          resourceName.c_str(), vk::to_string(resource->type).c_str());
-        return;
-    }
-
-    bindStorageImage(set, resource->binding, imageView);
 }
 
 // ===== Direct Resource Binding =====
@@ -1329,25 +1167,166 @@ bool DescriptorManager::hasPushConstants(PushConstantHandle handle) const {
     return handle != 0 && pushConstants.find(handle) != pushConstants.end();
 }
 
-// ===== Unified Binding API =====
+// ===== New Unified API Implementation =====
 
-void DescriptorManager::bindDescriptorSets(vk::CommandBuffer cmd, vk::PipelineLayout layout,
-                                           vk::PipelineBindPoint bindPoint, uint32_t firstSet,
-                                           const eastl::vector<vk::DescriptorSet>& sets,
-                                           const eastl::vector<uint32_t>& dynamicOffsets) {
-    if (sets.empty()) {
+UpdateFrequency DescriptorManager::getMaxFrequencyForSet(const eastl::unordered_map<BindingKey, DescriptorResourceHandle>& resources, uint32_t setIndex) {
+    UpdateFrequency maxFreq = UpdateFrequency::Static;
+    for (const auto& [key, resource] : resources) {
+        if (key.set == setIndex && resource.frequency > maxFreq) {
+            maxFreq = resource.frequency;
+        }
+    }
+    return maxFreq;
+}
+
+size_t DescriptorManager::computeOwnerID(const ShaderResourceBinding& srb, uint32_t setIndex, UpdateFrequency maxFreq) {
+    if (maxFreq == UpdateFrequency::PerFrame) {
+        return currentFrame;
+    }
+    return srb.hashForSet(setIndex);
+}
+
+vk::DescriptorSet DescriptorManager::getOrCreateCachedSet(LayoutHandle handle, size_t ownerID) {
+    SetCacheKey cacheKey{handle, ownerID};
+
+    auto it = setCache.find(cacheKey);
+    if (it != setCache.end()) {
+        return it->second;
+    }
+
+    vk::DescriptorSet newSet = allocateSet(handle);
+    setCache[cacheKey] = newSet;
+    return newSet;
+}
+
+void DescriptorManager::updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key, const DescriptorResourceHandle& resource) {
+    vk::WriteDescriptorSet write;
+    write.dstSet = set;
+    write.dstBinding = key.binding;
+    write.dstArrayElement = key.arrayIndex;
+    write.descriptorCount = 1;
+
+    vk::DescriptorBufferInfo bufferInfo;
+    vk::DescriptorImageInfo imageInfo;
+
+    switch (resource.type) {
+        case DescriptorResourceHandle::Type::Buffer:
+            write.descriptorType = vk::DescriptorType::eUniformBuffer;
+            bufferInfo.buffer = resource.bufferData.buffer;
+            bufferInfo.offset = resource.bufferData.offset;
+            bufferInfo.range = resource.bufferData.range;
+            write.pBufferInfo = &bufferInfo;
+            break;
+
+        case DescriptorResourceHandle::Type::Texture:
+            if (resource.texture) {
+                write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+                imageInfo.imageView = resource.texture->getImageView();
+                imageInfo.sampler = resource.texture->getSampler();
+                imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                write.pImageInfo = &imageInfo;
+            }
+            break;
+
+        case DescriptorResourceHandle::Type::SampledImage:
+            write.descriptorType = vk::DescriptorType::eSampledImage;
+            imageInfo.imageView = resource.imageView;
+            imageInfo.imageLayout = resource.imageLayout;
+            write.pImageInfo = &imageInfo;
+            break;
+
+        case DescriptorResourceHandle::Type::ImageView:
+            write.descriptorType = vk::DescriptorType::eStorageImage;
+            imageInfo.imageView = resource.imageView;
+            imageInfo.imageLayout = resource.imageLayout;
+            write.pImageInfo = &imageInfo;
+            break;
+
+        case DescriptorResourceHandle::Type::Sampler:
+            write.descriptorType = vk::DescriptorType::eSampler;
+            imageInfo.sampler = resource.sampler;
+            write.pImageInfo = &imageInfo;
+            break;
+
+        case DescriptorResourceHandle::Type::CombinedImageSampler:
+            write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+            imageInfo.imageView = resource.combinedData.imageView;
+            imageInfo.sampler = resource.combinedData.sampler;
+            imageInfo.imageLayout = resource.imageLayout;
+            write.pImageInfo = &imageInfo;
+            break;
+    }
+
+    context->getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+}
+
+void DescriptorManager::update(const ShaderResourceBinding& srb, const PipelineBase* pipeline) {
+    if (!pipeline || !pipeline->getReflection()) {
+        Log::error("DescriptorManager", "Invalid pipeline or reflection");
         return;
     }
 
-    cmd.bindDescriptorSets(
-        bindPoint,
-        layout,
-        firstSet,
-        static_cast<uint32_t>(sets.size()),
-        sets.data(),
-        static_cast<uint32_t>(dynamicOffsets.size()),
-        dynamicOffsets.empty() ? nullptr : dynamicOffsets.data()
-    );
+    eastl::unordered_map<BindingKey, DescriptorResourceHandle> allResources = srb.getResources();
+
+    for (const auto& [name, handle] : srb.getNameBindings()) {
+        auto bindingKey = pipeline->getBindingKey(name);
+        if (bindingKey.has_value()) {
+            allResources[bindingKey.value()] = handle;
+        }
+    }
+
+    for (uint32_t setIndex = 0; setIndex < 32; ++setIndex) {
+        LayoutHandle layoutHandle = pipeline->getLayoutHandle(setIndex);
+        if (layoutHandle == 0) break;
+
+        UpdateFrequency maxFreq = getMaxFrequencyForSet(allResources, setIndex);
+        size_t ownerID = computeOwnerID(srb, setIndex, maxFreq);
+        vk::DescriptorSet descriptorSet = getOrCreateCachedSet(layoutHandle, ownerID);
+
+        for (const auto& [key, resource] : allResources) {
+            if (key.set == setIndex) {
+                updateDescriptorInternal(descriptorSet, key, resource);
+            }
+        }
+    }
+}
+
+void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding& srb, const PipelineBase* pipeline) {
+    if (!pipeline || !pipeline->getReflection()) return;
+
+    eastl::vector<vk::DescriptorSet> sets;
+    eastl::unordered_map<BindingKey, DescriptorResourceHandle> allResources = srb.getResources();
+
+    for (const auto& [name, handle] : srb.getNameBindings()) {
+        auto bindingKey = pipeline->getBindingKey(name);
+        if (bindingKey.has_value()) {
+            allResources[bindingKey.value()] = handle;
+        }
+    }
+
+    for (uint32_t setIndex = 0; setIndex < 32; ++setIndex) {
+        LayoutHandle layoutHandle = pipeline->getLayoutHandle(setIndex);
+        if (layoutHandle == 0) break;
+
+        UpdateFrequency maxFreq = getMaxFrequencyForSet(allResources, setIndex);
+        size_t ownerID = computeOwnerID(srb, setIndex, maxFreq);
+
+        auto it = setCache.find({layoutHandle, ownerID});
+        if (it != setCache.end()) {
+            sets.push_back(it->second);
+        }
+    }
+
+    if (!sets.empty()) {
+        cmd.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipeline->getPipelineLayout(),
+            0,
+            static_cast<uint32_t>(sets.size()),
+            sets.data(),
+            0, nullptr
+        );
+    }
 }
 
 } // namespace violet

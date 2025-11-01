@@ -31,6 +31,41 @@ void ShaderResourceBinding::clear() {
     resourcesByName.clear();
 }
 
+size_t ShaderResourceBinding::hashForSet(uint32_t setIndex) const {
+    size_t h = 0;
+
+    for (const auto& [key, resource] : resources) {
+        if (key.set != setIndex) continue;
+        if (resource.frequency == UpdateFrequency::PerFrame) continue;
+
+        h ^= eastl::hash<uint32_t>{}(key.binding) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= eastl::hash<uint32_t>{}(key.arrayIndex) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= eastl::hash<int>{}(static_cast<int>(resource.type)) + 0x9e3779b9 + (h << 6) + (h >> 2);
+
+        switch (resource.type) {
+            case DescriptorResourceHandle::Type::Buffer:
+                h ^= reinterpret_cast<size_t>(static_cast<VkBuffer>(resource.bufferData.buffer));
+                break;
+            case DescriptorResourceHandle::Type::Texture:
+                h ^= reinterpret_cast<size_t>(resource.texture);
+                break;
+            case DescriptorResourceHandle::Type::SampledImage:
+            case DescriptorResourceHandle::Type::ImageView:
+                h ^= reinterpret_cast<size_t>(static_cast<VkImageView>(resource.imageView));
+                break;
+            case DescriptorResourceHandle::Type::Sampler:
+                h ^= reinterpret_cast<size_t>(static_cast<VkSampler>(resource.sampler));
+                break;
+            case DescriptorResourceHandle::Type::CombinedImageSampler:
+                h ^= reinterpret_cast<size_t>(static_cast<VkImageView>(resource.combinedData.imageView));
+                h ^= reinterpret_cast<size_t>(static_cast<VkSampler>(resource.combinedData.sampler));
+                break;
+        }
+    }
+
+    return h;
+}
+
 bool ShaderResourceBinding::hasResource(uint32_t set, uint32_t binding) const {
     return resources.find({set, binding}) != resources.end();
 }

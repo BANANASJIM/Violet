@@ -99,7 +99,7 @@ private:
     uint32_t elementStride;
 };
 
-// ===== ResourceProxy - Smart proxy for unified resource access =====
+// ===== ResourceProxy - Proxy for buffer field/element access =====
 class ResourceProxy {
 public:
     ResourceProxy(ShaderResources* parent, const ReflectedResource* resourceInfo);
@@ -110,13 +110,6 @@ public:
     // SSBO array element access (only valid for StorageBuffer)
     // Supports syntax: lights[i]["fieldName"] = value
     ElementProxy operator[](size_t elementIndex);
-
-    // Unified assignment operators (auto-detect type from reflection)
-    ResourceProxy& operator=(Texture* texture);
-    ResourceProxy& operator=(const StorageBufferBinding& binding);
-    ResourceProxy& operator=(vk::ImageView imageView);           // For StorageImage
-    ResourceProxy& operator=(const BufferResource& buffer);      // For UniformBuffer
-    ResourceProxy& operator=(vk::Sampler sampler);               // For Sampler
 
     // Query resource info
     vk::DescriptorType getType() const;
@@ -135,14 +128,16 @@ class ShaderResources {
     friend class ResourceManager;  // Factory access
 
 public:
-    // Constructor: Directly holds all data
+    // Constructor: Creates buffer and initializes all internal structures
     ShaderResources(
         eastl::string instanceName,
-        eastl::shared_ptr<Shader> shader,
-        ShaderReflection reflection,
+        const ReflectedBuffer* bufferLayout,
+        uint32_t setIndex,
+        uint32_t binding,
+        vk::DescriptorType descriptorType,
+        UpdateFrequency frequency,
         VulkanContext* context,
-        uint32_t maxFrames,
-        DescriptorManager* descriptorMgr = nullptr
+        uint32_t maxFrames
     );
 
     // Destructor: Cleanup GPU resources
@@ -161,26 +156,11 @@ public:
     // Access resource by name (returns proxy for chaining)
     ResourceProxy operator[](const eastl::string& resourceName);
 
-    // Batch update multiple resources by name (reflection-driven)
-    void updateResources(uint32_t setIndex,
-                        const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources);
+    // === Buffer Bindings (for use with ShaderResourceBinding) ===
 
-    // === Descriptor Set Management ===
-
-    // Get descriptor set by index
-    vk::DescriptorSet getSet(uint32_t setIndex) const;
-
-    // Get dynamic offset (only valid for PerFrame resources)
-    // DEPRECATED: Use getDynamicOffsetsForSet for sets with multiple dynamic bindings
-    uint32_t getDynamicOffset(uint32_t setIndex, uint32_t frameIndex) const;
-
-    // Get all dynamic offsets for a set (one offset per dynamic binding, in binding order)
-    // Returns empty vector for Static sets or if set not found
-    eastl::vector<uint32_t> getDynamicOffsetsForSet(uint32_t setIndex) const;
-
-    // Bind all descriptor sets to command buffer
-    void bind(vk::CommandBuffer cmd, vk::PipelineLayout layout,
-             vk::PipelineBindPoint bindPoint, uint32_t frameIndex = 0);
+    // Get all buffer bindings as DescriptorResourceHandles
+    // Returns map of (set, binding) -> buffer handle for all buffers owned by this instance
+    eastl::unordered_map<BindingKey, DescriptorResourceHandle> getBufferBindings() const;
 
     // === Resource Query ===
 
@@ -190,46 +170,27 @@ public:
     // === Instance Info ===
 
     const eastl::string& getInstanceName() const { return instanceName; }
-    eastl::shared_ptr<Shader> getShader() const { return shader; }
     uint32_t getCurrentFrame() const { return currentFrame; }
     void setCurrentFrame(uint32_t frame) { currentFrame = frame; }
 
 private:
-    // Per-binding buffer data
-    struct BindingBufferData {
-        BufferResource buffer;
-        uint32_t alignedSize = 0;  // Size per frame (for PerFrame frequency)
-        void* mappedData = nullptr;
-        uint32_t elementSize = 0;  // Size of single element (for StructuredBuffer)
-    };
-
-    // Per-set data
-    struct SetData {
-        vk::DescriptorSet descriptorSet;
-        uint32_t setIndex;
-        LayoutHandle layoutHandle;
-        UpdateFrequency frequency;
-        bool isBindless;
-
-        // Buffer data (for UBO/SSBO) - indexed by binding number
-        eastl::unordered_map<uint32_t, BindingBufferData> buffersByBinding;
-
-        // Legacy single buffer support (deprecated, for compatibility)
-        bool hasBuffer = false;
-        BufferResource buffer;
-        uint32_t alignedSize = 0;
-        void* mappedData = nullptr;
-    };
-
     // Instance data
     eastl::string instanceName;
-    eastl::shared_ptr<Shader> shader;
-    ShaderReflection reflection;
-    eastl::unordered_map<uint32_t, SetData> sets;
+    const ReflectedBuffer* bufferLayout;  // Layout for field access
+
+    // Binding info
+    uint32_t setIndex;
+    uint32_t binding;
+    UpdateFrequency frequency;
+
+    // Buffer data (single buffer per ShaderResources)
+    BufferResource buffer;
+    uint32_t alignedSize = 0;   // Size per frame (for PerFrame frequency)
+    void* mappedData = nullptr;
+    uint32_t elementSize = 0;   // bufferLayout->totalSize
 
     // Context for GPU operations
     VulkanContext* context;
-    DescriptorManager* descriptorManager;
     uint32_t maxFrames;
     uint32_t currentFrame = 0;
 };

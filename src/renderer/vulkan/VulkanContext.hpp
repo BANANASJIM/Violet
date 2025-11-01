@@ -57,6 +57,10 @@ public:
 
     const RenderSettings& getRenderSettings() const { return renderSettings; }
 
+    // Buffer alignment helpers
+    uint32_t getMinUniformBufferOffsetAlignment() const;
+    uint32_t alignBufferSize(uint32_t size, uint32_t alignment) const;
+
 private:
     void createInstance();
     void setupDebugMessenger();

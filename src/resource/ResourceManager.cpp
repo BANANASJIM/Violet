@@ -2,6 +2,7 @@
 #include "core/Log.hpp"
 #include "core/FileSystem.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/PipelineBase.hpp"
 #include "resource/shader/ShaderLibrary.hpp"
 #include "resource/TextureManager.hpp"
 #include "resource/MaterialManager.hpp"
@@ -163,274 +164,75 @@ void ResourceManager::processAsyncTasks() {
 
 // === ShaderResources Management ===
 
+// DEPRECATED: Old API - use createShaderResources(name, pipeline, bufferName, frequency) instead
+// This method created ShaderResources for all sets in a shader, which doesn't fit the new
+// "one ShaderResources = one buffer" architecture
+
+// Public wrapper: Create ShaderResources from buffer name (looks up buffer layout from pipeline)
 eastl::shared_ptr<ShaderResources> ResourceManager::createShaderResources(
     const eastl::string& name,
-    const eastl::string& shaderName,
-    UpdateFrequency frequency,
-    const eastl::unordered_map<uint32_t, uint32_t>& bufferSizeOverrides) {
+    const PipelineBase* pipeline,
+    const eastl::string& bufferName,
+    UpdateFrequency frequency) {
+
+    if (!pipeline) {
+        violet::Log::error("ResourceManager", "Pipeline is null for ShaderResources '{}'", name.c_str());
+        return nullptr;
+    }
+
+    const ShaderReflection* reflection = pipeline->getReflection();
+    if (!reflection) {
+        violet::Log::error("ResourceManager", "Pipeline has no reflection for ShaderResources '{}'", name.c_str());
+        return nullptr;
+    }
+
+    const ReflectedBuffer* bufferLayout = reflection->getBufferLayout(bufferName);
+    if (!bufferLayout) {
+        violet::Log::error("ResourceManager", "Buffer '{}' not found in pipeline reflection", bufferName.c_str());
+        return nullptr;
+    }
+
+    return createShaderResourcesInternal(name, pipeline, bufferLayout,
+                                        bufferLayout->set, bufferLayout->binding, frequency);
+}
+
+// Internal: Create ShaderResources from buffer layout
+eastl::shared_ptr<ShaderResources> ResourceManager::createShaderResourcesInternal(
+    const eastl::string& name,
+    const PipelineBase* pipeline,
+    const ReflectedBuffer* bufferLayout,
+    uint32_t setIndex,
+    uint32_t binding,
+    UpdateFrequency frequency) {
 
     if (hasShaderResources(name)) {
         violet::Log::warn("ResourceManager", "ShaderResources '{}' already exists, returning existing instance", name.c_str());
         return shaderResourcesMap[name];
     }
 
-    auto shaderWeakPtr = shaderLibrary->get(shaderName);
-    auto shader = shaderWeakPtr.lock();
-    if (!shader) {
-        violet::Log::error("ResourceManager", "Failed to find shader '{}' for ShaderResources '{}'",
-                          shaderName.c_str(), name.c_str());
+    // Get resource info to determine descriptor type
+    const ShaderReflection* reflection = pipeline->getReflection();
+    const ReflectedResource* resourceInfo = reflection->findResourceByBinding(setIndex, binding);
+    if (!resourceInfo) {
+        violet::Log::error("ResourceManager", "No resource found for set {} binding {} (buffer '{}')",
+                  setIndex, binding, bufferLayout->name.c_str());
         return nullptr;
     }
 
-    if (!shader->hasReflection()) {
-        violet::Log::error("ResourceManager", "Shader '{}' has no reflection data", shaderName.c_str());
-        return nullptr;
-    }
-
-    const ShaderReflection* shaderReflection = shader->getShaderReflection();
-    if (!shaderReflection) {
-        violet::Log::error("ResourceManager", "Shader '{}' has no extracted reflection data", shaderName.c_str());
-        return nullptr;
-    }
-
-    // Register descriptor layouts from shader reflection (if not already registered)
-    shader->registerDescriptorLayouts(&descriptorManager);
-
-    const auto& layoutHandles = shader->getDescriptorLayoutHandles();
-    if (layoutHandles.empty()) {
-        violet::Log::warn("ResourceManager", "Shader '{}' has no descriptor layouts", shaderName.c_str());
-    }
-
-    // Copy reflection and extract resourcesBySet BEFORE moving
-    ShaderReflection reflectionCopy = *shaderReflection;
-    // Make a COPY of the map, not a reference, so it survives the move below
-    auto resourcesBySet = reflectionCopy.getResourcesBySetMap();
-
-    // Create ShaderResources with DescriptorManager (moves reflectionCopy)
+    // Create ShaderResources - it handles all buffer creation internally
     auto resources = eastl::make_shared<ShaderResources>(
-        name, shader, eastl::move(reflectionCopy), context, 3, &descriptorManager
+        name, bufferLayout, setIndex, binding,
+        resourceInfo->type, frequency,
+        context, MAX_FRAMES_IN_FLIGHT
     );
 
-    // Create descriptor sets and buffers for each set
-    for (size_t setIndex = 0; setIndex < layoutHandles.size(); ++setIndex) {
-        LayoutHandle layoutHandle = layoutHandles[setIndex];
-
-        if (layoutHandle == 0) {
-            continue;
-        }
-
-        auto setResIt = resourcesBySet.find(static_cast<uint32_t>(setIndex));
-        if (setResIt == resourcesBySet.end() || setResIt->second.empty()) {
-            continue;
-        }
-
-        const auto& setResources = setResIt->second;
-
-        bool isBindless = false;
-        for (const auto& res : setResources) {
-            if (res.isBindless) {
-                isBindless = true;
-                break;
-            }
-        }
-
-        if (!descriptorManager.hasLayout(layoutHandle)) {
-            violet::Log::error("ResourceManager", "Layout handle {} not registered", layoutHandle);
-            continue;
-        }
-
-        // Use the frequency parameter passed by the caller
-        ShaderResources::SetData setData;
-        setData.setIndex = static_cast<uint32_t>(setIndex);
-        setData.layoutHandle = layoutHandle;
-        setData.isBindless = isBindless;
-        setData.frequency = frequency;
-        setData.hasBuffer = false;
-        setData.alignedSize = 0;
-        setData.mappedData = nullptr;
-
-        if (isBindless) {
-            setData.descriptorSet = descriptorManager.getBindlessSet();
-            violet::Log::debug("ResourceManager", "Instance '{}' using global bindless set for set {}",
-                      name.c_str(), setIndex);
-        } else {
-            setData.descriptorSet = descriptorManager.allocateSet(layoutHandle);
-
-            if (!setData.descriptorSet) {
-                violet::Log::error("ResourceManager", "Failed to allocate descriptor set for set {}", setIndex);
-                continue;
-            }
-
-            // Count buffer bindings in this set
-            eastl::vector<const ReflectedResource*> bufferBindings;
-            for (const auto& res : setResources) {
-                if (res.type == vk::DescriptorType::eUniformBuffer ||
-                    res.type == vk::DescriptorType::eStorageBuffer) {
-                    bufferBindings.push_back(&res);
-                }
-            }
-
-            if (bufferBindings.empty()) {
-                // No buffers in this set
-                setData.hasBuffer = false;
-            } else if (bufferBindings.size() == 1) {
-                // Single buffer binding - use legacy single buffer approach
-                const auto& res = *bufferBindings[0];
-                setData.hasBuffer = true;
-
-                uint32_t totalBufferSize = 0;
-                if (res.bufferLayoutIndex != ~0u) {
-                    const auto* bufferLayout = shaderReflection->getBufferLayout(res.bufferLayoutIndex);
-                    if (bufferLayout) {
-                        totalBufferSize = bufferLayout->totalSize;
-                    }
-                }
-
-                // Check for buffer size override
-                auto overrideIt = bufferSizeOverrides.find(static_cast<uint32_t>(setIndex));
-                if (overrideIt != bufferSizeOverrides.end()) {
-                    totalBufferSize = overrideIt->second;
-                    violet::Log::debug("ResourceManager", "Using buffer size override for set {}: {} bytes", setIndex, totalBufferSize);
-                }
-
-                uint32_t bufferSize = totalBufferSize;
-                setData.alignedSize = totalBufferSize;
-
-                if (frequency == UpdateFrequency::PerFrame) {
-                    vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
-                    uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
-                    setData.alignedSize = (totalBufferSize + minAlignment - 1) & ~(minAlignment - 1);
-                    bufferSize = setData.alignedSize * 3;
-                }
-
-                char setIndexStr[16];
-                snprintf(setIndexStr, sizeof(setIndexStr), "%u", static_cast<uint32_t>(setIndex));
-                eastl::string debugName = name + "_set" + setIndexStr;
-
-                BufferInfo bufferInfo{
-                    .size = bufferSize,
-                    .usage = vk::BufferUsageFlagBits::eUniformBuffer |
-                             vk::BufferUsageFlagBits::eStorageBuffer,
-                    .memoryUsage = MemoryUsage::CPU_TO_GPU,
-                    .debugName = debugName
-                };
-
-                setData.buffer = ResourceFactory::createBuffer(context, bufferInfo);
-                setData.mappedData = setData.buffer.mappedData;
-
-                vk::DeviceSize range = frequency == UpdateFrequency::PerFrame ?
-                                       setData.alignedSize : totalBufferSize;
-
-                // Convert to Dynamic descriptor type for PerFrame buffers
-                vk::DescriptorType descriptorType = res.type;
-                if (frequency == UpdateFrequency::PerFrame) {
-                    if (res.type == vk::DescriptorType::eUniformBuffer) {
-                        descriptorType = vk::DescriptorType::eUniformBufferDynamic;
-                    } else if (res.type == vk::DescriptorType::eStorageBuffer) {
-                        descriptorType = vk::DescriptorType::eStorageBufferDynamic;
-                    }
-                }
-
-                descriptorManager.bindBuffer(setData.descriptorSet, res.binding,
-                                            setData.buffer, descriptorType,
-                                            0, range);
-
-                violet::Log::debug("ResourceManager", "Allocated single buffer ({}B total, {}B per frame) for set {} binding {} in '{}'",
-                          bufferSize, setData.alignedSize, setIndex, res.binding, name.c_str());
-            } else {
-                // Multiple buffer bindings - create independent buffer for each binding
-                setData.hasBuffer = true;
-
-                for (const auto* resPtr : bufferBindings) {
-                    const auto& res = *resPtr;
-
-                    uint32_t elementSize = 0;
-                    if (res.bufferLayoutIndex != ~0u) {
-                        const auto* bufferLayout = shaderReflection->getBufferLayout(res.bufferLayoutIndex);
-                        if (bufferLayout) {
-                            elementSize = bufferLayout->totalSize;
-                        }
-                    }
-
-                    // For StructuredBuffer, default to 64 elements (can be overridden)
-                    uint32_t elementCount = (res.type == vk::DescriptorType::eStorageBuffer) ? 64 : 1;
-                    uint32_t totalBufferSize = elementSize * elementCount;
-
-                    // Check for per-binding size override (format: setIndex * 1000 + binding)
-                    uint32_t overrideKey = static_cast<uint32_t>(setIndex) * 1000 + res.binding;
-                    auto overrideIt = bufferSizeOverrides.find(overrideKey);
-                    if (overrideIt != bufferSizeOverrides.end()) {
-                        totalBufferSize = overrideIt->second;
-                        violet::Log::debug("ResourceManager", "Using buffer size override for set {} binding {}: {} bytes",
-                                  setIndex, res.binding, totalBufferSize);
-                    }
-
-                    ShaderResources::BindingBufferData bindingData;
-                    bindingData.elementSize = elementSize;
-                    bindingData.alignedSize = totalBufferSize;
-
-                    uint32_t bufferSize = totalBufferSize;
-                    if (frequency == UpdateFrequency::PerFrame) {
-                        vk::PhysicalDeviceProperties props = context->getPhysicalDevice().getProperties();
-                        uint32_t minAlignment = static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
-                        bindingData.alignedSize = (totalBufferSize + minAlignment - 1) & ~(minAlignment - 1);
-                        bufferSize = bindingData.alignedSize * 3;
-                    }
-
-                    char bindingStr[32];
-                    snprintf(bindingStr, sizeof(bindingStr), "%u_binding%u",
-                            static_cast<uint32_t>(setIndex), res.binding);
-                    eastl::string debugName = name + "_set" + bindingStr;
-
-                    BufferInfo bufferInfo{
-                        .size = bufferSize,
-                        .usage = vk::BufferUsageFlagBits::eUniformBuffer |
-                                 vk::BufferUsageFlagBits::eStorageBuffer,
-                        .memoryUsage = MemoryUsage::CPU_TO_GPU,
-                        .debugName = debugName
-                    };
-
-                    bindingData.buffer = ResourceFactory::createBuffer(context, bufferInfo);
-                    bindingData.mappedData = bindingData.buffer.mappedData;
-
-                    vk::DeviceSize range = frequency == UpdateFrequency::PerFrame ?
-                                           bindingData.alignedSize : totalBufferSize;
-
-                    // Convert to Dynamic descriptor type for PerFrame buffers
-                    vk::DescriptorType descriptorType = res.type;
-                    if (frequency == UpdateFrequency::PerFrame) {
-                        if (res.type == vk::DescriptorType::eUniformBuffer) {
-                            descriptorType = vk::DescriptorType::eUniformBufferDynamic;
-                        } else if (res.type == vk::DescriptorType::eStorageBuffer) {
-                            descriptorType = vk::DescriptorType::eStorageBufferDynamic;
-                        }
-                    }
-
-                    descriptorManager.bindBuffer(setData.descriptorSet, res.binding,
-                                                bindingData.buffer, descriptorType,
-                                                0, range);
-
-                    setData.buffersByBinding[res.binding] = eastl::move(bindingData);
-
-                    violet::Log::debug("ResourceManager", "Allocated buffer ({}B total, {}B per frame, element size {}B) for set {} binding {} in '{}'",
-                              bufferSize, bindingData.alignedSize, elementSize, setIndex, res.binding, name.c_str());
-                }
-            }
-        }
-
-        resources->sets[static_cast<uint32_t>(setIndex)] = eastl::move(setData);
-    }
-
+    // Register
     shaderResourcesMap[name] = resources;
 
-    // Track PerFrame ShaderResources for frame synchronization
     if (frequency == UpdateFrequency::PerFrame) {
         perFrameResources.push_back(resources);
         violet::Log::debug("ResourceManager", "Registered '{}' for PerFrame synchronization", name.c_str());
     }
-
-    violet::Log::info("ResourceManager", "Created ShaderResources '{}' from shader '{}' ({} sets)",
-              name.c_str(), shaderName.c_str(), resources->sets.size());
 
     return resources;
 }
@@ -455,41 +257,8 @@ bool ResourceManager::hasShaderResources(const eastl::string& name) const {
     return shaderResourcesMap.find(name) != shaderResourcesMap.end();
 }
 
-vk::DescriptorSet ResourceManager::getDescriptorSet(const eastl::string& resourcesName, uint32_t setIndex) const {
-    auto it = shaderResourcesMap.find(resourcesName);
-    if (it == shaderResourcesMap.end()) {
-        violet::Log::error("ResourceManager",
-            "ShaderResources '{}' not found when getting descriptor set", resourcesName.c_str());
-        return nullptr;
-    }
-
-    const auto& resources = it->second;
-    if (!resources) {
-        violet::Log::error("ResourceManager",
-            "ShaderResources '{}' is null", resourcesName.c_str());
-        return nullptr;
-    }
-
-    return resources->getSet(setIndex);
-}
-
-eastl::vector<uint32_t> ResourceManager::getDynamicOffsets(const eastl::string& resourcesName, uint32_t setIndex) const {
-    auto it = shaderResourcesMap.find(resourcesName);
-    if (it == shaderResourcesMap.end()) {
-        violet::Log::error("ResourceManager",
-            "ShaderResources '{}' not found when getting dynamic offsets", resourcesName.c_str());
-        return {};
-    }
-
-    const auto& resources = it->second;
-    if (!resources) {
-        violet::Log::error("ResourceManager",
-            "ShaderResources '{}' is null", resourcesName.c_str());
-        return {};
-    }
-
-    return resources->getDynamicOffsetsForSet(setIndex);
-}
+// DEPRECATED: Descriptor sets are now managed by ShaderResourceBinding, not ShaderResources
+// ShaderResources is now a pure buffer container and returns buffer bindings via getBufferBindings()
 
 void ResourceManager::setCurrentFrame(uint32_t frameIndex) {
     // Synchronize DescriptorManager frame

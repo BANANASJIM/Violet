@@ -129,6 +129,16 @@ public:
         return nullptr;
     }
 
+    // Get buffer layout by name (nullptr if not found)
+    const ReflectedBuffer* getBufferLayout(const eastl::string& name) const {
+        for (const auto& buffer : bufferStorage) {
+            if (buffer.name == name) {
+                return &buffer;
+            }
+        }
+        return nullptr;
+    }
+
     // === Push Constants API ===
 
     void addPushConstantRange(const vk::PushConstantRange& range) {

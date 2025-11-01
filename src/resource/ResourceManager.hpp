@@ -59,15 +59,14 @@ public:
     const DescriptorManager& getDescriptorManager() const { return descriptorManager; }
 
     // === ShaderResources Management ===
-    // Create ShaderResources from shader reflection (auto-creates descriptor sets + buffers)
-    // frequency: PerFrame for globals (3x buffer), PerMaterial for materials (1x buffer)
-    // bufferSizeOverrides: Optional map of set index -> buffer size to override reflection-computed sizes
-    //                      Useful for unbounded arrays (e.g., StructuredBuffer<T> with no size info)
+
+    // Create ShaderResources from single buffer layout (pipeline-based)
+    // NEW API: Each ShaderResources manages one buffer
     eastl::shared_ptr<ShaderResources> createShaderResources(
         const eastl::string& name,
-        const eastl::string& shaderName,
-        UpdateFrequency frequency = UpdateFrequency::PerMaterial,
-        const eastl::unordered_map<uint32_t, uint32_t>& bufferSizeOverrides = {}
+        const class PipelineBase* pipeline,
+        const eastl::string& bufferName,
+        UpdateFrequency frequency
     );
 
     // Get registered ShaderResources by name
@@ -76,14 +75,6 @@ public:
 
     // Check if ShaderResources exists
     bool hasShaderResources(const eastl::string& name) const;
-
-    // === Convenience Methods for ShaderResources access ===
-
-    // Get descriptor set from ShaderResources (for binding to command buffer)
-    vk::DescriptorSet getDescriptorSet(const eastl::string& resourcesName, uint32_t setIndex) const;
-
-    // Get dynamic offsets from ShaderResources (for dynamic uniform/storage buffers)
-    eastl::vector<uint32_t> getDynamicOffsets(const eastl::string& resourcesName, uint32_t setIndex) const;
 
     // === Convenience Methods (delegates to sub-managers) ===
     void createDefaultResources();
@@ -98,6 +89,17 @@ public:
 
 private:
     void loadAllShaders();  // Pre-load all shaders into ShaderLibrary
+
+    // Internal: Create ShaderResources from single buffer layout
+    eastl::shared_ptr<ShaderResources> createShaderResourcesInternal(
+        const eastl::string& name,
+        const PipelineBase* pipeline,
+        const ReflectedBuffer* bufferLayout,
+        uint32_t setIndex,
+        uint32_t binding,
+        UpdateFrequency frequency
+    );
+
     VulkanContext* context = nullptr;
 
     // Sub-managers (order matters: initialization dependency)

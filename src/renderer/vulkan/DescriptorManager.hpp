@@ -19,15 +19,23 @@ class Shader;
 
 using LayoutHandle = uint32_t;
 using PushConstantHandle = uint32_t;
-using SetGroupHandle = uint64_t;  // Handle to a group of descriptor sets (auto-managed by frequency)
 
-// Binding key for (set, binding) tuple
 struct BindingKey {
     uint32_t set;
     uint32_t binding;
+    uint32_t arrayIndex = 0;
 
     bool operator==(const BindingKey& other) const {
-        return set == other.set && binding == other.binding;
+        return set == other.set && binding == other.binding && arrayIndex == other.arrayIndex;
+    }
+};
+
+struct SetCacheKey {
+    LayoutHandle layout;
+    size_t ownerID;
+
+    bool operator==(const SetCacheKey& other) const {
+        return layout == other.layout && ownerID == other.ownerID;
     }
 };
 
@@ -62,15 +70,16 @@ struct DescriptorLayoutDesc {
 
 struct DescriptorResourceHandle {
     enum class Type {
-        Buffer,                // UniformBuffer or StorageBuffer
-        Texture,               // CombinedImageSampler (Texture* contains imageView+sampler)
-        SampledImage,          // Sampled image (read-only, no sampler)
-        ImageView,             // StorageImage (RW)
-        Sampler,               // Separate sampler
-        CombinedImageSampler   // ImageView + Sampler specified separately
+        Buffer,
+        Texture,
+        SampledImage,
+        ImageView,
+        Sampler,
+        CombinedImageSampler
     };
 
     Type type;
+    UpdateFrequency frequency = UpdateFrequency::Static;
 
     union {
         struct {
@@ -94,15 +103,22 @@ struct DescriptorResourceHandle {
 
     DescriptorResourceHandle() : type(Type::Buffer), bufferData{nullptr, 0, 0} {}
 
-    // Factory methods
-    static DescriptorResourceHandle fromBuffer(vk::Buffer buf, vk::DeviceSize offset, vk::DeviceSize range);
-    static DescriptorResourceHandle fromBuffer(const BufferResource& buf);
-    static DescriptorResourceHandle fromTexture(Texture* tex);
-    static DescriptorResourceHandle fromSampledImage(vk::ImageView view, vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
-    static DescriptorResourceHandle fromStorageImage(vk::ImageView view);
-    static DescriptorResourceHandle fromSampler(vk::Sampler samp);
+    static DescriptorResourceHandle fromBuffer(vk::Buffer buf, vk::DeviceSize offset, vk::DeviceSize range,
+                                                UpdateFrequency freq = UpdateFrequency::Static);
+    static DescriptorResourceHandle fromBuffer(const BufferResource& buf,
+                                                UpdateFrequency freq = UpdateFrequency::Static);
+    static DescriptorResourceHandle fromTexture(Texture* tex,
+                                                 UpdateFrequency freq = UpdateFrequency::Static);
+    static DescriptorResourceHandle fromSampledImage(vk::ImageView view,
+                                                      vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                                                      UpdateFrequency freq = UpdateFrequency::Static);
+    static DescriptorResourceHandle fromStorageImage(vk::ImageView view,
+                                                      UpdateFrequency freq = UpdateFrequency::Static);
+    static DescriptorResourceHandle fromSampler(vk::Sampler samp,
+                                                 UpdateFrequency freq = UpdateFrequency::Static);
     static DescriptorResourceHandle fromCombinedImageSampler(vk::ImageView view, vk::Sampler samp,
-                                                   vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal);
+                                                              vk::ImageLayout layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                                                              UpdateFrequency freq = UpdateFrequency::Static);
 };
 
 // ===== Push Constants =====
@@ -111,6 +127,32 @@ struct PushConstantDesc {
     eastl::vector<vk::PushConstantRange> ranges;
     PushConstantHandle hash() const;
 };
+
+} // namespace violet
+
+// Hash functions (must be before DescriptorManager uses them)
+template<>
+struct eastl::hash<violet::BindingKey> {
+    size_t operator()(const violet::BindingKey& key) const {
+        size_t h = 0;
+        h ^= eastl::hash<uint32_t>{}(key.set) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= eastl::hash<uint32_t>{}(key.binding) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= eastl::hash<uint32_t>{}(key.arrayIndex) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+template<>
+struct eastl::hash<violet::SetCacheKey> {
+    size_t operator()(const violet::SetCacheKey& key) const {
+        size_t h = 0;
+        h ^= eastl::hash<uint32_t>{}(key.layout) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= eastl::hash<size_t>{}(key.ownerID) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
+namespace violet {
 
 // ===== Central Descriptor Management System =====
 
@@ -138,69 +180,22 @@ public:
 
     // ===== Descriptor Set Management =====
 
-    // New API: Allocate descriptor set group (auto-manages frame count based on frequency)
-    // - PerFrame → allocates maxFrames sets
-    // - Other frequencies → allocates 1 set
-    // Returns handle to the set group for later access
-    SetGroupHandle allocateSetGroup(LayoutHandle layoutHandle);
-
-    // Get descriptor set for specific frame from set group
-    // - PerFrame: returns sets[frameIndex]
-    // - Other: returns sets[0]
-    vk::DescriptorSet getSet(SetGroupHandle handle, uint32_t frameIndex = 0) const;
-
-    // Free set group and all its descriptor sets
-    void freeSetGroup(SetGroupHandle handle);
-
-    // Legacy API: Allocate single descriptor set for the given layout
-    // Note: For PerFrame resources, only 1 set is allocated. Use dynamic offsets at bind time.
-    // @deprecated Use allocateSetGroup() instead
     vk::DescriptorSet allocateSet(LayoutHandle handle);
 
-    // ===== High-Level Automatic Binding Interface =====
+    // ===== New Unified API =====
 
-    // REMOVED: bindResources() method has been deleted.
-    // Use DescriptorSetBinding class instead:
-    //   DescriptorSetBinding gpuBinding(&descriptorMgr, layoutHandle);
-    //   gpuBinding.update(shaderResourceBinding, frameIndex);
-    //   gpuBinding.bind(cmd, pipelineLayout, firstSet, frameIndex);
+    void update(const class ShaderResourceBinding& srb, const class PipelineBase* pipeline);
+    void bind(vk::CommandBuffer cmd, const class ShaderResourceBinding& srb, const class PipelineBase* pipeline);
 
-    // ===== Unified Reflection-Driven Binding Interface =====
+    // ===== Internal/Low-Level APIs =====
 
-    // New API: Update descriptor set using ShaderResourceBinding
-    // Automatically selects the correct set from the group based on frameIndex
-    void updateSetFromBinding(SetGroupHandle handle, const class ShaderResourceBinding& binding,
-                             const ShaderReflection& reflection, uint32_t frameIndex = 0);
-
-    // Unified API: bind resources using (set, binding) keys
-    // Uses reflection to query resource types for validation
     void updateSet(vk::DescriptorSet set,
                    const ShaderReflection& reflection,
                    const eastl::unordered_map<struct BindingKey, DescriptorResourceHandle>& resources);
 
-    // Legacy API: bind resources using reflection-driven map
-    // All binding numbers and types are queried from reflection
     void updateSet(vk::DescriptorSet set,
                    const ShaderReflection& reflection,
                    const eastl::unordered_map<eastl::string, DescriptorResourceHandle>& resources);
-
-    // Helper methods: bind individual resources by name (uses reflection)
-    void bindBuffer(vk::DescriptorSet set, const eastl::string& resourceName,
-                   const BufferResource& buffer, const ShaderReflection& reflection);
-    void bindTexture(vk::DescriptorSet set, const eastl::string& resourceName,
-                    Texture* texture, const ShaderReflection& reflection);
-    void bindStorageImage(vk::DescriptorSet set, const eastl::string& resourceName,
-                         vk::ImageView imageView, const ShaderReflection& reflection);
-
-    // ===== Unified Binding API =====
-
-    // Bind multiple descriptor sets with dynamic offsets (convenience wrapper)
-    void bindDescriptorSets(vk::CommandBuffer cmd, vk::PipelineLayout layout,
-                           vk::PipelineBindPoint bindPoint, uint32_t firstSet,
-                           const eastl::vector<vk::DescriptorSet>& sets,
-                           const eastl::vector<uint32_t>& dynamicOffsets = {});
-
-    // ===== Direct Resource Binding (bypassesreflection) =====
 
     void bindBuffer(vk::DescriptorSet set, uint32_t binding,
                    const BufferResource& buffer, vk::DescriptorType type,
@@ -244,7 +239,7 @@ private:
         UpdateFrequency frequency;
         eastl::vector<vk::DescriptorPoolSize> poolSizes;
         vk::DescriptorSetLayoutCreateFlags createFlags;
-        eastl::vector<BindingDesc> bindings;  // Store original bindings for stage merging
+        eastl::vector<BindingDesc> bindings;
     };
 
     struct PoolInfo {
@@ -253,18 +248,17 @@ private:
         uint32_t maxSets = 0;
     };
 
-    struct DescriptorSetGroup {
-        eastl::vector<vk::DescriptorSet> sets;  // PerFrame: maxFrames sets, other: 1 set
-        LayoutHandle layoutHandle;
-        UpdateFrequency frequency;
-    };
-
     // ===== Internal Methods =====
 
     void createPool(UpdateFrequency frequency);
     void growPool(UpdateFrequency frequency);
     vk::DescriptorPool getOrCreatePool(UpdateFrequency frequency);
     void updateBindlessDescriptor(Texture* texture, uint32_t binding, uint32_t arrayIndex);
+
+    UpdateFrequency getMaxFrequencyForSet(const eastl::unordered_map<BindingKey, DescriptorResourceHandle>& resources, uint32_t setIndex);
+    size_t computeOwnerID(const class ShaderResourceBinding& srb, uint32_t setIndex, UpdateFrequency maxFreq);
+    vk::DescriptorSet getOrCreateCachedSet(LayoutHandle handle, size_t ownerID);
+    void updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key, const DescriptorResourceHandle& resource);
 
     // ===== Member Variables =====
 
@@ -279,9 +273,8 @@ private:
     // Descriptor pool management
     eastl::unordered_map<UpdateFrequency, eastl::vector<PoolInfo>> poolsByFrequency;
 
-    // Set group management
-    eastl::unordered_map<SetGroupHandle, DescriptorSetGroup> setGroups;
-    SetGroupHandle nextSetGroupHandle = 1;
+    // Descriptor set cache
+    eastl::unordered_map<SetCacheKey, vk::DescriptorSet> setCache;
 
     // Bindless texture management
     bool bindlessEnabled = false;
@@ -300,11 +293,3 @@ private:
 };
 
 } // namespace violet
-
-// Hash function for BindingKey (outside violet namespace for EASTL)
-template<>
-struct eastl::hash<violet::BindingKey> {
-    size_t operator()(const violet::BindingKey& key) const {
-        return eastl::hash<uint64_t>{}((static_cast<uint64_t>(key.set) << 32) | key.binding);
-    }
-};

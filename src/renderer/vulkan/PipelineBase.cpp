@@ -1,5 +1,6 @@
 #include "PipelineBase.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "renderer/vulkan/DescriptorManager.hpp"
 #include "resource/shader/ShaderReflection.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Exception.hpp"
@@ -43,7 +44,7 @@ eastl::optional<BindingKey> PipelineBase::getBindingKey(const eastl::string& nam
         return eastl::nullopt;
     }
 
-    return eastl::make_pair(resource->set, resource->binding);
+    return BindingKey{resource->set, resource->binding};
 }
 
 LayoutHandle PipelineBase::getLayoutHandle(uint32_t set) const {

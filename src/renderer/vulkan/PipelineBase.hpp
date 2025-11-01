@@ -11,8 +11,8 @@ namespace violet {
 class VulkanContext;
 class ShaderReflection;
 
+struct BindingKey;
 using LayoutHandle = uint32_t;
-using BindingKey = eastl::pair<uint32_t, uint32_t>;  // (set, binding)
 
 class PipelineBase {
 public:
@@ -32,6 +32,7 @@ public:
     const ShaderReflection* getReflection() const { return mergedReflection.get(); }
     eastl::optional<BindingKey> getBindingKey(const eastl::string& name) const;
     LayoutHandle getLayoutHandle(uint32_t set) const;
+    const eastl::vector<LayoutHandle>& getLayoutHandles() const { return layoutHandles; }
 
 protected:
     eastl::vector<char> readFile(const eastl::string& filename);

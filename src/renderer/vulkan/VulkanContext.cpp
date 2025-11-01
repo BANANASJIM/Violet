@@ -417,4 +417,14 @@ void VulkanContext::createAllocator() {
     violet::Log::info("Renderer", "VMA allocator created with budget tracking");
 }
 
+uint32_t VulkanContext::getMinUniformBufferOffsetAlignment() const {
+    vk::PhysicalDeviceProperties props = physicalDevice.getProperties();
+    return static_cast<uint32_t>(props.limits.minUniformBufferOffsetAlignment);
+}
+
+uint32_t VulkanContext::alignBufferSize(uint32_t size, uint32_t alignment) const {
+    if (alignment == 0) return size;
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
 }

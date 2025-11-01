@@ -38,6 +38,8 @@ public:
         return resourcesByName;
     }
 
+    size_t hashForSet(uint32_t setIndex) const;
+
     bool hasResource(uint32_t set, uint32_t binding) const;
     const DescriptorResourceHandle* getResource(uint32_t set, uint32_t binding) const;
     size_t size() const { return resources.size(); }
