@@ -48,6 +48,21 @@ void ComputePipeline::buildPipeline() {
         shader->registerDescriptorLayouts(descriptorManager);
     }
 
+    // Populate merged reflection for base class methods
+    mergedReflection = eastl::make_unique<ShaderReflection>();
+    if (shader->getShaderReflection()) {
+        const ShaderReflection* refl = shader->getShaderReflection();
+        for (const auto& resource : refl->getAllResources()) {
+            mergedReflection->addResource(resource);
+        }
+        for (const auto& pcRange : refl->getPushConstantRanges()) {
+            mergedReflection->addPushConstantRange(pcRange);
+        }
+    }
+
+    // Store layout handles for base class methods
+    layoutHandles = shader->getDescriptorLayoutHandles();
+
     // Create shader module from SPIRV
     computeShaderModule = createShaderModuleFromSPIRV(shader->getSPIRV());
 

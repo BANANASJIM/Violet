@@ -10,40 +10,44 @@
 
 namespace violet {
 
-// ========================================
-// Dynamic rendering init (no RenderPass dependency)
-// ========================================
-
 void GraphicsPipeline::init(VulkanContext* ctx, DescriptorManager* descMgr, Material* mat,
-                            eastl::weak_ptr<Shader> vert, eastl::weak_ptr<Shader> frag,
+                            const eastl::vector<eastl::weak_ptr<Shader>>& shaderList,
                             const PipelineConfig& cfg) {
     context = ctx;
     descriptorManager = descMgr;
     material = mat;
-    vertShader = vert;
-    fragShader = frag;
+    shaders = shaderList;
     config = cfg;
 
+    registerDescriptorLayouts();
     buildPipeline();
 }
 
 bool GraphicsPipeline::rebuild() {
-    // Validate shader references - vertex shader required, fragment optional
-    auto vert = vertShader.lock();
+    if (shaders.empty()) {
+        Log::error("Pipeline", "Rebuild failed: No shaders");
+        return false;
+    }
 
-    if (!vert) {
-        Log::error("Pipeline", "Rebuild failed: Missing vertex shader");
+    // Validate at least one shader is still valid
+    bool hasValidShader = false;
+    for (const auto& weakShader : shaders) {
+        if (!weakShader.expired()) {
+            hasValidShader = true;
+            break;
+        }
+    }
+
+    if (!hasValidShader) {
+        Log::error("Pipeline", "Rebuild failed: All shaders expired");
         return false;
     }
 
     Log::info("Pipeline", "Rebuilding pipeline with updated shaders");
 
-    // Clean up old pipeline resources
     graphicsPipeline = nullptr;
-    vertShaderModule = nullptr;
-    fragShaderModule = nullptr;
+    shaderModules.clear();
 
-    // Rebuild pipeline
     buildPipeline();
 
     Log::info("Pipeline", "Pipeline rebuild complete");
@@ -51,55 +55,43 @@ bool GraphicsPipeline::rebuild() {
 }
 
 void GraphicsPipeline::buildPipeline() {
-    // Lock weak_ptr to get temporary shared_ptr
-    auto vert = vertShader.lock();
-    auto frag = fragShader.lock();
+    // Lock all weak_ptrs to get shared_ptrs
+    eastl::vector<eastl::shared_ptr<Shader>> shaderPtrs;
+    for (const auto& weakShader : shaders) {
+        auto shader = weakShader.lock();
+        if (shader) {
+            shaderPtrs.push_back(shader);
+        }
+    }
 
-    // Vertex shader is required, fragment shader is optional (for depth-only passes)
-    if (!vert) {
-        Log::error("Pipeline", "buildPipeline failed: Missing vertex shader");
+    if (shaderPtrs.empty()) {
+        Log::error("Pipeline", "buildPipeline failed: No valid shaders");
         return;
     }
 
-    // Register descriptor layouts from shader reflection (idempotent - safe to call multiple times)
-    vert->registerDescriptorLayouts(descriptorManager);
-    if (frag) {
-        frag->registerDescriptorLayouts(descriptorManager);
-    }
+    // Merge shader reflection from all stages
+    mergeReflection(shaderPtrs);
 
-    // Create shader modules from SPIRV
-    vertShaderModule = createShaderModuleFromSPIRV(vert->getSPIRV());
-
-    // Shader stage info
-    vk::PipelineShaderStageCreateInfo vertShaderStageInfo;
-    vertShaderStageInfo.stage = Shader::stageToVkFlag(vert->getStage());
-    vertShaderStageInfo.module = *vertShaderModule;
-    // Slang compiles all entry points to "main" in SPIR-V
-    vertShaderStageInfo.pName = (vert->getLanguage() == Shader::Language::Slang) ? "main" : vert->getEntryPoint().c_str();
-
+    // Create shader modules and stage infos
     eastl::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
-    shaderStages.push_back(vertShaderStageInfo);
+    shaderModules.clear();
+    shaderModules.reserve(shaderPtrs.size());
 
-    // Fragment shader is optional (for depth-only rendering)
-    if (frag) {
-        fragShaderModule = createShaderModuleFromSPIRV(frag->getSPIRV());
+    for (auto& shader : shaderPtrs) {
+        shaderModules.push_back(createShaderModuleFromSPIRV(shader->getSPIRV()));
 
-        vk::PipelineShaderStageCreateInfo fragShaderStageInfo;
-        fragShaderStageInfo.stage = Shader::stageToVkFlag(frag->getStage());
-        fragShaderStageInfo.module = *fragShaderModule;
-        // Slang compiles all entry points to "main" in SPIR-V
-        fragShaderStageInfo.pName = (frag->getLanguage() == Shader::Language::Slang) ? "main" : frag->getEntryPoint().c_str();
-
-        shaderStages.push_back(fragShaderStageInfo);
+        vk::PipelineShaderStageCreateInfo stageInfo;
+        stageInfo.stage = Shader::stageToVkFlag(shader->getStage());
+        stageInfo.module = *shaderModules.back();
+        stageInfo.pName = (shader->getLanguage() == Shader::Language::Slang) ? "main" : shader->getEntryPoint().c_str();
+        shaderStages.push_back(stageInfo);
     }
 
-    // Rest of pipeline creation (vertex input, assembly, viewport, etc.)
+    // Vertex input
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-
     if (config.useVertexInput) {
         auto bindingDescription = Vertex::getBindingDescription();
         auto attributeDescriptions = Vertex::getAttributeDescriptions();
-
         vertexInputInfo.vertexBindingDescriptionCount = 1;
         vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
         vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
@@ -130,10 +122,9 @@ void GraphicsPipeline::buildPipeline() {
     multisampling.sampleShadingEnable = config.sampleShadingEnable;
     multisampling.rasterizationSamples = config.sampleCount;
 
-    // Color blend state - only needed if we have color attachments
+    // Color blend
     vk::PipelineColorBlendAttachmentState colorBlendAttachment;
     vk::PipelineColorBlendStateCreateInfo colorBlending;
-
     if (!config.colorFormats.empty()) {
         colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                                                vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
@@ -146,7 +137,6 @@ void GraphicsPipeline::buildPipeline() {
             colorBlendAttachment.dstAlphaBlendFactor = config.dstAlphaBlendFactor;
             colorBlendAttachment.alphaBlendOp = config.alphaBlendOp;
         }
-
         colorBlending.logicOpEnable = VK_FALSE;
         colorBlending.logicOp = vk::LogicOp::eCopy;
         colorBlending.attachmentCount = 1;
@@ -157,11 +147,8 @@ void GraphicsPipeline::buildPipeline() {
         colorBlending.pAttachments = nullptr;
     }
 
-    // Dynamic states (viewport and scissor always included)
-    eastl::vector<vk::DynamicState> dynamicStates = {
-        vk::DynamicState::eViewport,
-        vk::DynamicState::eScissor
-    };
+    // Dynamic states
+    eastl::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
     dynamicStates.insert(dynamicStates.end(), config.additionalDynamicStates.begin(), config.additionalDynamicStates.end());
 
     vk::PipelineDynamicStateCreateInfo dynamicState;
@@ -175,11 +162,26 @@ void GraphicsPipeline::buildPipeline() {
     depthStencil.depthBoundsTestEnable = config.depthBoundsTestEnable;
     depthStencil.stencilTestEnable = config.stencilTestEnable;
 
-    // Merge descriptor layouts and push constants from shaders
-    auto merged = mergeShaderResources(vert, frag);
+    // Merge descriptor layouts and push constants, store handles
+    auto merged = mergeShaderResources(shaderPtrs);
 
-    Log::debug("Pipeline", "Merged {} descriptor sets and {} push constant ranges",
-              merged.setLayouts.size(), merged.pushConstants.size());
+    // Store layout handles for getLayoutHandle()
+    size_t maxSet = 0;
+    for (const auto& shader : shaderPtrs) {
+        if (shader->getDescriptorLayoutHandles().size() > maxSet) {
+            maxSet = shader->getDescriptorLayoutHandles().size();
+        }
+    }
+    layoutHandles.resize(maxSet, 0);
+    for (size_t set = 0; set < maxSet; ++set) {
+        for (const auto& shader : shaderPtrs) {
+            const auto& handles = shader->getDescriptorLayoutHandles();
+            if (set < handles.size() && handles[set] != 0) {
+                layoutHandles[set] = handles[set];
+                break;
+            }
+        }
+    }
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
     pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(merged.setLayouts.size());
@@ -189,16 +191,16 @@ void GraphicsPipeline::buildPipeline() {
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
-    // Dynamic rendering format info (replaces RenderPass)
+    // Dynamic rendering format info
     vk::PipelineRenderingCreateInfo renderingInfo;
     renderingInfo.colorAttachmentCount = static_cast<uint32_t>(config.colorFormats.size());
     renderingInfo.pColorAttachmentFormats = config.colorFormats.data();
     renderingInfo.depthAttachmentFormat = config.depthFormat;
     renderingInfo.stencilAttachmentFormat = config.stencilFormat;
 
-    // Graphics pipeline with dynamic rendering
+    // Graphics pipeline
     vk::GraphicsPipelineCreateInfo pipelineInfo;
-    pipelineInfo.pNext = &renderingInfo;  // Chain dynamic rendering info
+    pipelineInfo.pNext = &renderingInfo;
     pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
     pipelineInfo.pStages = shaderStages.data();
     pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -223,8 +225,7 @@ vk::raii::ShaderModule GraphicsPipeline::createShaderModuleFromSPIRV(const eastl
 
 void GraphicsPipeline::cleanup() {
     graphicsPipeline = nullptr;
-    fragShaderModule = nullptr;
-    vertShaderModule = nullptr;
+    shaderModules.clear();
     PipelineBase::cleanup();
 }
 
@@ -233,76 +234,92 @@ void GraphicsPipeline::bind(vk::CommandBuffer commandBuffer) {
 }
 
 GraphicsPipeline::MergedShaderResources GraphicsPipeline::mergeShaderResources(
-    eastl::shared_ptr<Shader> vert, eastl::shared_ptr<Shader> frag) {
+    const eastl::vector<eastl::shared_ptr<Shader>>& shaderPtrs) {
 
     MergedShaderResources result;
 
-    if (!vert) {
-        return result;  // No shaders, return empty
+    if (shaderPtrs.empty()) {
+        return result;
     }
 
-    // Collect layout handles from both shaders (sparse vectors preserving set index)
-    const auto& vertHandles = vert->getDescriptorLayoutHandles();
-    const auto* fragHandles = frag ? &frag->getDescriptorLayoutHandles() : nullptr;
-
-    // Determine max set index
-    size_t maxSetIndex = vertHandles.size();
-    if (fragHandles && fragHandles->size() > maxSetIndex) {
-        maxSetIndex = fragHandles->size();
-    }
-
-    // Merge layouts using bit mask for quick set usage tracking
-    uint32_t usedSetsMask = 0;  // Bit i = 1 if set i is used
-    result.setLayouts.resize(maxSetIndex, nullptr);
-
-    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
-        LayoutHandle vertHandle = (setIndex < vertHandles.size()) ? vertHandles[setIndex] : 0;
-        LayoutHandle fragHandle = (fragHandles && setIndex < fragHandles->size()) ? (*fragHandles)[setIndex] : 0;
-
-        if (vertHandle != 0 || fragHandle != 0) {
-            // Prefer non-zero handle (they should be identical if both non-zero due to deduplication)
-            LayoutHandle handle = (vertHandle != 0) ? vertHandle : fragHandle;
-            result.setLayouts[setIndex] = descriptorManager->getLayout(handle);
-            usedSetsMask |= (1u << setIndex);  // Mark set as used
+    // Determine max set index across all shaders
+    size_t maxSetIndex = 0;
+    for (const auto& shader : shaderPtrs) {
+        const auto& handles = shader->getDescriptorLayoutHandles();
+        if (handles.size() > maxSetIndex) {
+            maxSetIndex = handles.size();
         }
-        // else: both are 0, leave nullptr in result.setLayouts[setIndex]
     }
 
-    // Remove nullptr entries to ensure contiguous layout array (Vulkan requirement)
+    // Merge layouts preserving set indices and store handles
+    result.setLayouts.resize(maxSetIndex, nullptr);
+    for (size_t setIndex = 0; setIndex < maxSetIndex; ++setIndex) {
+        for (const auto& shader : shaderPtrs) {
+            const auto& handles = shader->getDescriptorLayoutHandles();
+            if (setIndex < handles.size() && handles[setIndex] != 0) {
+                result.setLayouts[setIndex] = descriptorManager->getLayout(handles[setIndex]);
+                break;
+            }
+        }
+    }
+
+    // Remove nullptr entries
     result.setLayouts.erase(
         eastl::remove(result.setLayouts.begin(), result.setLayouts.end(), nullptr),
         result.setLayouts.end()
     );
 
-    // Merge push constants from cached handles
-    PushConstantHandle vertPC = vert->getPushConstantHandle();
-    PushConstantHandle fragPC = frag ? frag->getPushConstantHandle() : 0;
-
-    if (vertPC != 0) {
-        const auto& ranges = descriptorManager->getPushConstants(vertPC);
-        result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
-    }
-
-    if (fragPC != 0 && fragPC != vertPC) {  // Avoid duplicates if handles are same
-        const auto& ranges = descriptorManager->getPushConstants(fragPC);
-        result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
-    }
-
-    // Optional: Log which sets are used (using bit mask)
-    if (usedSetsMask != 0) {
-        eastl::string setsUsed;
-        for (uint32_t i = 0; i < 32; ++i) {
-            if (usedSetsMask & (1u << i)) {
-                if (!setsUsed.empty()) setsUsed += ", ";
-                char buf[8];
-                sprintf(buf, "%u", i);
-                setsUsed += buf;
+    // Merge push constants (deduplicate by handle)
+    eastl::vector<PushConstantHandle> seenHandles;
+    for (const auto& shader : shaderPtrs) {
+        PushConstantHandle pcHandle = shader->getPushConstantHandle();
+        if (pcHandle != 0) {
+            // Check if we've already added this handle
+            bool found = false;
+            for (auto h : seenHandles) {
+                if (h == pcHandle) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                seenHandles.push_back(pcHandle);
+                const auto& ranges = descriptorManager->getPushConstants(pcHandle);
+                result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
             }
         }
-        Log::debug("Pipeline", "Used descriptor sets: {}", setsUsed.c_str());
     }
 
     return result;
+}
+
+void GraphicsPipeline::mergeReflection(const eastl::vector<eastl::shared_ptr<Shader>>& shaderPtrs) {
+    mergedReflection = eastl::make_unique<ShaderReflection>();
+
+    for (const auto& shader : shaderPtrs) {
+        if (shader && shader->getShaderReflection()) {
+            const ShaderReflection* refl = shader->getShaderReflection();
+
+            // Add all resources (stages will be OR'd automatically)
+            for (const auto& resource : refl->getAllResources()) {
+                mergedReflection->addResource(resource);
+            }
+
+            // Add push constants
+            for (const auto& pcRange : refl->getPushConstantRanges()) {
+                mergedReflection->addPushConstantRange(pcRange);
+            }
+        }
+    }
+}
+
+void GraphicsPipeline::registerDescriptorLayouts() {
+    for (const auto& weakShader : shaders) {
+        auto shader = weakShader.lock();
+        if (shader) {
+            shader->registerDescriptorLayouts(descriptorManager);
+        }
+    }
 }
 
 } // namespace violet

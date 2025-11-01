@@ -1,5 +1,6 @@
 #include "PipelineBase.hpp"
 #include "renderer/vulkan/VulkanContext.hpp"
+#include "resource/shader/ShaderReflection.hpp"
 #include "core/FileSystem.hpp"
 #include "core/Exception.hpp"
 #include "core/Log.hpp"
@@ -30,6 +31,26 @@ vk::raii::ShaderModule PipelineBase::createShaderModule(const eastl::vector<char
     createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
     return vk::raii::ShaderModule(context->getDeviceRAII(), createInfo);
+}
+
+eastl::optional<BindingKey> PipelineBase::getBindingKey(const eastl::string& name) const {
+    if (!mergedReflection) {
+        return eastl::nullopt;
+    }
+
+    const auto* resource = mergedReflection->findResource(name);
+    if (!resource) {
+        return eastl::nullopt;
+    }
+
+    return eastl::make_pair(resource->set, resource->binding);
+}
+
+LayoutHandle PipelineBase::getLayoutHandle(uint32_t set) const {
+    if (set >= layoutHandles.size()) {
+        return 0;
+    }
+    return layoutHandles[set];
 }
 
 } // namespace violet

@@ -10,6 +10,7 @@ namespace violet {
 
 class VulkanContext;
 class Shader;
+class ShaderReflection;
 
 struct ComputePipelineConfig {
     eastl::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
@@ -43,7 +44,6 @@ public:
     vk::PipelineLayout getPipelineLayout() const override { return *pipelineLayout; }
     vk::Pipeline getPipeline() const { return *computePipeline; }
 
-    // Shader access (for ShaderResourceBinding)
     eastl::weak_ptr<Shader> getShader() const { return computeShader; }
 
     void dispatch(vk::CommandBuffer commandBuffer, uint32_t groupCountX,

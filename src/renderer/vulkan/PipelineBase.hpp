@@ -3,10 +3,16 @@
 #include <vulkan/vulkan.hpp>
 #include <EASTL/string.h>
 #include <EASTL/vector.h>
+#include <EASTL/unique_ptr.h>
+#include <EASTL/optional.h>
 
 namespace violet {
 
 class VulkanContext;
+class ShaderReflection;
+
+using LayoutHandle = uint32_t;
+using BindingKey = eastl::pair<uint32_t, uint32_t>;  // (set, binding)
 
 class PipelineBase {
 public:
@@ -23,6 +29,10 @@ public:
     virtual vk::PipelineLayout getPipelineLayout() const = 0;
     virtual void cleanup();
 
+    const ShaderReflection* getReflection() const { return mergedReflection.get(); }
+    eastl::optional<BindingKey> getBindingKey(const eastl::string& name) const;
+    LayoutHandle getLayoutHandle(uint32_t set) const;
+
 protected:
     eastl::vector<char> readFile(const eastl::string& filename);
     vk::raii::ShaderModule createShaderModule(const eastl::vector<char>& code);
@@ -30,6 +40,9 @@ protected:
 protected:
     VulkanContext* context = nullptr;
     vk::raii::PipelineLayout pipelineLayout{nullptr};
+
+    eastl::unique_ptr<ShaderReflection> mergedReflection;
+    eastl::vector<LayoutHandle> layoutHandles;
 };
 
 } // namespace violet
