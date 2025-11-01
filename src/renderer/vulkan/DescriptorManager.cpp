@@ -1483,13 +1483,9 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
 
     //todo perframe ubo need dynamic offset
     if (!sets.empty()) {
-        vk::PipelineLayout layout = pipeline->getPipelineLayout();
-        Log::info("DescriptorManager", "Binding {} descriptor sets with pipeline layout 0x{:x}",
-                 sets.size(), reinterpret_cast<uint64_t>(static_cast<VkPipelineLayout>(layout)));
-
         cmd.bindDescriptorSets(
-            pipeline->getBindPoint(),  // Use virtual function to get correct bind point
-            layout,
+            pipeline->getBindPoint(),
+            pipeline->getPipelineLayout(),
             0,
             static_cast<uint32_t>(sets.size()),
             sets.data(),

@@ -321,6 +321,16 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                     // Store buffer and link to resource
                     resource.bufferLayoutIndex = reflection.storeBuffer(buffer);
                     Log::debug("ShaderReflection", "  -> Stored at bufferLayoutIndex={}", resource.bufferLayoutIndex);
+
+                    // Detect bindless StructuredBuffer
+                    // Set 2 + name "materials": Materials buffer (bindless large-capacity SSBO)
+                    // TODO: Future optimization - use config file to control bindless sets and capacity
+                    if (resource.set == 2 && resource.name == "materials") {
+                        resource.isBindless = true;
+                        resource.arraySize = 1024;  // Default capacity for bindless SSBO
+                        Log::info("ShaderReflection", "Detected bindless StructuredBuffer '{}' in Set {} (capacity: {})",
+                                 resource.name.c_str(), resource.set, resource.arraySize);
+                    }
                 }
                 break;
             }

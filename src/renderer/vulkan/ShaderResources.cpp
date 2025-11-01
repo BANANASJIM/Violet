@@ -146,6 +146,7 @@ ShaderResources::ShaderResources(
 {
     // 1. Calculate buffer size
     elementSize = bufferLayout->totalSize;
+    uint32_t arrayCount = (resourceInfo && resourceInfo->arraySize > 0) ? resourceInfo->arraySize : 1;
     uint32_t numCopies = (frequency == UpdateFrequency::PerFrame) ? maxFrames : 1;
 
     // 2. Calculate alignment (for PerFrame dynamic offsets)
@@ -156,12 +157,16 @@ ShaderResources::ShaderResources(
     }
 
     // 3. Create GPU buffer
+    // Total size = alignedSize * arrayCount * numCopies
+    // - alignedSize: single element size (with alignment if PerFrame)
+    // - arrayCount: array capacity (e.g., 1024 for materials buffer)
+    // - numCopies: frame count for PerFrame, 1 otherwise
     vk::BufferUsageFlags usage = (descriptorType == vk::DescriptorType::eUniformBuffer)
         ? vk::BufferUsageFlagBits::eUniformBuffer
         : vk::BufferUsageFlagBits::eStorageBuffer;
 
     BufferInfo bufferInfo{
-        .size = alignedSize * numCopies,
+        .size = alignedSize * arrayCount * numCopies,
         .usage = usage,
         .memoryUsage = MemoryUsage::CPU_TO_GPU,
         .debugName = this->instanceName
@@ -170,8 +175,9 @@ ShaderResources::ShaderResources(
     buffer = ResourceFactory::createBuffer(context, bufferInfo);
     mappedData = buffer.mappedData;
 
-    Log::info("ShaderResources", "Created buffer '{}' (set={}, binding={}, size={} x {} = {} bytes)",
-              this->instanceName.c_str(), setIndex, binding, alignedSize, numCopies, alignedSize * numCopies);
+    Log::info("ShaderResources", "Created buffer '{}' (set={}, binding={}, size={} x {} x {} = {} bytes)",
+              this->instanceName.c_str(), setIndex, binding, alignedSize, arrayCount, numCopies,
+              alignedSize * arrayCount * numCopies);
 }
 
 ShaderResources::~ShaderResources() {
@@ -190,9 +196,13 @@ eastl::unordered_map<BindingKey, DescriptorResourceHandle> ShaderResources::getB
     eastl::unordered_map<BindingKey, DescriptorResourceHandle> bindings;
 
     vk::DeviceSize offset = 0;
-    vk::DeviceSize range = alignedSize;
+    vk::DeviceSize range = VK_WHOLE_SIZE;  // Bind entire buffer for descriptor
+
+    // For PerFrame resources, use dynamic offset at bind time
+    // Range is still VK_WHOLE_SIZE to cover all frames
     if (frequency == UpdateFrequency::PerFrame) {
         offset = currentFrame * alignedSize;
+        // For PerFrame, we could use aligned frame size, but VK_WHOLE_SIZE is safer
     }
 
     bindings[BindingKey{setIndex, binding, 0}] =
