@@ -191,6 +191,11 @@ void GraphicsPipeline::buildPipeline() {
 
     pipelineLayout = vk::raii::PipelineLayout(context->getDeviceRAII(), pipelineLayoutInfo);
 
+    // Log pipeline layout creation
+    Log::info("GraphicsPipeline", "Created pipeline layout 0x{:x} with {} descriptor sets and {} push constant ranges",
+             reinterpret_cast<uint64_t>(static_cast<VkPipelineLayout>(*pipelineLayout)),
+             merged.setLayouts.size(), merged.pushConstants.size());
+
     // Dynamic rendering format info
     vk::PipelineRenderingCreateInfo renderingInfo;
     renderingInfo.colorAttachmentCount = static_cast<uint32_t>(config.colorFormats.size());
@@ -230,6 +235,9 @@ void GraphicsPipeline::cleanup() {
 }
 
 void GraphicsPipeline::bind(vk::CommandBuffer commandBuffer) {
+    Log::info("GraphicsPipeline", "Binding pipeline 0x{:x} with layout 0x{:x}",
+             reinterpret_cast<uint64_t>(static_cast<VkPipeline>(*graphicsPipeline)),
+             reinterpret_cast<uint64_t>(static_cast<VkPipelineLayout>(*pipelineLayout)));
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
 }
 
@@ -285,6 +293,11 @@ GraphicsPipeline::MergedShaderResources GraphicsPipeline::mergeShaderResources(
             if (!found) {
                 seenHandles.push_back(pcHandle);
                 const auto& ranges = descriptorManager->getPushConstants(pcHandle);
+                for (const auto& range : ranges) {
+                    Log::info("GraphicsPipeline", "Shader '{}' push constants: offset={}, size={}, stages={}",
+                             shader->getName().c_str(), range.offset, range.size,
+                             vk::to_string(range.stageFlags).c_str());
+                }
                 result.pushConstants.insert(result.pushConstants.end(), ranges.begin(), ranges.end());
             }
         }

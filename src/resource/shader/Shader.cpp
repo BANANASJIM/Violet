@@ -126,18 +126,15 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager, UpdateFrequen
                       setIndex, resource.binding, resource.name.c_str(),
                       static_cast<uint32_t>(resource.type), vk::to_string(resource.type).c_str());
 
-            // Bindless resources need special flags
-            if (resource.isBindless) {
-                binding.flags = vk::DescriptorBindingFlagBits::ePartiallyBound |
-                               vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-                layout.isBindless = true;
-                layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
-            }
+            // DEFAULT: All descriptor bindings use UPDATE_AFTER_BIND for flexibility
+            // This allows updating descriptors while command buffers are recording/pending
+            binding.flags = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+            layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
 
-            // PerFrame resources also need UPDATE_AFTER_BIND to allow updates during command buffer recording
-            if (layout.frequency == UpdateFrequency::PerFrame) {
-                binding.flags = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-                layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+            // Bindless resources need additional flags
+            if (resource.isBindless) {
+                binding.flags |= vk::DescriptorBindingFlagBits::ePartiallyBound;
+                layout.isBindless = true;
             }
 
             layout.bindings.push_back(binding);

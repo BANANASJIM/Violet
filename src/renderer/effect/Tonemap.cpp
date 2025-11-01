@@ -74,9 +74,9 @@ void Tonemap::executePass(vk::CommandBuffer cmd, uint32_t frameIndex) {
     resources.bindSampledImage(0, 1, depthView);    // Set 0, Binding 1: depthTexture
     resources.bindSampler(0, 2, clampSampler);      // Set 0, Binding 2: texSampler
 
-    // TODO: Phase 3 - Implement DescriptorManager::update/bind API
-    // descriptorManager->update(resources, postProcessMaterial->getPipeline());
-    // descriptorManager->bind(cmd, postProcessMaterial->getPipeline());
+    // Update and bind descriptor sets
+    descriptorManager->update(resources, postProcessMaterial->getPipeline());
+    descriptorManager->bind(cmd, resources, postProcessMaterial->getPipeline());
 
     // Get swapchain resource to determine viewport/scissor dimensions
     const LogicalResource* swapchainRes = renderGraph->getResource(swapchainImageName);

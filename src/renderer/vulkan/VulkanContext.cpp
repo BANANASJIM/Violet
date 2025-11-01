@@ -235,6 +235,8 @@ void VulkanContext::createLogicalDevice() {
     features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;  // For compute shaders
+    features12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;  // For UBO UPDATE_AFTER_BIND
+    features12.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;  // For SSBO UPDATE_AFTER_BIND
 
     vk::DeviceCreateInfo createInfo;
     createInfo.pNext = &features12;

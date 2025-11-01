@@ -189,9 +189,9 @@ LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc)
             layoutInfo.bindingCount = static_cast<uint32_t>(vkBindings.size());
             layoutInfo.pBindings = vkBindings.data();
 
-            // Chain binding flags if any bindless bindings exist
+            // Chain binding flags if any bindings have flags
             vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo;
-            if (desc.isBindless && !bindingFlagsArray.empty()) {
+            if (!bindingFlagsArray.empty()) {
                 bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlagsArray.size());
                 bindingFlagsInfo.pBindingFlags = bindingFlagsArray.data();
                 layoutInfo.pNext = &bindingFlagsInfo;
@@ -253,9 +253,9 @@ LayoutHandle DescriptorManager::registerLayout(const DescriptorLayoutDesc& desc)
     layoutInfo.bindingCount = static_cast<uint32_t>(vkBindings.size());
     layoutInfo.pBindings = vkBindings.data();
 
-    // Chain binding flags if any bindless bindings exist
+    // Chain binding flags if any bindings have flags
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo;
-    if (desc.isBindless && !bindingFlagsArray.empty()) {
+    if (!bindingFlagsArray.empty()) {
         bindingFlagsInfo.bindingCount = static_cast<uint32_t>(bindingFlagsArray.size());
         bindingFlagsInfo.pBindingFlags = bindingFlagsArray.data();
         layoutInfo.pNext = &bindingFlagsInfo;
@@ -1471,7 +1471,6 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
         // Auto-bind Set 1 (bindless set) if enabled
         if (setIndex == 1 && bindlessEnabled) {
             sets.push_back(bindlessSet);
-            violet::Log::debug("DescriptorManager", "Auto-binding bindless set at index 1");
             continue;  // bindless set is already populated in initBindless(), just bind it
         }
 
@@ -1484,9 +1483,13 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
 
     //todo perframe ubo need dynamic offset
     if (!sets.empty()) {
+        vk::PipelineLayout layout = pipeline->getPipelineLayout();
+        Log::info("DescriptorManager", "Binding {} descriptor sets with pipeline layout 0x{:x}",
+                 sets.size(), reinterpret_cast<uint64_t>(static_cast<VkPipelineLayout>(layout)));
+
         cmd.bindDescriptorSets(
             pipeline->getBindPoint(),  // Use virtual function to get correct bind point
-            pipeline->getPipelineLayout(),
+            layout,
             0,
             static_cast<uint32_t>(sets.size()),
             sets.data(),
