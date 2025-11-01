@@ -9,17 +9,26 @@ void ShaderResourceBinding::bind(uint32_t set, uint32_t binding, const Descripto
     resources[{set, binding}] = handle;
 }
 
+void ShaderResourceBinding::bind(const eastl::string& name, const DescriptorResourceHandle& handle) {
+    resourcesByName[name] = handle;
+}
+
 void ShaderResourceBinding::merge(const ShaderResourceBinding& other) {
-    // Copy all bindings from other (don't overwrite existing - this binding takes precedence)
     for (const auto& [key, handle] : other.resources) {
         if (resources.find(key) == resources.end()) {
             resources[key] = handle;
+        }
+    }
+    for (const auto& [name, handle] : other.resourcesByName) {
+        if (resourcesByName.find(name) == resourcesByName.end()) {
+            resourcesByName[name] = handle;
         }
     }
 }
 
 void ShaderResourceBinding::clear() {
     resources.clear();
+    resourcesByName.clear();
 }
 
 bool ShaderResourceBinding::hasResource(uint32_t set, uint32_t binding) const {
