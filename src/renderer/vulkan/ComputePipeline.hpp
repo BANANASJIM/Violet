@@ -42,6 +42,7 @@ public:
 
     void bind(vk::CommandBuffer commandBuffer) override;
     vk::PipelineLayout getPipelineLayout() const override { return *pipelineLayout; }
+    vk::PipelineBindPoint getBindPoint() const override { return vk::PipelineBindPoint::eCompute; }
     vk::Pipeline getPipeline() const { return *computePipeline; }
 
     eastl::weak_ptr<Shader> getShader() const { return computeShader; }

@@ -96,7 +96,7 @@ void ShadowSystem::init(VulkanContext* ctx, ResourceManager* resMgr) {
 
     // Create ShaderResources from pipeline reflection
     shadowsResources = resMgr->createShaderResources(
-        "Shadows", pipeline, "ShadowData", UpdateFrequency::PerFrame);
+        "Shadows", pipeline, "shadows", UpdateFrequency::PerFrame);
 
     if (!shadowsResources) {
         Log::error("ShadowSystem", "Failed to create shadowsResources");

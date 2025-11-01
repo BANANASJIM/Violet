@@ -120,7 +120,7 @@ int main() {
                 if (bufferPtr) {
                     const auto& buffer = *bufferPtr;
                     Log::info("Test", "  Buffer '{}' (set={}, binding={}, size={}B):",
-                             buffer.name.c_str(), buffer.set, buffer.binding, buffer.totalSize);
+                             res.name.c_str(), res.set, res.binding, buffer.totalSize);
                     for (const auto& field : buffer.fields) {
                         Log::info("Test", "    Field '{}': offset={}, size={}B, type={}",
                                  field.name.c_str(), field.offset, field.size, static_cast<int>(field.type));
@@ -192,7 +192,7 @@ int main() {
                 if (bufferPtr) {
                     const auto& buffer = *bufferPtr;
                     Log::info("Test", "  Buffer '{}' (set={}, binding={}, size={}B):",
-                             buffer.name.c_str(), buffer.set, buffer.binding, buffer.totalSize);
+                             res.name.c_str(), res.set, res.binding, buffer.totalSize);
                     for (const auto& field : buffer.fields) {
                         Log::info("Test", "    Field '{}': offset={}, size={}B, type={}",
                                  field.name.c_str(), field.offset, field.size, static_cast<int>(field.type));

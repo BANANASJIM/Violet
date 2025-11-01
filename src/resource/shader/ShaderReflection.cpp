@@ -250,9 +250,6 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
 
                 // Extract detailed buffer layout
                 ReflectedBuffer buffer;
-                buffer.name = varLayout->getName();
-                buffer.binding = varLayout->getBindingIndex();
-                buffer.set = varLayout->getBindingSpace();
 
                 auto varTypeLayout = varLayout->getTypeLayout();
                 if (varTypeLayout) {
@@ -263,8 +260,13 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                     }
                 }
 
+                Log::debug("ShaderReflection", "BUFFER EXTRACTION - ConstantBuffer '{}' (set={}, binding={}, size={}B, fields={})",
+                          varLayout->getName(), varLayout->getBindingSpace(), varLayout->getBindingIndex(),
+                          buffer.totalSize, buffer.fields.size());
+
                 // Store buffer and link to resource
                 resource.bufferLayoutIndex = reflection.storeBuffer(buffer);
+                Log::debug("ShaderReflection", "  -> Stored at bufferLayoutIndex={}", resource.bufferLayoutIndex);
                 break;
             }
 
@@ -302,9 +304,6 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
 
                     // Extract buffer layout for SSBO
                     ReflectedBuffer buffer;
-                    buffer.name = varLayout->getName();
-                    buffer.binding = varLayout->getBindingIndex();
-                    buffer.set = varLayout->getBindingSpace();
 
                     auto varTypeLayout = varLayout->getTypeLayout();
                     if (varTypeLayout) {
@@ -315,8 +314,13 @@ bool extractReflection(void* slangProgramLayout, ShaderReflection& reflection) {
                         }
                     }
 
+                    Log::debug("ShaderReflection", "BUFFER EXTRACTION - StructuredBuffer '{}' (set={}, binding={}, size={}B, fields={})",
+                              varLayout->getName(), varLayout->getBindingSpace(), varLayout->getBindingIndex(),
+                              buffer.totalSize, buffer.fields.size());
+
                     // Store buffer and link to resource
                     resource.bufferLayoutIndex = reflection.storeBuffer(buffer);
+                    Log::debug("ShaderReflection", "  -> Stored at bufferLayoutIndex={}", resource.bufferLayoutIndex);
                 }
                 break;
             }

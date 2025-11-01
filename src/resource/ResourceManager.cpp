@@ -186,14 +186,21 @@ eastl::shared_ptr<ShaderResources> ResourceManager::createShaderResources(
         return nullptr;
     }
 
-    const ReflectedBuffer* bufferLayout = reflection->getBufferLayout(bufferName);
-    if (!bufferLayout) {
+    // Find the resource by name to get set/binding information
+    const ReflectedResource* resource = reflection->findResource(bufferName);
+    if (!resource || resource->bufferLayoutIndex == ~0u) {
         violet::Log::error("ResourceManager", "Buffer '{}' not found in pipeline reflection", bufferName.c_str());
         return nullptr;
     }
 
+    const ReflectedBuffer* bufferLayout = reflection->getBufferLayout(resource->bufferLayoutIndex);
+    if (!bufferLayout) {
+        violet::Log::error("ResourceManager", "Buffer layout not found for '{}'", bufferName.c_str());
+        return nullptr;
+    }
+
     return createShaderResourcesInternal(name, pipeline, bufferLayout,
-                                        bufferLayout->set, bufferLayout->binding, frequency);
+                                        resource->set, resource->binding, frequency);
 }
 
 // Internal: Create ShaderResources from buffer layout
@@ -214,14 +221,14 @@ eastl::shared_ptr<ShaderResources> ResourceManager::createShaderResourcesInterna
     const ShaderReflection* reflection = pipeline->getReflection();
     const ReflectedResource* resourceInfo = reflection->findResourceByBinding(setIndex, binding);
     if (!resourceInfo) {
-        violet::Log::error("ResourceManager", "No resource found for set {} binding {} (buffer '{}')",
-                  setIndex, binding, bufferLayout->name.c_str());
+        violet::Log::error("ResourceManager", "No resource found for set {} binding {}",
+                  setIndex, binding);
         return nullptr;
     }
 
     // Create ShaderResources - it handles all buffer creation internally
     auto resources = eastl::make_shared<ShaderResources>(
-        name, bufferLayout, setIndex, binding,
+        name, bufferLayout, resourceInfo, setIndex, binding,
         resourceInfo->type, frequency,
         context, MAX_FRAMES_IN_FLIGHT
     );

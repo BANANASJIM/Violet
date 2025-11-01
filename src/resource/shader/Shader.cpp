@@ -117,16 +117,7 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager, UpdateFrequen
             BindingDesc binding;
             binding.binding = resource.binding;
 
-            // Convert to Dynamic descriptor type for PerFrame buffers
             binding.type = resource.type;
-            if (layout.frequency == UpdateFrequency::PerFrame) {
-                if (resource.type == vk::DescriptorType::eUniformBuffer) {
-                    binding.type = vk::DescriptorType::eUniformBufferDynamic;
-                } else if (resource.type == vk::DescriptorType::eStorageBuffer) {
-                    binding.type = vk::DescriptorType::eStorageBufferDynamic;
-                }
-            }
-
             binding.stages = resource.stages;
             binding.count = resource.arraySize;
 
@@ -140,6 +131,12 @@ void Shader::registerDescriptorLayouts(DescriptorManager* manager, UpdateFrequen
                 binding.flags = vk::DescriptorBindingFlagBits::ePartiallyBound |
                                vk::DescriptorBindingFlagBits::eUpdateAfterBind;
                 layout.isBindless = true;
+                layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
+            }
+
+            // PerFrame resources also need UPDATE_AFTER_BIND to allow updates during command buffer recording
+            if (layout.frequency == UpdateFrequency::PerFrame) {
+                binding.flags = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
                 layout.flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool;
             }
 

@@ -25,10 +25,8 @@ struct ReflectedField {
 };
 
 // UBO/SSBO layout (detailed field information)
+// Note: name/binding/set are stored in ReflectedResource, accessed via bufferLayoutIndex
 struct ReflectedBuffer {
-    eastl::string name;
-    uint32_t binding;
-    uint32_t set;
     uint32_t totalSize;
     eastl::vector<ReflectedField> fields;
 };
@@ -121,6 +119,10 @@ public:
         return resourcesBySet;
     }
 
+    const eastl::vector<ReflectedBuffer>& getAllBuffers() const {
+        return bufferStorage;
+    }
+
     // Get buffer layout by index (nullptr if invalid)
     const ReflectedBuffer* getBufferLayout(size_t index) const {
         if (index < bufferStorage.size()) {
@@ -130,11 +132,11 @@ public:
     }
 
     // Get buffer layout by name (nullptr if not found)
+    // Searches for resource with given name, then returns its buffer layout
     const ReflectedBuffer* getBufferLayout(const eastl::string& name) const {
-        for (const auto& buffer : bufferStorage) {
-            if (buffer.name == name) {
-                return &buffer;
-            }
+        const ReflectedResource* res = findResource(name);
+        if (res && res->bufferLayoutIndex != ~0u) {
+            return getBufferLayout(res->bufferLayoutIndex);
         }
         return nullptr;
     }

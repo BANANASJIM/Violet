@@ -86,7 +86,7 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
         auto pbrPipeline = pbrMaterial->getPipeline();
 
         globalResources = resourceManager->createShaderResources(
-            "Camera", pbrPipeline, "CameraUBO", UpdateFrequency::PerFrame);
+            "Camera", pbrPipeline, "camera", UpdateFrequency::PerFrame);
 
         if (!globalResources) {
             violet::Log::error("Renderer", "Failed to create global camera resources");
@@ -103,6 +103,17 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize debug renderer (using reflection-based descriptor API)
     debugRenderer.init(context, &descMgr, resourceManager->getShaderLibrary(), framesInFlight);
     debugRenderer.setEnabled(false);  // Disable debug renderer for testing
+
+    // CRITICAL: Pre-register pbr_bindless layouts with PerFrame frequency BEFORE bindless init
+    // This ensures UPDATE_AFTER_BIND flags are set correctly from the start
+    auto pbrVertShader = resourceManager->getShaderLibrary()->get("pbr_bindless_vertex");
+    auto pbrFragShader = resourceManager->getShaderLibrary()->get("pbr_bindless_frag");
+    if (auto vert = pbrVertShader.lock()) {
+        vert->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+    }
+    if (auto frag = pbrFragShader.lock()) {
+        frag->registerDescriptorLayouts(&descMgr, UpdateFrequency::PerFrame);
+    }
 
     // Initialize bindless through DescriptorManager
     // Get bindless layout from pbr_bindless shader (Set 1)

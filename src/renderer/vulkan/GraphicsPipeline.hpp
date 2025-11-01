@@ -76,6 +76,7 @@ public:
     void bind(vk::CommandBuffer commandBuffer) override;
 
     vk::PipelineLayout getPipelineLayout() const override { return *pipelineLayout; }
+    vk::PipelineBindPoint getBindPoint() const override { return vk::PipelineBindPoint::eGraphics; }
     vk::Pipeline getPipeline() const { return *graphicsPipeline; }
 
 private:

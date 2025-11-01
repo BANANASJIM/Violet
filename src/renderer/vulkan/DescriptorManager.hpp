@@ -247,7 +247,9 @@ private:
     UpdateFrequency getMaxFrequencyForSet(const eastl::unordered_map<BindingKey, DescriptorResourceHandle>& resources, uint32_t setIndex);
     size_t computeOwnerID(const class ShaderResourceBinding& srb, uint32_t setIndex, UpdateFrequency maxFreq);
     vk::DescriptorSet getOrCreateCachedSet(LayoutHandle handle, size_t ownerID);
-    void updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key, const DescriptorResourceHandle& resource);
+    void updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key,
+                                   const DescriptorResourceHandle& resource,
+                                   const class ShaderReflection* reflection);
 
     // Internal reflection-driven update helpers (private)
     void updateSet(vk::DescriptorSet set,

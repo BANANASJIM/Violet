@@ -369,10 +369,9 @@ void EnvironmentMap::generateCubemapFromEquirect(const eastl::string& hdrPath, u
             {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
-        // TODO: Phase 3 - Implement DescriptorManager::update/bind API
-        // LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
-        // descriptorManager.update(resources, &pipeline);
-        // descriptorManager.bind(cmd, &pipeline);
+        // Update and bind descriptors
+        descriptorManager.update(resources, &pipeline);
+        descriptorManager.bind(cmd, resources, &pipeline);
 
         // Bind pipeline
         pipeline.bind(cmd);
@@ -518,8 +517,11 @@ void EnvironmentMap::generateIrradianceMap() {
             {}, 0, nullptr, 0, nullptr, 1, &barrier
         );
 
+        // Update and bind descriptors
+        descriptorManager.update(resources, &pipeline);
+        descriptorManager.bind(cmd, resources, &pipeline);
+
         pipeline.bind(cmd);
-        // TODO: Phase 3 -         gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);  // Set 0, frame 0
 
         // Single dispatch for all 6 faces using Z dimension
         // Z = 0..5 maps to cubemap faces, gl_GlobalInvocationID.z determines face index
@@ -657,11 +659,9 @@ void EnvironmentMap::generatePrefilteredMap() {
             // Keep image view alive to prevent validation errors
             tempImageViews.push_back(eastl::move(mipView));
 
-            // Allocate and bind GPU descriptor sets (once per mip level)
-            LayoutHandle layoutHandle = shader->getDescriptorLayoutHandles()[0];
-            // TODO: Phase 3 -             ShaderResourceBinding gpuBinding(&descriptorManager, layoutHandle);
-            // TODO: Phase 3 -             gpuBinding.update(resources, 0);
-            // TODO: Phase 3 -             gpuBinding.bind(cmd, pipeline.getPipelineLayout(), 0, 0, vk::PipelineBindPoint::eCompute);
+            // Update and bind descriptors for this mip level
+            descriptorManager.update(resources, &pipeline);
+            descriptorManager.bind(cmd, resources, &pipeline);
 
             uint32_t workgroups = (mipSize + 15) / 16;
 

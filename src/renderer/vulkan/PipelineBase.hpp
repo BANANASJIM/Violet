@@ -27,6 +27,7 @@ public:
 
     virtual void bind(vk::CommandBuffer commandBuffer) = 0;
     virtual vk::PipelineLayout getPipelineLayout() const = 0;
+    virtual vk::PipelineBindPoint getBindPoint() const = 0;
     virtual void cleanup();
 
     const ShaderReflection* getReflection() const { return mergedReflection.get(); }

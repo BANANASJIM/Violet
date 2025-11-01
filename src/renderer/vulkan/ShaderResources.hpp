@@ -132,6 +132,7 @@ public:
     ShaderResources(
         eastl::string instanceName,
         const ReflectedBuffer* bufferLayout,
+        const ReflectedResource* resourceInfo,
         uint32_t setIndex,
         uint32_t binding,
         vk::DescriptorType descriptorType,
@@ -177,6 +178,7 @@ private:
     // Instance data
     eastl::string instanceName;
     const ReflectedBuffer* bufferLayout;  // Layout for field access
+    const ReflectedResource* resourceInfo;  // Resource metadata
 
     // Binding info
     uint32_t setIndex;

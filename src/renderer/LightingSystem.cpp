@@ -33,7 +33,7 @@ void LightingSystem::init(ResourceManager* resMgr) {
 
     // Create ShaderResources from pipeline reflection
     lightsResources = resMgr->createShaderResources(
-        "Lights", pipeline, "LightData", UpdateFrequency::PerFrame);
+        "Lights", pipeline, "lights", UpdateFrequency::PerFrame);
 
     if (!lightsResources) {
         Log::error("LightingSystem", "Failed to create lightsResources");

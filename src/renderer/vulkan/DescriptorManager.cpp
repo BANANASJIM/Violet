@@ -1245,7 +1245,9 @@ vk::DescriptorSet DescriptorManager::getOrCreateCachedSet(LayoutHandle handle, s
     return newSet;
 }
 
-void DescriptorManager::updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key, const DescriptorResourceHandle& resource) {
+void DescriptorManager::updateDescriptorInternal(vk::DescriptorSet set, const BindingKey& key,
+                                                   const DescriptorResourceHandle& resource,
+                                                   const ShaderReflection* reflection) {
     vk::WriteDescriptorSet write;
     write.dstSet = set;
     write.dstBinding = key.binding;
@@ -1256,13 +1258,23 @@ void DescriptorManager::updateDescriptorInternal(vk::DescriptorSet set, const Bi
     vk::DescriptorImageInfo imageInfo;
 
     switch (resource.type) {
-        case DescriptorResourceHandle::Type::Buffer:
-            write.descriptorType = vk::DescriptorType::eUniformBuffer;
+        case DescriptorResourceHandle::Type::Buffer: {
+            // Use reflection to get correct buffer type (UNIFORM_BUFFER or STORAGE_BUFFER)
+            const auto* reflectedRes = reflection->findResourceByBinding(key.set, key.binding);
+            if (reflectedRes) {
+                write.descriptorType = reflectedRes->type;
+            } else {
+                // Fallback to STORAGE_BUFFER if not found (conservative choice)
+                Log::warn("DescriptorManager", "Buffer at set={}, binding={} not found in reflection, using STORAGE_BUFFER",
+                         key.set, key.binding);
+                write.descriptorType = vk::DescriptorType::eStorageBuffer;
+            }
             bufferInfo.buffer = resource.bufferData.buffer;
             bufferInfo.offset = resource.bufferData.offset;
             bufferInfo.range = resource.bufferData.range;
             write.pBufferInfo = &bufferInfo;
             break;
+        }
 
         case DescriptorResourceHandle::Type::Texture:
             if (resource.texture) {
@@ -1312,6 +1324,7 @@ void DescriptorManager::update(const ShaderResourceBinding& srb, const PipelineB
         return;
     }
 
+    const ShaderReflection* reflection = pipeline->getReflection();
     eastl::unordered_map<BindingKey, DescriptorResourceHandle> allResources = srb.getResources();
 
     for (const auto& [name, handle] : srb.getNameBindings()) {
@@ -1321,6 +1334,15 @@ void DescriptorManager::update(const ShaderResourceBinding& srb, const PipelineB
         }
     }
 
+    // Batch all descriptor writes per set for efficiency
+    eastl::vector<vk::WriteDescriptorSet> allWrites;
+    eastl::vector<vk::DescriptorBufferInfo> allBufferInfos;
+    eastl::vector<vk::DescriptorImageInfo> allImageInfos;
+
+    allWrites.reserve(allResources.size());
+    allBufferInfos.reserve(allResources.size());
+    allImageInfos.reserve(allResources.size());
+
     for (uint32_t setIndex = 0; setIndex < 32; ++setIndex) {
         LayoutHandle layoutHandle = pipeline->getLayoutHandle(setIndex);
         if (layoutHandle == 0) break;
@@ -1329,11 +1351,103 @@ void DescriptorManager::update(const ShaderResourceBinding& srb, const PipelineB
         size_t ownerID = computeOwnerID(srb, setIndex, maxFreq);
         vk::DescriptorSet descriptorSet = getOrCreateCachedSet(layoutHandle, ownerID);
 
+        // Collect all writes for this set
         for (const auto& [key, resource] : allResources) {
-            if (key.set == setIndex) {
-                updateDescriptorInternal(descriptorSet, key, resource);
+            if (key.set != setIndex) continue;
+
+            // Prepare write descriptor
+            vk::WriteDescriptorSet write;
+            write.dstSet = descriptorSet;
+            write.dstBinding = key.binding;
+            write.dstArrayElement = key.arrayIndex;
+            write.descriptorCount = 1;
+
+            switch (resource.type) {
+                case DescriptorResourceHandle::Type::Buffer: {
+                    // Use reflection to get correct buffer type
+                    const auto* reflectedRes = reflection->findResourceByBinding(key.set, key.binding);
+                    if (reflectedRes) {
+                        write.descriptorType = reflectedRes->type;
+                    } else {
+                        Log::warn("DescriptorManager", "Buffer at set={}, binding={} not found in reflection, using STORAGE_BUFFER",
+                                 key.set, key.binding);
+                        write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                    }
+
+                    vk::DescriptorBufferInfo bufferInfo;
+                    bufferInfo.buffer = resource.bufferData.buffer;
+                    bufferInfo.offset = resource.bufferData.offset;
+                    bufferInfo.range = resource.bufferData.range;
+                    allBufferInfos.push_back(bufferInfo);
+                    write.pBufferInfo = &allBufferInfos.back();
+                    break;
+                }
+
+                case DescriptorResourceHandle::Type::Texture:
+                    if (resource.texture) {
+                        write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+
+                        vk::DescriptorImageInfo imageInfo;
+                        imageInfo.imageView = resource.texture->getImageView();
+                        imageInfo.sampler = resource.texture->getSampler();
+                        imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                        allImageInfos.push_back(imageInfo);
+                        write.pImageInfo = &allImageInfos.back();
+                    }
+                    break;
+
+                case DescriptorResourceHandle::Type::SampledImage:
+                    write.descriptorType = vk::DescriptorType::eSampledImage;
+                    {
+                        vk::DescriptorImageInfo imageInfo;
+                        imageInfo.imageView = resource.imageView;
+                        imageInfo.imageLayout = resource.imageLayout;
+                        allImageInfos.push_back(imageInfo);
+                        write.pImageInfo = &allImageInfos.back();
+                    }
+                    break;
+
+                case DescriptorResourceHandle::Type::ImageView:
+                    write.descriptorType = vk::DescriptorType::eStorageImage;
+                    {
+                        vk::DescriptorImageInfo imageInfo;
+                        imageInfo.imageView = resource.imageView;
+                        imageInfo.imageLayout = resource.imageLayout;
+                        allImageInfos.push_back(imageInfo);
+                        write.pImageInfo = &allImageInfos.back();
+                    }
+                    break;
+
+                case DescriptorResourceHandle::Type::Sampler:
+                    write.descriptorType = vk::DescriptorType::eSampler;
+                    {
+                        vk::DescriptorImageInfo imageInfo;
+                        imageInfo.sampler = resource.sampler;
+                        allImageInfos.push_back(imageInfo);
+                        write.pImageInfo = &allImageInfos.back();
+                    }
+                    break;
+
+                case DescriptorResourceHandle::Type::CombinedImageSampler:
+                    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+                    {
+                        vk::DescriptorImageInfo imageInfo;
+                        imageInfo.imageView = resource.combinedData.imageView;
+                        imageInfo.sampler = resource.combinedData.sampler;
+                        imageInfo.imageLayout = resource.imageLayout;
+                        allImageInfos.push_back(imageInfo);
+                        write.pImageInfo = &allImageInfos.back();
+                    }
+                    break;
             }
+
+            allWrites.push_back(write);
         }
+    }
+
+    // Single batched update for all descriptor writes
+    if (!allWrites.empty()) {
+        context->getDevice().updateDescriptorSets(allWrites, {});
     }
 }
 
@@ -1364,16 +1478,14 @@ void DescriptorManager::bind(vk::CommandBuffer cmd, const ShaderResourceBinding&
         UpdateFrequency maxFreq = getMaxFrequencyForSet(allResources, setIndex);
         size_t ownerID = computeOwnerID(srb, setIndex, maxFreq);
 
-        auto it = setCache.find({layoutHandle, ownerID});
-        if (it != setCache.end()) {
-            sets.push_back(it->second);
-        }
+        vk::DescriptorSet descriptorSet = getOrCreateCachedSet(layoutHandle, ownerID);
+        sets.push_back(descriptorSet);
     }
 
     //todo perframe ubo need dynamic offset
     if (!sets.empty()) {
         cmd.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
+            pipeline->getBindPoint(),  // Use virtual function to get correct bind point
             pipeline->getPipelineLayout(),
             0,
             static_cast<uint32_t>(sets.size()),

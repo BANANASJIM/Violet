@@ -296,12 +296,47 @@ GraphicsPipeline::MergedShaderResources GraphicsPipeline::mergeShaderResources(
 void GraphicsPipeline::mergeReflection(const eastl::vector<eastl::shared_ptr<Shader>>& shaderPtrs) {
     mergedReflection = eastl::make_unique<ShaderReflection>();
 
+    // Track (set, binding) -> merged buffer index for deduplication
+    eastl::unordered_map<uint64_t, size_t> mergedBufferIndices;  // (set << 32 | binding) -> index
+
     for (const auto& shader : shaderPtrs) {
         if (shader && shader->getShaderReflection()) {
             const ShaderReflection* refl = shader->getShaderReflection();
 
-            // Add all resources (stages will be OR'd automatically)
+            // Build old index -> new index mapping for buffers
+            eastl::unordered_map<size_t, size_t> indexRemap;  // old index -> new index
+
+            // Process all resources to copy buffers and build remap
             for (const auto& resource : refl->getAllResources()) {
+                if (resource.bufferLayoutIndex != ~0u) {
+                    // This resource has a buffer
+                    uint64_t key = (uint64_t(resource.set) << 32) | resource.binding;
+
+                    auto it = mergedBufferIndices.find(key);
+                    if (it != mergedBufferIndices.end()) {
+                        // Buffer with same (set, binding) already exists, reuse it
+                        indexRemap[resource.bufferLayoutIndex] = it->second;
+                    } else {
+                        // New buffer, copy it
+                        const ReflectedBuffer* srcBuffer = refl->getBufferLayout(resource.bufferLayoutIndex);
+                        if (srcBuffer) {
+                            size_t newIndex = mergedReflection->storeBuffer(*srcBuffer);
+                            mergedBufferIndices[key] = newIndex;
+                            indexRemap[resource.bufferLayoutIndex] = newIndex;
+                        }
+                    }
+                }
+            }
+
+            // Add all resources with remapped buffer indices
+            for (auto resource : refl->getAllResources()) {
+                // Remap buffer layout index if this resource has one
+                if (resource.bufferLayoutIndex != ~0u) {
+                    auto remapIt = indexRemap.find(resource.bufferLayoutIndex);
+                    if (remapIt != indexRemap.end()) {
+                        resource.bufferLayoutIndex = remapIt->second;
+                    }
+                }
                 mergedReflection->addResource(resource);
             }
 

@@ -52,9 +52,18 @@ void ComputePipeline::buildPipeline() {
     mergedReflection = eastl::make_unique<ShaderReflection>();
     if (shader->getShaderReflection()) {
         const ShaderReflection* refl = shader->getShaderReflection();
+
+        // Copy all buffers
+        for (const auto& buffer : refl->getAllBuffers()) {
+            mergedReflection->storeBuffer(buffer);
+        }
+
+        // Copy all resources (buffer indices are the same since we only have one shader)
         for (const auto& resource : refl->getAllResources()) {
             mergedReflection->addResource(resource);
         }
+
+        // Copy push constants
         for (const auto& pcRange : refl->getPushConstantRanges()) {
             mergedReflection->addPushConstantRange(pcRange);
         }

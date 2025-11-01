@@ -589,7 +589,7 @@ void MaterialManager::initMaterialsBuffer(ResourceManager* resMgr) {
     // Create materials buffer using new API (one ShaderResources = one buffer)
     // MaterialData buffer is NOT PerFrame - it's PerMaterial (static data shared across all frames)
     materialsBuffer = resMgr->createShaderResources("GlobalMaterials", pipeline,
-                                                    "MaterialData", UpdateFrequency::PerMaterial);
+                                                    "materials", UpdateFrequency::PerMaterial);
 
     if (!materialsBuffer) {
         violet::Log::error("MaterialManager", "Failed to create materials buffer from pipeline reflection");

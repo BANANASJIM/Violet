@@ -87,7 +87,13 @@ FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
 
 ElementProxy ResourceProxy::operator[](size_t elementIndex) {
     if (!parent) {
-        Log::error("ShaderResources", "Invalid resource proxy");
+        Log::error("ShaderResources", "Invalid resource proxy - parent is null");
+        return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
+    }
+
+    if (!resourceInfo) {
+        Log::error("ShaderResources", "Invalid resource proxy - resourceInfo is null (parent={}, instanceName={})",
+                  (void*)parent, parent->getInstanceName().c_str());
         return ElementProxy(nullptr, nullptr, 0, nullptr, 0);
     }
 
@@ -105,7 +111,7 @@ ElementProxy ResourceProxy::operator[](size_t elementIndex) {
 
     uint32_t elementStride = parent->elementSize;
 
-    return ElementProxy(parent, nullptr, elementIndex, basePtr, elementStride);
+    return ElementProxy(parent, resourceInfo, elementIndex, basePtr, elementStride);
 }
 
 vk::DescriptorType ResourceProxy::getType() const {
@@ -122,6 +128,7 @@ const eastl::string& ResourceProxy::getName() const {
 ShaderResources::ShaderResources(
     eastl::string instanceName,
     const ReflectedBuffer* bufferLayout,
+    const ReflectedResource* resourceInfo,
     uint32_t setIndex,
     uint32_t binding,
     vk::DescriptorType descriptorType,
@@ -130,6 +137,7 @@ ShaderResources::ShaderResources(
     uint32_t maxFrames)
     : instanceName(eastl::move(instanceName))
     , bufferLayout(bufferLayout)
+    , resourceInfo(resourceInfo)
     , setIndex(setIndex)
     , binding(binding)
     , frequency(frequency)
@@ -175,7 +183,7 @@ ShaderResources::~ShaderResources() {
 ResourceProxy ShaderResources::operator[](const eastl::string& resourceName) {
     // Single buffer container - resourceName is ignored (for compatibility)
     // Returns proxy for direct field/element access
-    return ResourceProxy(this, nullptr);
+    return ResourceProxy(this, resourceInfo);
 }
 
 eastl::unordered_map<BindingKey, DescriptorResourceHandle> ShaderResources::getBufferBindings() const {
