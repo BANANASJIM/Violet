@@ -229,6 +229,12 @@ if(APPLE)
 endif()
 # Note: GLFW automatically handles platform surface extensions (Wayland/XCB/Win32/etc)
 
+# GLM configuration for Vulkan
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_RADIANS
+)
+
 # Debug/Release configurations
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     $<$<CONFIG:Debug>:VIOLET_DEBUG>

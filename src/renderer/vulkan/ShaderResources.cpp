@@ -17,13 +17,13 @@ ElementProxy::ElementProxy(ShaderResources* parent, const ReflectedResource* res
 FieldProxy ElementProxy::operator[](const eastl::string& fieldName) {
     if (!resourceInfo || !bufferData || !parent) {
         Log::error("ShaderResources", "Invalid element proxy");
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     const ReflectedBuffer* bufferLayout = parent->bufferLayout;
     if (!bufferLayout) {
         Log::error("ShaderResources", "No buffer layout available");
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     const ReflectedField* field = nullptr;
@@ -37,11 +37,11 @@ FieldProxy ElementProxy::operator[](const eastl::string& fieldName) {
     if (!field) {
         Log::error("ShaderResources", "Field '{}' not found in buffer '{}' element",
                    fieldName.c_str(), resourceInfo->name.c_str());
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     uint32_t totalOffset = elementIndex * elementStride + field->offset;
-    return FieldProxy(bufferData, totalOffset, field->size, fieldName);
+    return FieldProxy(bufferData, totalOffset, field->size, field->arraySize, field->arrayStride, fieldName);
 }
 
 // ===== ResourceProxy Implementation =====
@@ -52,13 +52,13 @@ ResourceProxy::ResourceProxy(ShaderResources* parent, const ReflectedResource* r
 FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
     if (!parent) {
         Log::error("ShaderResources", "Invalid resource proxy");
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     const ReflectedBuffer* bufferLayout = parent->bufferLayout;
     if (!bufferLayout) {
         Log::error("ShaderResources", "No buffer layout available");
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     // Find field in buffer layout
@@ -73,7 +73,7 @@ FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
     if (!field) {
         Log::error("ShaderResources", "Field '{}' not found in buffer",
                    fieldName.c_str());
-        return FieldProxy(nullptr, 0, 0, "invalid");
+        return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
     }
 
     // Calculate base pointer (handle PerFrame offset)
@@ -82,7 +82,7 @@ FieldProxy ResourceProxy::operator[](const eastl::string& fieldName) {
         basePtr = static_cast<char*>(basePtr) + (parent->getCurrentFrame() * parent->alignedSize);
     }
 
-    return FieldProxy(basePtr, field->offset, field->size, fieldName);
+    return FieldProxy(basePtr, field->offset, field->size, field->arraySize, field->arrayStride, fieldName);
 }
 
 ElementProxy ResourceProxy::operator[](size_t elementIndex) {

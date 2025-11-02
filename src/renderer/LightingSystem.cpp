@@ -40,18 +40,19 @@ void LightingSystem::init(ResourceManager* resMgr) {
         return;
     }
 
-    auto bindings = lightsResources->getBufferBindings();
-    for (const auto& [key, handle] : bindings) {
-        lightsSRB.bind(key.set, key.binding, handle);
-    }
-
     cpuLightData.reserve(64);
     violet::Log::info("LightingSystem", "Initialized with own ShaderResources");
+}
+
+void LightingSystem::setGlobalResources(eastl::shared_ptr<ShaderResources> resources) {
+    globalResources = resources;
 }
 
 void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum) {
     cpuLightData.clear();
     collectLights(world, cameraFrustum);
+
+    violet::Log::info("LightingSystem", "Collected {} lights", cpuLightData.size());
 
     // Upload light data via ShaderResources reflection API
     if (!lightsResources) {
@@ -67,6 +68,29 @@ void LightingSystem::update(entt::registry& world, const Frustum& cameraFrustum)
         lightProxy["positionAndType"] = light.positionAndType;
         lightProxy["colorAndRadius"] = light.colorAndRadius;
         lightProxy["shadowIndex"] = light.shadowIndex;
+
+        violet::Log::info("LightingSystem", "Light[{}]: type={}, color=({},{},{}), shadowIndex={}",
+            i, light.positionAndType.w,
+            light.colorAndRadius.x, light.colorAndRadius.y, light.colorAndRadius.z,
+            light.shadowIndex);
+    }
+
+    if (globalResources) {
+        auto camera = (*globalResources)["camera"];
+        int numLights = static_cast<int>(cpuLightData.size());
+        camera["numLights"] = numLights;
+        violet::Log::info("LightingSystem", "Updated numLights to GPU: {}", numLights);
+    } else {
+        violet::Log::error("LightingSystem", "globalResources is null, cannot update numLights");
+    }
+
+    // Update SRB with current frame's buffer bindings
+    lightsSRB.clear();
+    if (lightsResources) {
+        auto bindings = lightsResources->getBufferBindings();
+        for (const auto& [key, handle] : bindings) {
+            lightsSRB.bind(key.set, key.binding, handle);
+        }
     }
 }
 
@@ -108,6 +132,29 @@ void LightingSystem::collectLights(entt::registry& world, const Frustum& cameraF
             break;
         }
     }
+}
+
+void LightingSystem::updateLightShadowIndex(uint32_t lightIndex, int32_t shadowIndex) {
+    if (lightIndex >= cpuLightData.size()) {
+        violet::Log::error("LightingSystem", "Light index {} out of range (max: {})", lightIndex, cpuLightData.size());
+        return;
+    }
+
+    if (!lightsResources) {
+        violet::Log::error("LightingSystem", "lightsResources is null");
+        return;
+    }
+
+    // Update CPU-side data
+    cpuLightData[lightIndex].shadowIndex = shadowIndex;
+
+    // DEBUG: Check current frame
+    violet::Log::info("LightingSystem", "updateLightShadowIndex: currentFrame={}, updating Light[{}] shadowIndex to {}",
+                     lightsResources->getCurrentFrame(), lightIndex, shadowIndex);
+
+    // Upload to GPU via ShaderResources reflection API (uses current frame)
+    auto lightProxy = (*lightsResources)["lights"][lightIndex];
+    lightProxy["shadowIndex"] = shadowIndex;
 }
 
 // Removed: uploadToGPU, getDescriptorSet, ensureBufferCapacity

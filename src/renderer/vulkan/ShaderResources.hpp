@@ -30,17 +30,43 @@ struct StorageBufferBinding {
 // ===== FieldProxy - Type-safe field access in UBO/SSBO =====
 class FieldProxy {
 public:
-    FieldProxy(void* bufferData, uint32_t offset, uint32_t size, const eastl::string& fieldName)
-        : bufferData(bufferData), offset(offset), size(size), fieldName(fieldName) {}
+    FieldProxy(void* bufferData, uint32_t offset, uint32_t size,
+               uint32_t arraySize, uint32_t arrayStride, const eastl::string& fieldName)
+        : bufferData(bufferData), offset(offset), size(size),
+          arraySize(arraySize), arrayStride(arrayStride), fieldName(fieldName) {}
+
+    // Array element access
+    FieldProxy operator[](size_t index) {
+        if (arraySize <= 1) {
+            Log::error("ShaderResources", "Field '{}' is not an array", fieldName.c_str());
+            return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
+        }
+        if (index >= arraySize) {
+            Log::error("ShaderResources", "Array index {} out of bounds for field '{}' (size={})",
+                       index, fieldName.c_str(), arraySize);
+            return FieldProxy(nullptr, 0, 0, 1, 0, "invalid");
+        }
+
+        uint32_t elementOffset = offset + index * arrayStride;
+        return FieldProxy(bufferData, elementOffset, arrayStride, 1, 0, fieldName);
+    }
 
     // Type-safe assignment operator with trivially copyable constraint
     template<typename T>
     requires std::is_trivially_copyable_v<T>
     FieldProxy& operator=(const T& value) noexcept {
-        if (sizeof(T) != size) {
+        if (arraySize > 1) {
+            Log::error("ShaderResources",
+                "Cannot assign to array field '{}' directly. Use operator[] to access elements.",
+                fieldName.c_str());
+            return *this;
+        }
+
+        uint32_t expectedSize = (arrayStride > 0) ? arrayStride : size;
+        if (sizeof(T) != expectedSize) {
             Log::error("ShaderResources",
                 "Size mismatch for field '{}': expected {} bytes, got {} bytes",
-                fieldName.c_str(), size, sizeof(T));
+                fieldName.c_str(), expectedSize, sizeof(T));
             return *this;
         }
 
@@ -54,6 +80,8 @@ private:
     void* bufferData;
     uint32_t offset;
     uint32_t size;
+    uint32_t arraySize;
+    uint32_t arrayStride;
     eastl::string fieldName;
 };
 

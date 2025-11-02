@@ -19,9 +19,13 @@ enum class FieldType : uint8_t {
 // Field in UBO/SSBO
 struct ReflectedField {
     eastl::string name;
-    uint32_t offset;
-    uint32_t size;
-    FieldType type;
+    uint32_t offset;        // Offset in bytes from buffer start
+    uint32_t size;          // Total size in bytes (including all array elements if array)
+    FieldType type;         // Base type (for arrays, this is the element type)
+    uint32_t arraySize;     // Number of array elements (1 = not an array, >1 = array)
+    uint32_t arrayStride;   // Size of each array element in bytes (0 if not array)
+
+    ReflectedField() : offset(0), size(0), type(FieldType::Unknown), arraySize(1), arrayStride(0) {}
 };
 
 // UBO/SSBO layout (detailed field information)

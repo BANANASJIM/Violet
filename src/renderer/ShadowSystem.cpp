@@ -103,11 +103,6 @@ void ShadowSystem::init(VulkanContext* ctx, ResourceManager* resMgr) {
         return;
     }
 
-    auto bindings = shadowsResources->getBufferBindings();
-    for (const auto& [key, handle] : bindings) {
-        shadowsSRB.bind(key.set, key.binding, handle);
-    }
-
     cpuShadowData.reserve(32);
     createAtlas();
 
@@ -237,12 +232,15 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                 glm::mat4 cascadeProj = proj;  // Start with camera's projection
                 if (perspCam) {
                     // Override near/far planes for this cascade
-                    cascadeProj = glm::perspective(
+                    // Use RH_ZO variant for Vulkan [0,1] depth range
+                    cascadeProj = glm::perspectiveRH_ZO(
                         glm::radians(perspCam->getFOV()),
                         perspCam->getAspectRatio(),
                         cascadeNear,
                         cascadeFar
                     );
+                    // Apply Vulkan Y-flip (same as PerspectiveCamera)
+                    cascadeProj[1][1] *= -1;
                 }
 
                 // Get frustum corners for this cascade
@@ -262,7 +260,7 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                     up
                 );
 
-                // Transform frustum corners to light space and find bounds
+                // Standard CSM: Transform frustum corners to light space and find bounds
                 float minX = std::numeric_limits<float>::max();
                 float maxX = std::numeric_limits<float>::lowest();
                 float minY = std::numeric_limits<float>::max();
@@ -280,64 +278,15 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                     maxZ = std::max(maxZ, trf.z);
                 }
 
-                // ============= Optimization 1: Extend bounds using Scene AABB =============
-                // Use scene bounds to extend XY coverage and Z range
-                if (sceneBounds.isValid()) {
-                    // Transform scene AABB corners to light space
-                    glm::vec3 sceneMin = sceneBounds.min;
-                    glm::vec3 sceneMax = sceneBounds.max;
+                // Extend Z depth to include shadow casters outside frustum
+                // DO NOT extend XY - that defeats the purpose of cascades
+                float zRange = maxZ - minZ;
+                if (zRange < 0.1f) zRange = 0.1f;  // Prevent division by zero
+                minZ = minZ - zRange * 10.0f;  // Extend backwards to include shadow casters
+                maxZ = maxZ + zRange * 1.0f;   // Small forward extension
 
-                    for (int x = 0; x <= 1; x++) {
-                        for (int y = 0; y <= 1; y++) {
-                            for (int z = 0; z <= 1; z++) {
-                                glm::vec3 corner(
-                                    x ? sceneMax.x : sceneMin.x,
-                                    y ? sceneMax.y : sceneMin.y,
-                                    z ? sceneMax.z : sceneMin.z
-                                );
-                                glm::vec4 lightSpaceCorner = lightViewMatrix * glm::vec4(corner, 1.0f);
-
-                                // Expand XY bounds to include scene objects
-                                minX = std::min(minX, lightSpaceCorner.x);
-                                maxX = std::max(maxX, lightSpaceCorner.x);
-                                minY = std::min(minY, lightSpaceCorner.y);
-                                maxY = std::max(maxY, lightSpaceCorner.y);
-
-                                // Expand Z range to include scene objects
-                                minZ = std::min(minZ, lightSpaceCorner.z);
-                                maxZ = std::max(maxZ, lightSpaceCorner.z);
-                            }
-                        }
-                    }
-
-                    // Add extra padding to Z range to ensure all shadow casters are included
-                    // Shadow casters outside the frustum can still cast shadows into it
-                    float zRange = maxZ - minZ;
-                    float zPadding = zRange * 1.0f;  // 100% padding on both sides
-                    minZ = minZ - zPadding;  // Extend backwards (away from light)
-                    maxZ = maxZ + zPadding;  // Extend forwards (towards light)
-                } else {
-                    // Fallback: extend bounds to cover area beyond frustum
-                    float shadowExtent = 3.0f;  // 3x coverage (increased from 2.0x)
-                    float centerX = (minX + maxX) * 0.5f;
-                    float centerY = (minY + maxY) * 0.5f;
-                    float extentX = (maxX - minX) * shadowExtent * 0.5f;
-                    float extentY = (maxY - minY) * shadowExtent * 0.5f;
-
-                    minX = centerX - extentX;
-                    maxX = centerX + extentX;
-                    minY = centerY - extentY;
-                    maxY = centerY + extentY;
-
-                    // Extend Z range in both directions to avoid clipping shadow casters
-                    float zRange = maxZ - minZ;
-                    minZ = minZ - zRange * 5.0f;  // Extend backwards
-                    maxZ = maxZ + zRange * 2.0f;  // Extend forwards
-                }
-
-                // ============= Optimization 2: Projection Quantization for Stability =============
-                // Quantize projection bounds to fixed increments to reduce jitter
-                float quantize = 64.0f;  // World-space quantization step (adjustable)
+                // Projection Quantization for Stability
+                float quantize = 64.0f;  // World-space quantization step
 
                 minX = std::floor(minX / quantize) * quantize;
                 maxX = std::ceil(maxX / quantize) * quantize;
@@ -366,7 +315,22 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                 maxY = minY + projHeight;
 
                 // Build stabilized orthographic projection
-                glm::mat4 lightProjMatrix = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+                // Use RH_ZO variant for Vulkan [0,1] depth range
+                // CRITICAL: In RH view space, Z is negative (objects in front)
+                // glm::ortho expects near < far (both positive), so negate and swap: near = -maxZ, far = -minZ
+                // If maxZ > 0 (objects behind light), clamp near to 0.1
+                float nearPlane = (maxZ < 0.0f) ? -maxZ : 0.1f;
+                float farPlane = -minZ;
+
+                violet::Log::info("ShadowSystem", "Cascade[{}] Z-range: minZ={:.2f}, maxZ={:.2f}, near={:.2f}, far={:.2f}",
+                                 c, minZ, maxZ, nearPlane, farPlane);
+
+                glm::mat4 lightProjMatrix = glm::orthoRH_ZO(minX, maxX, minY, maxY, nearPlane, farPlane);
+
+                // CRITICAL: Apply Vulkan Y-flip (same as Camera projection)
+                // GLM generates OpenGL-style projection (Y-up), but Vulkan NDC is Y-down
+                lightProjMatrix[1][1] *= -1.0f;
+
                 shadowData.cascadeViewProjMatrices[c] = lightProjMatrix * lightViewMatrix;
 
                 // Allocate atlas space for this cascade
@@ -427,7 +391,13 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                 }
 
                 // Orthographic projection covering entire scene
-                glm::mat4 lightProj = glm::ortho(minX, maxX, minY, maxY, minZ, maxZ);
+                // Use RH_ZO variant for Vulkan [0,1] depth range
+                // CRITICAL: Negate and swap Z values for RH coordinate system
+                // If maxZ > 0 (objects behind light), clamp near to 0.1
+                float nearPlane = (maxZ < 0.0f) ? -maxZ : 0.1f;
+                float farPlane = -minZ;
+                glm::mat4 lightProj = glm::orthoRH_ZO(minX, maxX, minY, maxY, nearPlane, farPlane);
+                lightProj[1][1] *= -1.0f;  // Vulkan Y-flip
                 shadowData.cascadeViewProjMatrices[fallbackIdx] = lightProj * lightView;
 
                 // Allocate atlas space
@@ -498,17 +468,81 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
         return;
     }
 
-    // Upload each shadow's data using direct struct assignment
-    // This handles all fields including arrays (cascadeViewProjMatrices, atlasRects, cubeFaceMatrices)
+    // Upload each shadow's data using array field API
     for (size_t i = 0; i < cpuShadowData.size(); ++i) {
         auto shadowProxy = (*shadowsResources)["shadows"][i];
-        shadowProxy = cpuShadowData[i];  // Direct struct copy
+        const auto& sd = cpuShadowData[i];
+
+        // Upload cascade matrices using array API
+        for (uint32_t c = 0; c < 4; ++c) {
+            shadowProxy["cascadeViewProjMatrices"][c] = sd.cascadeViewProjMatrices[c];
+        }
+
+        shadowProxy["cascadeSplitDepths"] = sd.cascadeSplitDepths;
+
+        for (uint32_t c = 0; c < 4; ++c) {
+            shadowProxy["atlasRects"][c] = sd.atlasRects[c];
+        }
+
+        shadowProxy["shadowParams"] = sd.shadowParams;
+        shadowProxy["lightType"] = sd.lightType;
+        shadowProxy["cascadeCount"] = sd.cascadeCount;
+        shadowProxy["atlasIndex"] = sd.atlasIndex;
+
+        for (uint32_t c = 0; c < 6; ++c) {
+            shadowProxy["cubeFaceMatrices"][c] = sd.cubeFaceMatrices[c];
+        }
     }
 
-}
+    // CRITICAL: Re-upload light shadowIndex to GPU
+    // ShadowSystem modifies cpuLightData[i].shadowIndex above (line 485),
+    // but LightingSystem::update() already uploaded lights to GPU with shadowIndex=-1
+    // We must re-upload the shadowIndex field after shadow data is ready
+    const auto& lights = lightingSystem.getLightData();
 
-// Removed: uploadToGPU, gDescriptetorSet
-// All data upload is now handled directly in update() via ShaderResources API
+    violet::Log::info("ShadowSystem", "Uploading {} shadow data entries, atlas index: {}, renderables: {}",
+                     cpuShadowData.size(), atlasBindlessIndex, shadowRenderables.size());
+
+    for (size_t i = 0; i < lights.size(); ++i) {
+        violet::Log::info("ShadowSystem", "Light[{}] shadowIndex: {}", i, lights[i].shadowIndex);
+        lightingSystem.updateLightShadowIndex(static_cast<uint32_t>(i), lights[i].shadowIndex);
+    }
+
+    if (cpuShadowData.size() > 0) {
+        const auto& sd = cpuShadowData[0];
+        violet::Log::info("ShadowSystem", "Shadow[0] atlasIndex: {}, cascadeCount: {}", sd.atlasIndex, sd.cascadeCount);
+
+        // Log cascade matrices (CPU-side data for verification)
+        for (uint32_t i = 0; i < sd.cascadeCount; ++i) {
+            const auto& m = sd.cascadeViewProjMatrices[i];
+            violet::Log::info("ShadowSystem", "  Cascade[{}] matrix row0: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
+                             i, m[0][0], m[0][1], m[0][2], m[0][3]);
+            violet::Log::info("ShadowSystem", "  Cascade[{}] matrix row1: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
+                             i, m[1][0], m[1][1], m[1][2], m[1][3]);
+            violet::Log::info("ShadowSystem", "  Cascade[{}] matrix row2: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
+                             i, m[2][0], m[2][1], m[2][2], m[2][3]);
+            violet::Log::info("ShadowSystem", "  Cascade[{}] matrix row3: ({:.3f}, {:.3f}, {:.3f}, {:.3f})",
+                             i, m[3][0], m[3][1], m[3][2], m[3][3]);
+        }
+
+        for (uint32_t i = 0; i < sd.cascadeCount; ++i) {
+            violet::Log::info("ShadowSystem", "  Cascade[{}] atlasRect: ({:.3f}, {:.3f}, {:.3f}, {:.3f}), split: {:.1f}",
+                             i, sd.atlasRects[i].x, sd.atlasRects[i].y, sd.atlasRects[i].z, sd.atlasRects[i].w,
+                             i < 3 ? sd.cascadeSplitDepths[i] : 0.0f);
+        }
+        violet::Log::info("ShadowSystem", "  shadowParams: bias={:.4f}, normalBias={:.4f}",
+                         sd.shadowParams.x, sd.shadowParams.y);
+    }
+
+    // Update SRB with current frame's buffer bindings
+    shadowsSRB.clear();
+    if (shadowsResources) {
+        auto bindings = shadowsResources->getBufferBindings();
+        for (const auto& [key, handle] : bindings) {
+            shadowsSRB.bind(key.set, key.binding, handle);
+        }
+    }
+}
 
 ShadowAtlasAllocation ShadowSystem::allocateSpace(uint32_t resolution, uint32_t lightIndex) {
     // Simple linear packing algorithm
@@ -575,9 +609,6 @@ void ShadowSystem::freeSpace(const ShadowAtlasAllocation& alloc) {
 void ShadowSystem::clearAllAllocations() {
     allocations.clear();
 }
-
-// Removed: ensureBufferCapacity
-// Buffer allocation is now handled by ResourceManager via ShaderResources
 
 void ShadowSystem::createAtlas() {
     // Create depth texture through TextureManager

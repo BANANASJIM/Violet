@@ -132,6 +132,7 @@ void ForwardRenderer::init(VulkanContext* ctx, ResourceManager* resMgr, vk::Form
     // Initialize lighting and shadow systems (they create their own resources)
     lightingSystem = new LightingSystem();
     lightingSystem->init(resourceManager);
+    lightingSystem->setGlobalResources(globalResources);
 
     shadowSystem = new ShadowSystem();
     shadowSystem->init(context, resourceManager);
@@ -443,8 +444,6 @@ void ForwardRenderer::updateGlobalUniforms(entt::registry& world) {
     camera["proj"] = activeCamera->getProjectionMatrix();
     camera["cameraPos"] = activeCamera->getPosition();
 
-    // Initialize light data (will be populated by LightingSystem)
-    camera["numLights"] = 0;
     camera["ambientLight"] = glm::vec3(0.03f, 0.03f, 0.04f);
 
     // Set skybox parameters

@@ -35,7 +35,7 @@ SamplerState linearSampler;
 SamplerState nearestSampler;
 
 [[vk::binding(4, 1)]]
-SamplerState shadowSampler;
+SamplerComparisonState shadowSampler;
 
 // Set 2: PER-MATERIAL
 [[vk::binding(0, 2)]]

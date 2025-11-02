@@ -30,11 +30,15 @@ public:
     LightingSystem& operator=(const LightingSystem&) = delete;
 
     void init(ResourceManager* resMgr);
+    void setGlobalResources(eastl::shared_ptr<ShaderResources> resources);
     void update(entt::registry& world, const Frustum& cameraFrustum);
 
     uint32_t getLightCount() const { return static_cast<uint32_t>(cpuLightData.size()); }
     eastl::vector<LightData>& getLightData() { return cpuLightData; }
     const eastl::vector<LightData>& getLightData() const { return cpuLightData; }
+
+    // Update shadow index for a light and upload to GPU
+    void updateLightShadowIndex(uint32_t lightIndex, int32_t shadowIndex);
 
     // Get SRB for merging into ForwardRenderer's globalSRB
     const ShaderResourceBinding& getSRB() const { return lightsSRB; }
@@ -44,6 +48,7 @@ private:
 
 private:
     eastl::shared_ptr<ShaderResources> lightsResources;
+    eastl::shared_ptr<ShaderResources> globalResources;
     ShaderResourceBinding lightsSRB;
     eastl::vector<LightData> cpuLightData;
 

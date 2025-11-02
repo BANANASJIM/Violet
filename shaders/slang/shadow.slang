@@ -20,7 +20,11 @@ struct VSInput {
 
 [shader("vertex")]
 float4 vertexMain(VSInput input) : SV_Position {
-    // CRITICAL: column_major matrices work correctly with mul(matrix, vector)
-    // GLSL: push.lightSpaceMatrix * push.model * vec4(inPosition, 1.0)
-    return mul(push.lightSpaceMatrix, mul(push.model, float4(input.position, 1.0)));
+    // Transform to world space: model * position
+    // For column_major matrices, use mul(matrix, vector), NOT mul(vector, matrix)
+    float4 worldPos = mul(push.model, float4(input.position, 1.0));
+
+    // Transform to light clip space: (proj * view) * worldPos
+    // push.lightSpaceMatrix already contains (proj * view) with Vulkan Y-flip applied
+    return mul(push.lightSpaceMatrix, worldPos);
 }

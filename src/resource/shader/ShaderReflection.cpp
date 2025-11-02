@@ -56,14 +56,12 @@ void extractFields(slang::TypeLayoutReflection* typeLayout, eastl::vector<Reflec
         auto field = typeLayout->getFieldByIndex(i);
         if (!field) continue;
 
-        // Check for null type layout (e.g., arrays, nested structs)
         auto fieldTypeLayout = field->getTypeLayout();
         if (!fieldTypeLayout) {
             Log::warn("ShaderReflection", "Field '{}' has no type layout, skipping", field->getName());
             continue;
         }
 
-        // Check for null type
         auto fieldType = field->getType();
         if (!fieldType) {
             Log::warn("ShaderReflection", "Field '{}' has no type, skipping", field->getName());
@@ -74,12 +72,42 @@ void extractFields(slang::TypeLayoutReflection* typeLayout, eastl::vector<Reflec
         reflectedField.name = field->getName();
         reflectedField.offset = baseOffset + uint32_t(field->getOffset());
         reflectedField.size = uint32_t(fieldTypeLayout->getSize());
-        reflectedField.type = slangTypeToFieldType(fieldType);
 
-        // Skip unknown types
-        if (reflectedField.type == FieldType::Unknown) {
-            Log::debug("ShaderReflection", "Field '{}' has unsupported type, skipping", field->getName());
-            continue;
+        auto kind = fieldType->getKind();
+        if (kind == slang::TypeReflection::Kind::Array) {
+            auto elementType = fieldType->getElementType();
+            uint32_t arrayCount = fieldType->getElementCount();
+
+            if (!elementType) {
+                Log::warn("ShaderReflection", "Array field '{}' has no element type", field->getName());
+                continue;
+            }
+
+            reflectedField.type = slangTypeToFieldType(elementType);
+            if (reflectedField.type == FieldType::Unknown) {
+                continue;
+            }
+
+            reflectedField.arraySize = arrayCount;
+
+            auto elementTypeLayout = fieldTypeLayout->getElementTypeLayout();
+            reflectedField.arrayStride = elementTypeLayout ?
+                uint32_t(elementTypeLayout->getSize()) : (reflectedField.size / arrayCount);
+
+            Log::info("ShaderReflection", "Array field '{}': type={}, count={}, stride={}",
+                     field->getName(), static_cast<int>(reflectedField.type),
+                     arrayCount, reflectedField.arrayStride);
+        } else {
+            // Not an array - regular scalar/vector/matrix field
+            reflectedField.type = slangTypeToFieldType(fieldType);
+
+            if (reflectedField.type == FieldType::Unknown) {
+                Log::debug("ShaderReflection", "Field '{}' has unsupported type, skipping", field->getName());
+                continue;
+            }
+
+            reflectedField.arraySize = 1;
+            reflectedField.arrayStride = 0;
         }
 
         fields.push_back(reflectedField);

@@ -145,9 +145,9 @@ int selectCascade(float viewDepth, float4 cascadeSplits, uint cascadeCount) {
 
 float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, float3 normal, float3 lightDir) {
     column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
-    // CRITICAL: column_major matrices work correctly with mul(matrix, vector)
-    // GLSL: lightSpaceMatrix * vec4(fragPos, 1.0)
-    float4 lightSpacePos = mul(lightSpaceMatrix, float4(fragPos, 1.0));
+    // CRITICAL: Shadow matrices from ShaderResources need transposed multiplication
+    // Use mul(vector, matrix) instead of mul(matrix, vector)
+    float4 lightSpacePos = mul(float4(fragPos, 1.0), lightSpaceMatrix);
     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
 
@@ -163,7 +163,8 @@ float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, f
     float4 atlasRect = shadow.atlasRects[cascadeIndex];
     float2 atlasUV = atlasRect.xy + projCoords.xy * atlasRect.zw;
 
-    // PCF
+    // PCF - use linearSampler for manual depth comparison
+    // shadowSampler is a comparison sampler, but Sample() doesn't pass reference value
     float shadowValue = 0.0;
     float2 texelSize = 1.0 / 8192.0;  // Match actual shadow atlas size
     int pcfSamples = 2;
