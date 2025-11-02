@@ -19,7 +19,7 @@ class DescriptorManager;
  * @brief Central manager for all shader resources
  *
  * Responsibilities:
- * - Load and compile shaders (GLSL/Slang)
+ * - Load and compile shaders (Slang only)
  * - Cache compiled SPIRV and reflection data
  * - Manage shader lifecycle
  * - Support hot reloading
@@ -29,13 +29,8 @@ class DescriptorManager;
  * on pure resource management without Vulkan API dependencies.
  *
  * Usage:
- *   auto shader = shaderLibrary.load("pbr_vertex", {
- *       .filePath = "shaders/pbr.slang",
- *       .entryPoint = "vertexMain",
- *       .stage = Shader::Stage::Vertex,
- *       .language = Shader::Language::Slang
- *   });
- *   pipeline.setShader(shader);
+ *   auto shaders = shaderLibrary.loadSlangShader("shaders/pbr_bindless.slang");
+ *   pipeline.setShader(shaders[0]);
  */
 class ShaderLibrary {
 public:
@@ -59,13 +54,12 @@ public:
     eastl::vector<eastl::weak_ptr<Shader>> loadSlangShader(const eastl::string& filePath);
 
     /**
-     * @brief Load or retrieve cached shader (DEPRECATED for Slang)
+     * @brief Load or retrieve cached shader
      * @param name Unique shader identifier
      * @param info Shader creation info
      * @return Weak pointer to shader (empty if failed)
      *
-     * @deprecated Use loadSlangShader() for Slang shaders with automatic entry detection.
-     * This method is kept for backward compatibility with GLSL shaders.
+     * @deprecated Use loadSlangShader() for automatic entry point detection.
      *
      * Note: Returns weak_ptr to prevent external strong references.
      * ShaderLibrary owns all shaders via shared_ptr internally.
@@ -129,8 +123,7 @@ private:
     // Shader storage: name -> Shader (shared_ptr for weak_ptr support + thread safety)
     eastl::unordered_map<eastl::string, eastl::shared_ptr<Shader>> shaders;
 
-    // Compilers for each language
-    eastl::unique_ptr<ShaderCompiler> glslCompiler;//todo remove
+    // Slang compiler
     eastl::unique_ptr<ShaderCompiler> slangCompiler;
 
     // Default compilation options

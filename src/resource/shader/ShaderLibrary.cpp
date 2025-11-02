@@ -1,5 +1,4 @@
 #include "ShaderLibrary.hpp"
-#include "GLSLCompiler.hpp"
 #include "SlangCompiler.hpp"
 #include "ShaderReflection.hpp"
 #include "core/Log.hpp"
@@ -9,7 +8,6 @@ namespace violet {
 
 ShaderLibrary::ShaderLibrary(VulkanContext* ctx)
     : context(ctx)
-    , glslCompiler(eastl::make_unique<GLSLCompiler>())
     , slangCompiler(eastl::make_unique<SlangCompiler>()) {
 
     // Set default include paths (use absolute paths for Slang module resolution)
@@ -17,7 +15,7 @@ ShaderLibrary::ShaderLibrary(VulkanContext* ctx)
     defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/slang"));
     defaultIncludePaths.push_back(FileSystem::resolveRelativePath("shaders/include"));
 
-    Log::info("ShaderLibrary", "Initialized with GLSL and Slang compilers");
+    Log::info("ShaderLibrary", "Initialized with Slang compiler");
 }
 
 ShaderLibrary::~ShaderLibrary() {
@@ -258,11 +256,8 @@ void ShaderLibrary::addGlobalDefine(const eastl::string& define) {
 }
 
 ShaderCompiler* ShaderLibrary::getCompiler(Shader::Language language) {
-    switch (language) {
-        case Shader::Language::GLSL:  return glslCompiler.get();
-        case Shader::Language::Slang: return slangCompiler.get();
-    }
-    return nullptr;
+    // Only Slang is supported
+    return slangCompiler.get();
 }
 
 } // namespace violet
