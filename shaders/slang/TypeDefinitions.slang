@@ -1,9 +1,11 @@
 // TypeDefinitions.slang - Shared type definitions (use with __include)
 // NOTE: This file should be __include'd, not import'ed
+// IMPORTANT: All matrices use row-major layout (Slang default, matches GLM_FORCE_ROW_MAJOR)
+// Matrix multiplication order: mul(vector, matrix), e.g., mul(pos, model)
 
 struct CameraUBO {
-    column_major float4x4 view;
-    column_major float4x4 proj;
+    float4x4 view;
+    float4x4 proj;
     float3 cameraPos;
 
     // Light count (actual light data in StructuredBuffer<LightData>)
@@ -34,7 +36,7 @@ struct LightData {
 };
 
 struct ShadowData {
-    column_major float4x4 cascadeViewProjMatrices[4];
+    float4x4 cascadeViewProjMatrices[4];
     float4 cascadeSplitDepths;
     float4 atlasRects[4];
 
@@ -43,7 +45,7 @@ struct ShadowData {
     uint cascadeCount;
     uint atlasIndex;
 
-    column_major float4x4 cubeFaceMatrices[6];
+    float4x4 cubeFaceMatrices[6];
 };
 
 struct MaterialData {
@@ -63,6 +65,6 @@ struct MaterialData {
 };
 
 struct PushConstants {
-    column_major float4x4 model;
+    float4x4 model;
     uint materialID;
 };

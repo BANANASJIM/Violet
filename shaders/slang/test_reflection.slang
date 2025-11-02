@@ -1,4 +1,6 @@
 // Simple test shader to verify reflection and auto-registration
+// IMPORTANT: All matrices use row-major layout (Slang default, matches GLM_FORCE_ROW_MAJOR)
+// Matrix multiplication order: mul(vector, matrix), e.g., mul(pos, model)
 
 // Test descriptor set
 [[vk::binding(0, 0)]]
@@ -29,8 +31,9 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertexMain(VSInput input) {
     VSOutput output;
-    float4 worldPos = mul(push.model, float4(input.position, 1.0));
-    output.position = mul(testTransform, worldPos);
+    // Row-major layout: mul(vector, matrix)
+    float4 worldPos = mul(float4(input.position, 1.0), push.model);
+    output.position = mul(worldPos, testTransform);
     output.texCoord = input.texCoord;
     return output;
 }

@@ -1,4 +1,6 @@
 // Simple test shader without imports to validate reflection
+// IMPORTANT: All matrices use row-major layout (Slang default, matches GLM_FORCE_ROW_MAJOR)
+// Matrix multiplication order: mul(vector, matrix), e.g., mul(pos, model)
 
 // Test push constants
 struct PushConstants {
@@ -38,9 +40,11 @@ struct VSOutput {
 VSOutput vertexMain(VSInput input) {
     VSOutput output;
 
-    float4 worldPos = mul(push.model, float4(input.position, 1.0));
-    float4 viewPos = mul(global.view, worldPos);
-    output.position = mul(global.proj, viewPos);
+    // Row-major layout: mul(vector, matrix)
+    // Transformation order: pos * model * view * proj
+    float4 worldPos = mul(float4(input.position, 1.0), push.model);
+    float4 viewPos = mul(worldPos, global.view);
+    output.position = mul(viewPos, global.proj);
     output.texCoord = input.texCoord;
 
     return output;

@@ -73,27 +73,24 @@ struct VSOutput {
 VSOutput vertexMain(VSInput input) {
     VSOutput output;
 
-    // CRITICAL: For column_major matrices in Slang, mul(matrix, vector) is correct
-    // The column_major attribute tells Slang how the matrix is stored in memory
-    // GLSL: push.model * vec4(inPosition, 1.0)
-    float4 worldPos = mul(push.model, float4(input.position, 1.0));
+    // Row-major layout: mul(vector, matrix)
+    // Transformation order: pos * model * view * proj
+    float4 worldPos = mul(float4(input.position, 1.0), push.model);
     output.fragPos = worldPos.xyz;
 
     // Calculate view space position
-    // GLSL: global.view * worldPos
-    float4 viewPos = mul(global.view, worldPos);
+    float4 viewPos = mul(worldPos, global.view);
     output.fragViewPos = viewPos.xyz;
 
     // Transform normal, tangent, bitangent to world space
     float3x3 modelMatrix3x3 = (float3x3)push.model;
     float3x3 normalMatrix = transpose(inverse3x3(modelMatrix3x3));
-    output.fragNormal = normalize(mul(normalMatrix, input.normal));
-    output.fragTangent = normalize(mul(normalMatrix, input.tangent.xyz));
+    output.fragNormal = normalize(mul(input.normal, normalMatrix));
+    output.fragTangent = normalize(mul(input.tangent.xyz, normalMatrix));
     output.fragBitangent = cross(output.fragNormal, output.fragTangent) * input.tangent.w;
 
     output.fragTexCoord = input.texCoord;
-    // GLSL: global.proj * viewPos
-    output.position = mul(global.proj, viewPos);
+    output.position = mul(viewPos, global.proj);
 
     return output;
 }
@@ -143,6 +140,115 @@ int selectCascade(float viewDepth, float4 cascadeSplits, uint cascadeCount) {
     return int(cascadeCount) - 1;
 }
 
+// DEBUG: Visualize depth values
+float3 debugDepthValues(float3 fragPos, float3 fragViewPos) {
+    // Get shadow data
+    ShadowData shadow = shadows[0];
+
+    // Select cascade
+    float viewDepth = abs(fragViewPos.z);
+    int cascadeIndex = selectCascade(viewDepth, shadow.cascadeSplitDepths, shadow.cascadeCount);
+
+    // Transform to light space
+    column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    float4 lightSpacePos = mul(float4(fragPos, 1.0), lightSpaceMatrix);
+    float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Convert to [0,1] range
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+    // Get atlas UV
+    float4 atlasRect = shadow.atlasRects[cascadeIndex];
+    float2 atlasUV = atlasRect.xy + projCoords.xy * atlasRect.zw;
+
+    // Sample shadow map (hardcoded index 5)
+    float shadowDepth = textures[NonUniformResourceIndex(5)].Sample(linearSampler, atlasUV).r;
+    float currentDepth = projCoords.z;
+
+    // Visualize depth values:
+    // R = currentDepth (fragment depth in light space)
+    // G = shadowDepth (depth from shadow map)
+    // B = difference (scaled by 10 for visibility)
+    return float3(currentDepth, shadowDepth, abs(currentDepth - shadowDepth) * 10.0);
+}
+
+// DEBUG: Simplest possible shadow test - just sample the shadow map
+float testSimpleShadow(float3 fragPos, float3 fragViewPos) {
+    // Get shadow data
+    ShadowData shadow = shadows[0];
+
+    // Select cascade
+    float viewDepth = abs(fragViewPos.z);
+    int cascadeIndex = selectCascade(viewDepth, shadow.cascadeSplitDepths, shadow.cascadeCount);
+
+    // Transform to light space
+    column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    float4 lightSpacePos = mul(float4(fragPos, 1.0), lightSpaceMatrix);
+    float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Convert to [0,1] range
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+    // Get atlas UV
+    float4 atlasRect = shadow.atlasRects[cascadeIndex];
+    float2 atlasUV = atlasRect.xy + projCoords.xy * atlasRect.zw;
+
+    // Sample shadow map (hardcoded index 5)
+    float shadowDepth = textures[NonUniformResourceIndex(5)].Sample(linearSampler, atlasUV).r;
+
+    // Simple comparison with test bias
+    float currentDepth = projCoords.z - 0.1;  // DEBUG: Negative bias to move fragment closer to light
+
+    // Return 1.0 if lit, 0.0 in shadow
+    return (currentDepth > shadowDepth) ? 0.0 : 1.0;
+}
+
+// DEBUG: Visualize shadow atlas UV coordinates
+float3 debugShadowUV(float3 fragPos, float3 fragViewPos, float3 fragNormal) {
+    if (global.numLights == 0) return float3(1, 0, 1);  // Magenta = no lights
+
+    LightData light = lights[0];
+    // DEBUG: HARDCODE shadowIndex = 0 to bypass CPU upload
+    // if (light.shadowIndex < 0) return float3(1, 1, 0);  // Yellow = no shadow
+
+    ShadowData shadow = shadows[0];  // HARDCODED: Force use shadow data at index 0
+
+    // Calculate light space position
+    float viewDepth = abs(fragViewPos.z);
+    int cascadeIndex = selectCascade(viewDepth, shadow.cascadeSplitDepths, shadow.cascadeCount);
+
+    column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
+    float4 lightSpacePos = mul(float4(fragPos, 1.0), lightSpaceMatrix);
+    float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Map to [0,1] range for atlas lookup
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+    // Get atlas UV
+    float4 atlasRect = shadow.atlasRects[cascadeIndex];
+    float2 atlasUV = atlasRect.xy + projCoords.xy * atlasRect.zw;
+
+    // Sample shadow atlas depth - use linearSampler to get actual depth value
+    float shadowDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(linearSampler, atlasUV).r;
+
+    // DEBUG modes:
+    // Mode 1: Show UV coordinates (R=U, G=V)
+    // return float3(projCoords.x, projCoords.y, 0.0);
+
+    // Mode 2: Show shadow atlas depth as grayscale (enhanced contrast)
+    // return float3(shadowDepth * 10.0, shadowDepth * 10.0, shadowDepth * 10.0);
+
+    // Mode 3: Show depth comparison result (NO BIAS for testing)
+    float3 lightDir = -normalize(light.positionAndType.xyz);
+    // float bias = max(shadow.shadowParams.y * (1.0 - dot(normalize(fragNormal), lightDir)), shadow.shadowParams.x);
+    float currentDepth = projCoords.z; // - bias;  // DEBUG: No bias
+    float inShadow = currentDepth > shadowDepth ? 0.0 : 1.0;
+
+    // DEBUG: Show depth values as color to diagnose
+    // Red channel = currentDepth, Green channel = shadowDepth
+    return float3(currentDepth, shadowDepth, 0.0);
+}
+
 float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, float3 normal, float3 lightDir) {
     column_major float4x4 lightSpaceMatrix = shadow.cascadeViewProjMatrices[cascadeIndex];
     // CRITICAL: Shadow matrices from ShaderResources need transposed multiplication
@@ -172,8 +278,10 @@ float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, f
     for(int x = -pcfSamples; x <= pcfSamples; ++x) {
         for(int y = -pcfSamples; y <= pcfSamples; ++y) {
             float2 offset = float2(x, y) * texelSize;
-            float pcfDepth = textures[NonUniformResourceIndex(shadow.atlasIndex)].Sample(shadowSampler, atlasUV + offset).r;
-            shadowValue += currentDepth > pcfDepth ? 0.0 : 1.0;
+            // DEBUG: Hardcode atlas index to 5
+            float pcfDepth = textures[NonUniformResourceIndex(5)].Sample(linearSampler, atlasUV + offset).r;
+            // Correct comparison: if currentDepth > shadowDepth, fragment is in shadow
+            shadowValue += (currentDepth > pcfDepth) ? 0.0 : 1.0;
         }
     }
 
@@ -184,11 +292,17 @@ float sampleShadowCascade(ShadowData shadow, int cascadeIndex, float3 fragPos, f
 }
 
 float calculateShadow(int shadowIndex, float3 fragPos, float3 fragViewPos, float3 normal, float3 lightDir) {
-    if (global.shadowsEnabled == 0 || shadowIndex < 0) {
-        return 1.0;
-    }
+    // DEBUG: Temporarily disable early returns to force shadow sampling
+    // if (global.shadowsEnabled == 0 || shadowIndex < 0) {
+    //     return 1.0;
+    // }
 
-    ShadowData shadow = shadows[shadowIndex];
+    // DEBUG: HARDCODE shadowIndex = 0 to bypass CPU upload
+    // if (shadowIndex < 0) {
+    //     return 1.0;  // Still need valid shadow data
+    // }
+
+    ShadowData shadow = shadows[0];  // HARDCODED: Force use shadow data at index 0
 
     if (shadow.lightType == 0 && shadow.cascadeCount > 1) {
         float viewDepth = abs(fragViewPos.z);
@@ -305,7 +419,7 @@ float4 fragmentMain(VSOutput input) : SV_Target {
             float3 specular = D * F * G / (4.0 * dotNL * dotNV + 0.001);
 
             float shadow = calculateShadow(light.shadowIndex, input.fragPos, input.fragViewPos, N, L);
-            Lo += (kD * albedo / PI + specular) * radiance * dotNL * shadow;
+        Lo += (kD * albedo / PI + specular) * radiance * dotNL * shadow;
         }
     }
 
@@ -340,5 +454,9 @@ float4 fragmentMain(VSOutput input) : SV_Target {
     }
 
     float3 color = ambient + Lo + emissive;
+
+    // DEBUG: Visualize shadow UV coordinates
+    // color = debugShadowUV(input.fragPos, input.fragViewPos, N);
+
     return float4(color, baseColor.a);
 }

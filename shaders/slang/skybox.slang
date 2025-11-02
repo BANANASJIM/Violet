@@ -76,11 +76,11 @@ VSOutput vertexMain(uint vertexID : SV_VertexID) {
 
     // Transform screen position to world direction
     float4 clipPos = float4(pos, 1.0, 1.0);
-    float4 viewPos = mul(inverse(global.proj), clipPos);
+    float4 viewPos = mul(clipPos, inverse(global.proj));
     viewPos = float4(viewPos.xy, -1.0, 0.0);  // Point towards negative Z in view space
 
     // Transform to world space
-    output.fragTexCoord = mul(invViewRot, viewPos.xyz);
+    output.fragTexCoord = mul(viewPos.xyz, invViewRot);
 
     // Apply rotation around Y axis
     float s = sin(global.skyboxRotation);
@@ -90,7 +90,7 @@ VSOutput vertexMain(uint vertexID : SV_VertexID) {
         0.0, 1.0, 0.0,
         -s, 0.0, c
     );
-    output.fragTexCoord = mul(rotY, output.fragTexCoord);
+    output.fragTexCoord = mul(output.fragTexCoord, rotY);
 
     return output;
 }

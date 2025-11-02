@@ -3,8 +3,8 @@
 
 // Push constants for shadow rendering
 struct ShadowPushConstants {
-    column_major float4x4 lightSpaceMatrix;
-    column_major float4x4 model;
+    float4x4 lightSpaceMatrix;
+    float4x4 model;
 };
 
 [[vk::push_constant]]
@@ -20,11 +20,11 @@ struct VSInput {
 
 [shader("vertex")]
 float4 vertexMain(VSInput input) : SV_Position {
-    // Transform to world space: model * position
-    // For column_major matrices, use mul(matrix, vector), NOT mul(vector, matrix)
-    float4 worldPos = mul(push.model, float4(input.position, 1.0));
+    // Transform to world space: position * model
+    // Row-major layout: mul(vector, matrix)
+    float4 worldPos = mul(float4(input.position, 1.0), push.model);
 
-    // Transform to light clip space: (proj * view) * worldPos
-    // push.lightSpaceMatrix already contains (proj * view) with Vulkan Y-flip applied
-    return mul(push.lightSpaceMatrix, worldPos);
+    // Transform to light clip space: worldPos * (view * proj)
+    // push.lightSpaceMatrix already contains (view * proj) with Vulkan Y-flip applied
+    return mul(worldPos, push.lightSpaceMatrix);
 }

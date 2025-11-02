@@ -230,9 +230,20 @@ endif()
 # Note: GLFW automatically handles platform surface extensions (Wayland/XCB/Win32/etc)
 
 # GLM configuration for Vulkan
+# GLM_FORCE_DEPTH_ZERO_TO_ONE: Use [0,1] depth range (Vulkan standard)
+# GLM_FORCE_RADIANS: Enforce radians for all angle parameters
+# GLM_FORCE_RIGHT_HANDED: Explicitly specify right-handed coordinate system
+# GLM_FORCE_ROW_MAJOR: Use row-major matrix layout (matches Slang default for SPIR-V)
+# With these macros:
+#   - glm::perspective() = glm::perspectiveRH_ZO()
+#   - glm::ortho() = glm::orthoRH_ZO()
+#   - Shader matrices should use row-major layout (Slang default)
+#   - Matrix multiplication: mul(vector, matrix) instead of mul(matrix, vector)
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_FORCE_RADIANS
+    GLM_FORCE_RIGHT_HANDED
+    GLM_FORCE_ROW_MAJOR
 )
 
 # Debug/Release configurations

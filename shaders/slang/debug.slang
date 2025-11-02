@@ -65,9 +65,9 @@ struct VSOutput {
 VSOutput vertexMain(VSInput input) {
     VSOutput output;
 
-    float4 worldPos = mul(push.model, float4(input.position, 1.0));
-    float4 viewPos = mul(global.view, worldPos);
-    output.position = mul(global.proj, viewPos);
+    float4 worldPos = mul(float4(input.position, 1.0), push.model);
+    float4 viewPos = mul(worldPos, global.view);
+    output.position = mul(viewPos, global.proj);
     output.fragColor = input.color;
 
     return output;

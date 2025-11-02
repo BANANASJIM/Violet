@@ -1,5 +1,7 @@
 // PostProcess Shader - Slang version
 // Tone mapping and gamma correction
+// NOTE: Color transformation matrices use mul(matrix, vector) - traditional column-vector notation
+// This is different from geometric transforms which use mul(vector, matrix) with row-major layout
 
 // ========================================
 // Descriptors

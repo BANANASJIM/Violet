@@ -232,8 +232,8 @@ void ShadowSystem::update(entt::registry& world, LightingSystem& lightingSystem,
                 glm::mat4 cascadeProj = proj;  // Start with camera's projection
                 if (perspCam) {
                     // Override near/far planes for this cascade
-                    // Use RH_ZO variant for Vulkan [0,1] depth range
-                    cascadeProj = glm::perspectiveRH_ZO(
+                    // GLM_FORCE_DEPTH_ZERO_TO_ONE makes glm::perspective() equivalent to glm::perspectiveRH_ZO()
+                    cascadeProj = glm::perspective(
                         glm::radians(perspCam->getFOV()),
                         perspCam->getAspectRatio(),
                         cascadeNear,
